@@ -23,7 +23,6 @@
 
 #include "GameLogic/AI/AIPathfind.h"
 #include "Common/StateHash.h"
-#include "Common/JobSystem.h"
 #include "GameLogic/SimMath.h"
 #include "GameLogic/AI/AIPathfindStops.h"
 
@@ -521,7 +520,8 @@ void Pathfinder::crc(StateHasher &h) const
 	h.addU32((std::uint32_t)m_ignoreObstacleID);
 	h.addI32(m_cumulativeCellsAllocated);
 	h.addU32((std::uint32_t)m_blockOfMapCells.size());
-	const auto hashCell = [](StateHasher &h, const PathfindCell &c) {
+	for (const PathfindCell &c : m_blockOfMapCells)
+	{
 		h.addU32(c.getType());
 		h.addU32(c.getLayer());
 		h.addU32(c.getConnectLayer());
@@ -531,7 +531,7 @@ void Pathfinder::crc(StateHasher &h) const
 		h.addBool(info);
 		if (!info)
 		{
-			return; // the next cell
+			continue;
 		}
 		h.addU32((std::uint32_t)c.getObstacleID());
 		h.addU32((c.isObstacleFence() ? 1u : 0u) | (c.isObstacleTransparent() ? 2u : 0u) | (c.isBlockedByAlly() ? 4u : 0u));
@@ -544,37 +544,6 @@ void Pathfinder::crc(StateHasher &h) const
 				++n;
 			}
 			h.addU32(n);
-		}
-	};
-	// lane UBER-2C: every cell, every frame of a recorded game; with more than one logic thread the runs of cells record their words on the job pool and
-	// are folded in cell order (the words the serial walk adds, so the same value)
-	constexpr size_t kCellsPerJob = 8192;
-	if (JobSystem::logic().threadCount() <= 1 || m_blockOfMapCells.size() <= kCellsPerJob)
-	{
-		for (const PathfindCell &c : m_blockOfMapCells)
-		{
-			hashCell(h, c);
-		}
-	}
-	else
-	{
-		const size_t runs = JobSystem::chunkCount(m_blockOfMapCells.size(), kCellsPerJob);
-		if (m_crcWords.size() < runs)
-		{
-			m_crcWords.resize(runs);
-		}
-		JobSystem::logic().parallelFor(m_blockOfMapCells.size(), kCellsPerJob, [this, &hashCell](size_t run, size_t begin, size_t end) {
-			std::vector<std::uint32_t> &out = m_crcWords[run];
-			out.clear();
-			StateHasher recorder(&out);
-			for (size_t i = begin; i < end; ++i)
-			{
-				hashCell(recorder, m_blockOfMapCells[i]);
-			}
-		});
-		for (size_t run = 0; run < runs; ++run)
-		{
-			h.fold(m_crcWords[run]);
 		}
 	}
 	m_zoneManager.crc(h);
