@@ -14,32 +14,13 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
-#include <vector>
 
 class StateHasher
 {
 public:
 	StateHasher() = default;
-	// lane UBER-2C: a hasher that records the words it is given instead of folding them; fold() later feeds them to another hasher in order, which then
-	// holds exactly the value of adding them there directly (the Faithful hash gathers its objects' words on the logic job pool, then folds them in order)
-	explicit StateHasher(std::vector<std::uint32_t> *record) : m_record(record) {}
 
-	void addU32(std::uint32_t v)
-	{
-		if (m_record)
-		{
-			m_record->push_back(v);
-			return;
-		}
-		m_crc = ((m_crc << 1) | (m_crc >> 31)) + v;
-	}
-	void fold(const std::vector<std::uint32_t> &words)
-	{
-		for (std::uint32_t v : words)
-		{
-			addU32(v);
-		}
-	}
+	void addU32(std::uint32_t v) { m_crc = ((m_crc << 1) | (m_crc >> 31)) + v; }
 	void addI32(std::int32_t v) { addU32((std::uint32_t)v); }
 	void addBool(bool v) { addU32(v ? 1u : 0u); }
 	void addU64(std::uint64_t v)
@@ -75,5 +56,4 @@ public:
 
 private:
 	std::uint32_t m_crc = 0;
-	std::vector<std::uint32_t> *m_record = nullptr;
 };
