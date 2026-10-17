@@ -286,6 +286,7 @@ private:
 	unsigned m_colliderFrames[4] = {};
 	int m_colliderCount = 0;
 	std::vector<std::string> m_stops;
+	unsigned m_notedBits = 0; // note: the known stops already in m_stops
 };
 
 // AIInternalMoveToState (RW vtable 0xC27448): move to a position, then optionally turn to a final angle.

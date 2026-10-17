@@ -1078,7 +1078,7 @@ void Object::clearDisabled(unsigned type)
 	checkDisabledStatus(m_logic.getFrame()); // RW 0x69261D
 }
 
-BehaviorModule *Object::findModule(const std::string &className) const
+BehaviorModule *Object::findModule(std::string_view className) const
 {
 	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
 	{
@@ -1955,18 +1955,22 @@ void Object::setStatusAcrossHorde(unsigned bit, bool set)
 
 Object *Object::getHordeObject(bool alsoProducer) const
 {
-	if (isKindOfName("HORDE"))
+	// mapworkshop (openbfme-perf.patch): the HORDE bit looked up once (isKindOfName searched the KindOf names on each of up to three tests; the client asks this
+	// for every unit in a big battle). The name table is the engine's, fixed for the process
+	static const int kHorde = ObjectTemplateInfoBuilder::kindOfIndex("HORDE");
+	const auto isHorde = [](const Object &o) { return kHorde >= 0 && o.isKindOf((unsigned)kHorde); };
+	if (isHorde(*this))
 	{
 		return const_cast<Object *>(this);
 	}
-	if (m_containedBy && m_containedBy->isKindOfName("HORDE"))
+	if (m_containedBy && isHorde(*m_containedBy))
 	{
 		return m_containedBy;
 	}
 	if (alsoProducer)
 	{
 		Object *producer = m_logic.findObjectByID(m_producerID);
-		if (producer && producer->isKindOfName("HORDE"))
+		if (producer && isHorde(*producer))
 		{
 			return producer;
 		}

@@ -65,6 +65,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -355,12 +356,25 @@ public:
 	// problems nothing explains; each distinct text is kept once and reaches report().errors
 	void reportError(const std::string &text);
 	// lane BUILD-1: a rule met at runtime that is registered as a stop but not ported (a castle's PreBuiltList ...): each distinct text reaches report().stops once
-	void noteStop(const std::string &text)
+	// (a view: the hot callers pass literals, and a noted text is found without building a std::string)
+	void noteStop(std::string_view text)
 	{
-		m_notedStops.insert(text);
-		++m_notedStopHits[text]; // lane QA-1: how often a game meets each stop (diagnostics, not simulation state)
+		if (m_notedStops.find(text) == m_notedStops.end())
+		{
+			m_notedStops.emplace(text);
+		}
+		// lane QA-1: how often a game meets each stop (diagnostics, not simulation state)
+		const auto hit = m_notedStopHits.find(text);
+		if (hit != m_notedStopHits.end())
+		{
+			++hit->second;
+		}
+		else
+		{
+			m_notedStopHits.emplace(std::string(text), 1u);
+		}
 	}
-	const std::map<std::string, unsigned> &notedStopHits() const { return m_notedStopHits; }
+	const std::map<std::string, unsigned, std::less<>> &notedStopHits() const { return m_notedStopHits; }
 
 	// lane BACKLOG3 (S-2452): a radar event the logic's code makes for the client's radar. Retail calls TheRadar->createEvent (RW 0x6D98FA) from inside the
 	// logic frame (the scripts' radar actions RW 0x7BC221 / 0x7BC250 / 0x7C0B61, the dozer's finished building RW 0x88E125); here the logic records the event
@@ -684,8 +698,8 @@ private:
 	std::unique_ptr<TerrainTrees> m_trees;               // lane SPELL-3
 	std::unique_ptr<ScriptEngine> m_scriptEngine;        // lane SCRIPT-1
 	CastleTemplateStore m_castleTemplates;
-	std::set<std::string> m_notedStops;
-	std::map<std::string, unsigned> m_notedStopHits;
+	std::set<std::string, std::less<>> m_notedStops;
+	std::map<std::string, unsigned, std::less<>> m_notedStopHits;
 	std::vector<RadarEventNotice> m_radarEventNotices; ///< lane BACKLOG3: oldest first, at most kRadarEventNotices
 	std::uint32_t m_radarEventSeq = 0;
 	ObjectClientHooks *m_clientHooks = nullptr;

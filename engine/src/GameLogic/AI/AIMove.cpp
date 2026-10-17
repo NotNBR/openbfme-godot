@@ -44,6 +44,20 @@ std::vector<std::string> AIMover::allStops()
 
 void AIMover::note(const char *stop)
 {
+	// the movers note these on every frame of a move: a known stop is compared by its text only the first time (a bit per stop)
+	static const char *const kKnown[] = { kStopSpecialLayer, kStopUpdate, kStopPatch, kStopExplicit, kStopDistance, kStopRequests, kStopGroup };
+	for (unsigned i = 0; i < sizeof(kKnown) / sizeof(kKnown[0]); ++i)
+	{
+		if (kKnown[i] == stop)
+		{
+			if (m_notedBits & (1u << i))
+			{
+				return;
+			}
+			m_notedBits |= 1u << i;
+			break;
+		}
+	}
 	for (const std::string &s : m_stops)
 	{
 		if (s == stop)

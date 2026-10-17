@@ -30,7 +30,10 @@ void TargetFinder::reset()
 
 void TargetFinder::rebuild()
 {
-	m_cells.clear();
+	for (auto &cell : m_cells)
+	{
+		cell.second.clear();
+	}
 	m_count = 0;
 	for (Object *o = m_logic.getFirstObject(); o; o = o->getNextObject())
 	{
@@ -39,7 +42,7 @@ void TargetFinder::rebuild()
 			continue;
 		}
 		const Coord3D &p = *o->getPosition();
-		m_cells[{ cellOf(p.x), cellOf(p.y) }].push_back(o->getID());
+		m_cells[cellKey(cellOf(p.x), cellOf(p.y))].push_back(o->getID());
 		++m_count;
 	}
 	m_builtFrame = m_logic.getFrame();
@@ -61,7 +64,7 @@ void TargetFinder::collectInRadius(const Coord3D &center, float radius, std::vec
 	{
 		for (int cy = y0; cy <= y1; ++cy)
 		{
-			auto it = m_cells.find({ cx, cy });
+			auto it = m_cells.find(cellKey(cx, cy));
 			if (it == m_cells.end())
 			{
 				continue;
@@ -99,6 +102,8 @@ Object *TargetFinder::findClosestEnemyNear(const Object &seeker, const Coord3D &
 	}
 	// the widest object may be `maxRadius` away at its centre and still have its edge in range: the box adds a margin
 	std::vector<Object *> near;
+	near.swap(m_near); // the kept storage (a nested query, if any, finds it taken and makes its own)
+	near.clear();
 	collectInRadius(center, SimMath::addf32(range, 80.0f), near);
 	Object *best = nullptr;
 	float bestD = 0.0f;
@@ -142,5 +147,7 @@ Object *TargetFinder::findClosestEnemyNear(const Object &seeker, const Coord3D &
 			bestD = edge;
 		}
 	}
+	near.clear();
+	m_near.swap(near);
 	return best;
 }

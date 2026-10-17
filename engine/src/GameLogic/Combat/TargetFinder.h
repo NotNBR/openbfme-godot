@@ -11,8 +11,8 @@
 #include "GameLogic/AI/AICommandSink.h"
 #include "GameLogic/ObjectTypes.h"
 
-#include <map>
-#include <utility>
+#include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 class GameLogic;
@@ -47,5 +47,9 @@ private:
 	size_t m_builtCount = 0;
 	unsigned m_builtTransitions = 0; // GameLogic::containWorldTransitions at the build: a contain's rider leaving or entering the world (lane GARRISON-1) rebuilds
 	size_t m_count = 0;
-	std::map<std::pair<int, int>, std::vector<ObjectID>> m_cells;
+	// cell (x, y) packed into a key -> its objects in list order. A rebuild empties the cells and keeps them with their storage (no allocation once the grid
+	// is warm; an empty cell answers like an absent one); queries visit cells by their own (x, y) loop, never in the map's order
+	std::unordered_map<std::uint64_t, std::vector<ObjectID>> m_cells;
+	std::vector<Object *> m_near; // findClosestEnemyNear's candidates, kept between calls for their storage
+	static std::uint64_t cellKey(int cx, int cy) { return ((std::uint64_t)(std::uint32_t)cx << 32) | (std::uint32_t)cy; }
 };

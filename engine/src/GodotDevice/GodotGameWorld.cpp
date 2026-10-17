@@ -3840,11 +3840,26 @@ Dictionary GameWorld::net_status() const
 	NetGameSession &s = *m_netSession;
 	r["frame"] = (int64_t)m_game->frame();
 	// lane RENDERWAIT-1: game.gd's overlay asks every render frame: the state hash is computed only where the logic is held (the client window, an idle
-	// worker), else the last one is shown again; "hash_frame" is the logic frame it belongs to (never a wait for the worker)
-	if (m_game->logicHeld())
+	// worker), else the last one is shown again; "hash_frame" is the logic frame it belongs to (never a wait for the worker).
+	// mapworkshop (openbfme-perf.patch): the whole state hash costs tens of ms in a big battle, and every held render frame took it again, also of a
+	// frame already hashed: two or three render frames after each logic frame stalled, and the window they held made the worker's next frame late. The
+	// worker's own hash of the published frame is taken when it made one (a recorded game); else the render thread hashes at most every
+	// kNetHashFrames logic frames (game.gd prints it every 50). Display only: the CRC exchange of the lockstep is the driver's, on the worker
+	constexpr UnsignedInt kNetHashFrames = 50;
+	const std::shared_ptr<const LogicSnapshot> published = m_game->latestSnapshot();
+	if (published && published->hashed)
 	{
-		m_netHashFrame = m_game->logic().getFrame();
-		m_netHash = m_game->logic().computeStateHash();
+		m_netHashFrame = published->frame;
+		m_netHash = published->stateHash;
+	}
+	else if (m_game->logicHeld())
+	{
+		const UnsignedInt frame = m_game->logic().getFrame();
+		if (m_netHashFrame == 0 || frame < m_netHashFrame || frame >= m_netHashFrame + kNetHashFrames)
+		{
+			m_netHashFrame = frame;
+			m_netHash = m_game->logic().computeStateHash();
+		}
 	}
 	r["hash"] = (int64_t)m_netHash;
 	r["hash_frame"] = (int64_t)m_netHashFrame;
@@ -4710,6 +4725,12 @@ void GameWorld::refresh_shroud(bool force)
 	{
 		return;
 	}
+	// mapworkshop (openbfme-perf.patch): not drawn (--no-shroud: the shaders' shroud_enabled is false and never read the texture), nothing to rebuild;
+	// set_shroud_drawn rebuilds it (force) when the shroud is drawn again
+	if (!m_shroudDrawn && !force)
+	{
+		return;
+	}
 	const bool changed = view->version != m_shroudVersionShown || view != m_shroudViewShown;
 	if (!changed && !force)
 	{
@@ -4743,9 +4764,11 @@ void GameWorld::refresh_shroud(bool force)
 		}
 	});
 	Ref<Image> img = Image::create_from_data(tw, th, false, Image::FORMAT_L8, bytes);
+	bool newTexture = false;
 	if (m_shroudTexture.is_null() || m_shroudTexture->get_width() != tw || m_shroudTexture->get_height() != th)
 	{
 		m_shroudTexture = ImageTexture::create_from_image(img);
+		newTexture = true;
 	}
 	else
 	{
@@ -4761,6 +4784,20 @@ void GameWorld::refresh_shroud(bool force)
 	const Vector2 origin(SimMath::subf32(sm.originX, sm.cellSize), SimMath::subf32(sm.originY, sm.cellSize));
 	const Vector2 extent(SimMath::mulf32(sm.cellSize, (float)tw), SimMath::mulf32(sm.cellSize, (float)th)); // the audited file's float rule (client values)
 	const Color color(vs.shroudRed, vs.shroudGreen, vs.shroudBlue);
+	// mapworkshop (openbfme-perf.patch): the materials keep what they were given and the texture above is updated in place, so the terrain's materials are
+	// visited only when a parameter's value changes (a new texture, the grid, the colour, shroud_enabled) or on force (the load, set_shroud_drawn). Walking
+	// the tree and setting five parameters on every material after each change of the shroud cost about 4 ms per logic frame in a big battle. The terrain's
+	// materials are made once, by the load's build_map
+	if (!force && !newTexture && m_shroudParamsSet && origin == m_shroudParamOrigin && extent == m_shroudParamExtent && color == m_shroudParamColor &&
+		m_shroudDrawn == m_shroudParamEnabled)
+	{
+		return;
+	}
+	m_shroudParamsSet = true;
+	m_shroudParamOrigin = origin;
+	m_shroudParamExtent = extent;
+	m_shroudParamColor = color;
+	m_shroudParamEnabled = m_shroudDrawn;
 	std::vector<Node *> stack{ terrain };
 	while (!stack.empty())
 	{

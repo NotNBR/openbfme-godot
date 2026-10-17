@@ -37,6 +37,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class ArchiveFileSystem;
@@ -223,7 +224,7 @@ public:
 	void noteStop(const char *stop);
 	// the AICommandSink handler (production's commands to a produced object's AI)
 	bool executeCommand(Object &obj, const AICommand &command);
-	const std::set<std::string> &noted() const { return m_noted; }
+	const std::set<std::string, std::less<>> &noted() const { return m_noted; }
 
 private:
 	GameLogic &m_logic;
@@ -235,7 +236,7 @@ private:
 	std::map<PathfindObjectID, AIUpdateInterface *> m_ais;
 	std::map<const ThingTemplate *, std::unique_ptr<ObjectMovementInfo>> m_info;
 	std::vector<std::string> m_errors;
-	std::set<std::string> m_noted;
+	std::set<std::string, std::less<>> m_noted; // transparent: noteStop looks a text up without building a std::string (every AI update notes one)
 	std::map<std::string, unsigned> m_failures; // "template: text" -> count
 	bool m_mapReady = false;
 	bool m_attached = false;

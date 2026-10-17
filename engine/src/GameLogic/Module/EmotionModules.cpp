@@ -611,8 +611,9 @@ UpdateSleepTime EmotionTrackerUpdate::update()
 		static const int kAirborne = statusBit("AIRBORNE_TARGET");
 		const ThingTemplate *gollum = nullptr;
 		bool gollumLooked = false;
-		const std::vector<ObjectID> ids = logic.emotions().scaryOrHeroes();
-		for (ObjectID id : ids)
+		const std::vector<ObjectID> &scaryOrHeroes = logic.emotions().scaryOrHeroes();
+		m_scanIds.assign(scaryOrHeroes.begin(), scaryOrHeroes.end()); // a copy, as before (the list may change under the scan), into kept storage
+		for (ObjectID id : m_scanIds)
 		{
 			Object *o = logic.findObjectByID(id);
 			if (!o || o->isDestroyed())

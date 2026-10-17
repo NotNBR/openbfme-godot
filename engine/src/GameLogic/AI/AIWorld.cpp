@@ -785,7 +785,11 @@ void AIWorld::reportMovementFailure(const Object &obj, const std::string &text)
 
 void AIWorld::noteStop(const char *stop)
 {
-	m_noted.insert(stop);
+	const std::string_view text(stop);
+	if (m_noted.find(text) == m_noted.end())
+	{
+		m_noted.emplace(text);
+	}
 }
 
 std::vector<std::string> AIWorld::allStops()
