@@ -238,15 +238,22 @@ public:
 	void allocate(int count);
 	PathfindCellInfo *get(PathfindCell *cell, const ICoord2D &pos);
 	void release(PathfindCellInfo *info);
-	int capacity() const { return (int)m_infos.size(); }
+	int capacity() const { return m_capacity; }
 	int freeCount() const;
 	bool exhaustedOnce() const { return m_exhausted; }
+	// lane PATHPERF-4: above allocate's count the pool grows in blocks up to `maxRecords` (0: fixed, the default); allocate keeps the limit
+	void setGrowthLimit(int maxRecords) { m_growthLimit = maxRecords; }
+	int growths() const { return m_growths; }
 	PathfindOccupant *newOccupant();
 	void freeOccupant(PathfindOccupant *o);
 	size_t occupantsInUse() const { return m_occupantsInUse; }
 
 private:
-	std::vector<PathfindCellInfo> m_infos;
+	void addBlock(int count);
+	std::vector<std::unique_ptr<PathfindCellInfo[]>> m_blocks; // lane PATHPERF-4: blocks never move, cells keep pointers into them
+	int m_capacity = 0;
+	int m_growthLimit = 0;
+	int m_growths = 0;
 	PathfindCellInfo *m_firstFree = nullptr;
 	bool m_exhausted = false;
 	std::vector<std::unique_ptr<PathfindOccupant[]>> m_occChunks;
@@ -523,24 +530,46 @@ class PathfindRequestRing
 public:
 	void reset()
 	{
-		m_slots.assign(PATHFIND_QUEUE_LEN, PATHFIND_INVALID_ID);
+		m_slots.assign((size_t)m_len, PATHFIND_INVALID_ID);
 		m_head = m_tail = 0;
 	}
+	// lane PATHPERF-4: the ring's length (PATHFIND_QUEUE_LEN, retail's, unless the Uber profile's limits are on: Pathfinder::setUberLimits); the queued ids
+	// keep their order
+	void setLength(int len)
+	{
+		if (len == m_len || (int)size() >= len - 1)
+		{
+			return; // a ring never drops what it holds
+		}
+		std::vector<PathfindObjectID> ids;
+		for (size_t i = 0; i < size(); ++i)
+		{
+			ids.push_back(at(i));
+		}
+		m_len = len;
+		reset();
+		for (PathfindObjectID id : ids)
+		{
+			m_slots[(size_t)m_tail] = id;
+			m_tail = (m_tail + 1) % m_len;
+		}
+	}
+	int length() const { return m_len; }
 	bool empty() const { return m_head == m_tail; }
-	size_t size() const { return (size_t)((m_tail - m_head + PATHFIND_QUEUE_LEN) % PATHFIND_QUEUE_LEN); }
+	size_t size() const { return (size_t)((m_tail - m_head + m_len) % m_len); }
 	// the i-th queued id from the head (state hash, MOVE-1)
-	PathfindObjectID at(size_t i) const { return m_slots[(size_t)((m_head + (int)i) % PATHFIND_QUEUE_LEN)]; }
+	PathfindObjectID at(size_t i) const { return m_slots[(size_t)((m_head + (int)i) % m_len)]; }
 	// RW 0x6EC096 (linear duplicate scan) then 0x6EC069: true when queued or already queued, false when the ring is full
 	bool push(PathfindObjectID id)
 	{
-		for (int s = m_head; s != m_tail; s = (s + 1) % PATHFIND_QUEUE_LEN)
+		for (int s = m_head; s != m_tail; s = (s + 1) % m_len)
 		{
 			if (m_slots[(size_t)s] == id)
 			{
 				return true;
 			}
 		}
-		const int next = (m_tail + 1) % PATHFIND_QUEUE_LEN;
+		const int next = (m_tail + 1) % m_len;
 		if (next == m_head)
 		{
 			return false;
@@ -553,13 +582,14 @@ public:
 	PathfindObjectID pop()
 	{
 		const PathfindObjectID id = m_slots[(size_t)m_head];
-		m_head = (m_head + 1) % PATHFIND_QUEUE_LEN;
+		m_head = (m_head + 1) % m_len;
 		return id;
 	}
 
 private:
 	std::vector<PathfindObjectID> m_slots;
 	int m_head = 0, m_tail = 0;
+	int m_len = PATHFIND_QUEUE_LEN;
 };
 
 // RW checkForMovement info (the ZH TCheckMovementInfo). Mode flags (RW info+0x14): 0x02 allies block, 0x04 count terrain
@@ -783,6 +813,15 @@ public:
 
 	// ---- queue ----
 	bool queueForPath(PathfindObjectID id);
+	// lane PATHPERF-4 (Uber profile only, docs/UBER.md): retail's request rings hold 511 units (a refused unit waits for a path that never comes, until its
+	// next order) and the queue serves MaxPathfindCellsPerFrame cells a call. With the Uber limits the rings hold kUberQueueLength and the budget is
+	// kUberBudgetScale times retail's, so a mass order is served in a few frames. A Faithful game never turns them on
+	enum { kUberQueueLength = 16384, kUberBudgetScale = 4 };
+	void setUberLimits(bool on);
+	bool uberLimits() const { return m_uberLimits; }
+	// lane PATHPERF-4: the cell-info pool grows past PathfindConfig::cellInfoPoolSize up to this many records (about 100 MB), as retail's grows; the
+	// pathfinder's searches and reservations then no longer fail on a full pool in a big battle
+	enum { kCellInfoPoolMax = 1000000 };
 	// RW processPathfindQueue 0x6F2364: the counter of allocated cells is reset once; the blocked repaths run while it is below half the
 	// budget, then the path requests while it is below the budget (one counter for both); what is not reached stays queued
 	void processPathfindQueue(PathfindRequestHandler &handler);
@@ -940,6 +979,7 @@ private:
 	unsigned m_memoGen = 0;
 	bool m_memoActive = false;
 	bool m_searchShortcuts = true;
+	bool m_uberLimits = false; // lane PATHPERF-4
 	// lane PATHPERF-2: the line memo (LineMemoScope): an open-addressed table of (cell index * 10 + entry code + 1) -> blocked, entries valid in generation
 	// m_lineMemoGen; the parameters are bound by the scope's first isLinePassable call
 	struct LineMemoEntry

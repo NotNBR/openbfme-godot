@@ -873,6 +873,7 @@ void AIWorld::newMap(const PathfindTerrain &terrain)
 		}
 	}
 	m_pathfinder->newMap(terrain, &structures);
+	m_pathfinder->setUberLimits(m_logic.uber()); // lane PATHPERF-4
 	m_mapReady = m_pathfinder->isMapReady();
 }
 
@@ -1022,6 +1023,10 @@ void AIWorld::processPathfindQueue()
 {
 	if (m_mapReady)
 	{
+		if (m_pathfinder->uberLimits() != m_logic.uber())
+		{
+			m_pathfinder->setUberLimits(m_logic.uber()); // lane PATHPERF-4: a profile set after the map
+		}
 		const size_t queued = m_pathfinder->queuedRequests() + m_pathfinder->queuedBlockedRepaths();
 		m_moveWorld->processQueues();
 		// diagnostics only (not logic state, not hashed): the cells one tick allocated and the deepest queue a tick found

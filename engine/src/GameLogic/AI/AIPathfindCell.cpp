@@ -16,22 +16,26 @@
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/SimMath.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
 // ---------------------------------------------------------------------------------------------------------
 // PathfindCellInfoPool
 // ---------------------------------------------------------------------------------------------------------
-void PathfindCellInfoPool::allocate(int count)
+// lane PATHPERF-4: the records live in blocks that never move (cells and searches keep pointers to them), so the pool can grow: allocate makes the
+// first block, and with a growth limit an empty free list gets another block instead of failing (setGrowthLimit; retail grows too: 0x200 fixed
+// slots plus an overflow list, Open-BFME-1 PathfindCellInfoPoolReset.cpp). Until the first block runs out nothing differs from a fixed pool
+void PathfindCellInfoPool::addBlock(int count)
 {
-	m_infos.assign((size_t)count, PathfindCellInfo());
-	m_exhausted = false;
+	PathfindCellInfo *block = new PathfindCellInfo[(size_t)count]();
+	m_blocks.emplace_back(block);
 	for (int i = 0; i < count; ++i)
 	{
-		PathfindCellInfo &info = m_infos[(size_t)i];
+		PathfindCellInfo &info = block[i];
 		info.m_nextOpen = nullptr;
 		info.m_prevOpen = nullptr;
-		info.m_pathParent = (i + 1 < count) ? &m_infos[(size_t)i + 1] : nullptr;
+		info.m_pathParent = (i + 1 < count) ? &block[i + 1] : m_firstFree;
 		info.m_cell = nullptr;
 		info.m_totalCost = 0;
 		info.m_costSoFar = 0;
@@ -48,7 +52,20 @@ void PathfindCellInfoPool::allocate(int count)
 		info.m_open = 0;
 		info.m_closed = 0;
 	}
-	m_firstFree = count > 0 ? &m_infos[0] : nullptr;
+	if (count > 0)
+	{
+		m_firstFree = &block[0];
+	}
+	m_capacity += count;
+}
+
+void PathfindCellInfoPool::allocate(int count)
+{
+	m_blocks.clear();
+	m_capacity = 0;
+	m_firstFree = nullptr;
+	m_exhausted = false;
+	addBlock(count);
 	m_occChunks.clear();
 	m_occFree = nullptr;
 	m_occUsedInChunk = 0;
@@ -57,6 +74,12 @@ void PathfindCellInfoPool::allocate(int count)
 
 PathfindCellInfo *PathfindCellInfoPool::get(PathfindCell *cell, const ICoord2D &pos)
 {
+	if (!m_firstFree && m_growthLimit > m_capacity)
+	{
+		const int grow = std::min(std::max(m_capacity / 2, 4096), m_growthLimit - m_capacity);
+		addBlock(grow);
+		++m_growths;
+	}
 	PathfindCellInfo *info = m_firstFree;
 	if (info)
 	{

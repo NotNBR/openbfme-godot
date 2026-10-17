@@ -220,6 +220,7 @@ Pathfinder::Pathfinder(const PathfindConfig &config, const PathfindWorld *world)
 	m_extent.lo = ICoord2D();
 	m_extent.hi = ICoord2D();
 	m_logicalExtent = m_extent;
+	m_pool.setGrowthLimit(kCellInfoPoolMax); // lane PATHPERF-4
 	m_pool.allocate(config.cellInfoPoolSize);
 	m_zoneManager.setBlockSize(config.zoneBlockSize);
 	m_queue1.reset();

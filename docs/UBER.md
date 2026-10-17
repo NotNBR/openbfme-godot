@@ -400,6 +400,22 @@ That's a research item, not a plan.
   would collide. The hash was the biggest change that is safe on its own: a
   pure function of the state, on every frame of every recorded game.
 
+### PATHPERF-4: the path queue's limits (done)
+
+Retail's path queue holds 511 units: a unit refused by a full queue waits for
+a path that never comes until its next order. It also serves only
+`MaxPathfindCellsPerFrame` cells a call, so a mass order is served over
+seconds (150 hordes: 4.6 s, 300 single soldiers: 9.6 s, `pathperf1 bench`).
+
+- **Uber rule change:** the two request rings hold 16,384 units and the cell
+  budget is 4 times retail's (`Pathfinder::setUberLimits`). The same orders are
+  served in 1.4 s and 4.6 s; the heaviest frame of the 150 hordes' order is
+  40 ms (`PATHPERF1_PROFILE=uber`). The Uber pin vector was regenerated.
+- **Both profiles:** the pathfinder's cell-info pool grows past its 60,000
+  records up to 1,000,000, as retail's grows, instead of failing searches and
+  reservations in a big battle. Nothing changes until the first 60,000 are in
+  use (the Faithful pins pass unchanged).
+
 ### U2: parallel queries and paths, GPU animation (next)
 
 - **Snapshot queries.** Before each module phase, the queries a module will

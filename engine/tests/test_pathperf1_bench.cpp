@@ -4,7 +4,7 @@
 // The bench is skipped by default (run it with --no-skip):
 //   openbfme_tests -tc="pathperf1 bench*" --no-skip
 // PATHPERF1_CASES="10,50,150,i300" picks the cases (default all four; iN = N single infantry), PATHPERF1_MAP the map (default map mp brown lands),
-// PATHPERF1_FRAMES the frames after the order (default 60), PATHPERF1_SETTLE the frames before it (default 30).
+// PATHPERF1_FRAMES the frames after the order (default 60), PATHPERF1_SETTLE the frames before it (default 30), PATHPERF1_PROFILE=uber the Uber profile.
 #include "doctest.h"
 #include "HudTestUtil.h"
 #include "PerfBenchUtil.h"
@@ -78,6 +78,11 @@ OrderRun runOrder(const char *mapName, const char *templ, int count, float spaci
 	LiveGame::Options o;
 	o.mapName = mapName;
 	o.seed = 4711;
+	// lane PATHPERF-4: PATHPERF1_PROFILE=uber runs the order in the Uber profile (its larger path queue and budget)
+	if (const char *profile = std::getenv("PATHPERF1_PROFILE"))
+	{
+		o.simulationProfile = std::string(profile) == "uber" ? SimulationProfile::Uber : SimulationProfile::Faithful;
+	}
 	o.slots.players.push_back({ "Player_1", "FactionMen", true, 0, 0, 0 });
 	o.slots.players.push_back({ "Player_2", "FactionMordor", false, 1, 0, 1 });
 	std::string err;

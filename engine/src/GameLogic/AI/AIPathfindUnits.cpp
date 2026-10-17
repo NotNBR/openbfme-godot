@@ -1404,6 +1404,14 @@ bool Pathfinder::adjustToPossibleDestination(PathfindObject &obj, const Pathfind
 // ---------------------------------------------------------------------------------------------------------
 // queue
 // ---------------------------------------------------------------------------------------------------------
+void Pathfinder::setUberLimits(bool on)
+{
+	m_uberLimits = on;
+	const int len = on ? (int)kUberQueueLength : (int)PATHFIND_QUEUE_LEN;
+	m_queue1.setLength(len);
+	m_queue2.setLength(len);
+}
+
 bool Pathfinder::queueForPath(PathfindObjectID id)
 {
 	// TARGET RW 0x6ED0FB: a linear duplicate scan (a duplicate returns true), a full ring returns false
@@ -1454,6 +1462,10 @@ void Pathfinder::processPathfindQueue(PathfindRequestHandler &handler)
 	setLogicalExtentFromTerrain();
 	m_cumulativeCellsAllocated = 0;
 	int budget = m_config.cellsPerFrame;
+	if (m_uberLimits)
+	{
+		budget *= kUberBudgetScale; // lane PATHPERF-4 (Uber only)
+	}
 	if (m_world && m_world->getFrame() < 25u)
 	{
 		budget *= 100;
