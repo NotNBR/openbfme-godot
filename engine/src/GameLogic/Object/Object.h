@@ -65,6 +65,7 @@ class ExperienceTracker;
 class GameLogic;
 class ObjectClientHooks;
 class ObjectWeapons;
+class PhysicsBehavior;
 struct DamageInfo;
 class Team;
 class TeamPrototype;
@@ -356,6 +357,9 @@ public:
 
 	// ---- modules ----------------------------------------------------------------------------------------------------------
 	const std::vector<std::unique_ptr<BehaviorModule>> &modules() const { return m_modules; }
+	// lane UBER-2C: the first PhysicsBehavior of the module list (RW Object + 0x264), known once buildModules is done (modulesBuilt)
+	PhysicsBehavior *physicsModule() const { return m_physics; }
+	bool modulesBuilt() const { return m_modulesBuilt; }
 	size_t helperCount() const { return m_helperCount; }
 	BodyModuleInterface *getBodyModule() const { return m_body; }
 	ContainModuleInterface *getContain() const { return m_contain; }
@@ -511,6 +515,8 @@ private:
 	std::int32_t m_triggerCellX = 0, m_triggerCellY = 0; ///< RW + 0x418 / + 0x41C (the integer position of the last check)
 
 	std::vector<std::unique_ptr<BehaviorModule>> m_modules; ///< helpers first, then the template's behaviors
+	PhysicsBehavior *m_physics = nullptr; ///< lane UBER-2C
+	bool m_modulesBuilt = false;          ///< lane UBER-2C
 	size_t m_helperCount = 0;
 	BodyModuleInterface *m_body = nullptr;
 	ContainModuleInterface *m_contain = nullptr;

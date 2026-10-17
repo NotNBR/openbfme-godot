@@ -312,6 +312,17 @@ void Object::buildModules()
 			m_ai = a;
 		}
 	}
+	// lane UBER-2C: the physics module, kept as RotWK keeps it (Object + 0x264); PhysicsBehavior::find asked every module by dynamic_cast for every moving
+	// unit every frame (the locomotor's hasPhysicsModule: 2.7% of a 10,000-troop battle's frame). The list is complete here and never changes after
+	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
+	{
+		if (PhysicsBehavior *p = dynamic_cast<PhysicsBehavior *>(m.get()))
+		{
+			m_physics = p;
+			break;
+		}
+	}
+	m_modulesBuilt = true;
 	// COMBAT-2: the finished object's body applies its initial damage state once (an INI InitialHealth below the thresholds shows DAMAGED / REALLYDAMAGED / RUBBLE from the start)
 	if (m_body)
 	{
