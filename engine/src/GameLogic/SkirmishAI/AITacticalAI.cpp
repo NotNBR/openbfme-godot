@@ -2152,6 +2152,10 @@ bool recruitable(GameLogic &logic, const AIBrainState &b, const AITacticTeam &te
 	{
 		return false;
 	}
+	if (!o.getName().empty())
+	{
+		return false; // studio (openbfme-perf.patch): a unit the map's scripts name (objectName, CREATE_NAMED_*) is the scripts', not the AI's
+	}
 	if (!team.requiredKinds.empty() && !anyKind(o, team.requiredKinds))
 	{
 		return false;
@@ -2294,6 +2298,10 @@ void dispatchIdleUnits(GameLogic &logic, AISkirmishPlayer &ai, const std::vector
 		if (!o || inAnyTeamOf(b, id) || !(is(*o, k.canAttack) || is(*o, k.hero) || is(*o, k.support)) || is(*o, k.structure))
 		{
 			continue;
+		}
+		if (!o->getName().empty())
+		{
+			continue; // studio (openbfme-perf.patch): a unit the map's scripts name is the scripts' (recruitable)
 		}
 		if ((leavingFactory >= 0 && o->testStatus((unsigned)leavingFactory)) || b.dispatched.count(id) != 0)
 		{
