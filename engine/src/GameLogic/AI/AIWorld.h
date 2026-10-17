@@ -31,8 +31,10 @@
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindHost.h"
 #include "GameLogic/Locomotor.h"
+#include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/ObjectTypes.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -201,6 +203,7 @@ public:
 	int peakTickCells() const { return m_peakTickCells; }
 	size_t peakQueued() const { return m_peakQueued; }
 	unsigned long long collisionPairsLastFrame() const { return m_collisionPairs; }
+	unsigned long long collisionPairsSkippedLastFrame() const { return m_collisionPairsSkipped; } ///< lane UBER-2B: Uber's inert pairs (counted in the above too)
 
 	// ---- PathfindWorld ----
 	PathfindObject *findObjectByID(PathfindObjectID id) const override;
@@ -261,6 +264,10 @@ private:
 		std::vector<std::pair<int, int>> pairs; ///< (lower unit index, higher unit index), in the order the serial pass met them
 	};
 	std::vector<CollisionChunk> m_collisionChunks;
+	// lane UBER-2B: the Uber pass's per-unit collide facts (ObjectCollide::PairFacts), taken at a unit's first pair
+	std::vector<ObjectCollide::PairFacts> m_collisionFacts;
+	std::vector<std::uint8_t> m_collisionFactState; ///< 0: not taken yet, 1: taken, 2: taken and AIUpdateInterface::isContained
+	unsigned long long m_collisionPairsSkipped = 0;
 	int m_moveAlliesDepth = 0; // lane PHYS-1: RW pathfinder + 0x1C1BC, the recursion guard of moveAllies
 	int m_peakTickCells = 0;
 	size_t m_peakQueued = 0;

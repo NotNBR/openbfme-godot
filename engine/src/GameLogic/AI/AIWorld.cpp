@@ -473,6 +473,7 @@ const PathfindGeometry &ObjectPathfindAdapter::getGeometry() const
 		{
 			m_ownGeometry.shapes[i].active = active[i] != 0;
 		}
+		m_ownGeometry.cacheRadii(); // lane UBER-2B: the radii of the flags just set (see PathfindGeometry::cacheRadii)
 		m_ownGeometryVersion = m_object->geometryVersion();
 	}
 	return m_ownGeometry;
@@ -930,6 +931,7 @@ const ObjectMovementInfo &AIWorld::movementInfo(const ThingTemplate &tt)
 	{
 		std::unique_ptr<ObjectMovementInfo> info = std::make_unique<ObjectMovementInfo>();
 		buildInfo(*key, *m_env, *info);
+		info->geometry.cacheRadii(); // lane UBER-2B: a template's geometry never changes after buildInfo (see PathfindGeometry::cacheRadii)
 		for (const std::string &e : info->errors)
 		{
 			if (std::find(m_errors.begin(), m_errors.end(), e) == m_errors.end())
@@ -1041,6 +1043,7 @@ void AIWorld::processPathfindQueue()
 void AIWorld::processCollisions()
 {
 	m_collisionPairs = 0;
+	m_collisionPairsSkipped = 0;
 	if (!m_mapReady || m_ais.size() < 2)
 	{
 		return;
@@ -1159,6 +1162,26 @@ void AIWorld::processCollisions()
 			}
 		}
 	});
+	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass (taken at the unit's first pair, on this thread:
+	// ObjectCollide::pairFacts reads lazily filled caches). A pair whose handlers would all return at those tests is counted and skipped: AIMover::onCollide
+	// returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert says. Uber rule change (snapshot
+	// semantics): a unit's facts are those of its first pair, so a later pair after a crush or a stun in the same pass reads them from before it
+	const bool filter = m_logic.uber();
+	if (filter)
+	{
+		m_collisionFacts.resize(units.size());
+		m_collisionFactState.assign(units.size(), 0);
+	}
+	const auto factsOf = [&](int i) -> std::uint8_t {
+		std::uint8_t &state = m_collisionFactState[(size_t)i];
+		if (state == 0)
+		{
+			AIUpdateInterface *ai = units[(size_t)i].ai;
+			m_collisionFacts[(size_t)i] = ObjectCollide::pairFacts(*ai->getObject());
+			state = ai->isContained() ? 2 : 1; // 2: AIUpdateInterface::isContained
+		}
+		return state;
+	};
 	bool alliedPair = false;
 	for (size_t chunk = 0; chunk < chunkCount; ++chunk)
 	{
@@ -1167,6 +1190,17 @@ void AIWorld::processCollisions()
 			const CollisionUnit &a = units[(size_t)pair.first], &b = units[(size_t)pair.second];
 			++m_collisionPairs;
 			alliedPair = alliedPair || a.ai->adapter().getRelationship(b.ai->adapter()) != PATHFIND_ENEMIES;
+			if (filter)
+			{
+				const bool aContained = factsOf(pair.first) == 2, bContained = factsOf(pair.second) == 2;
+				const ObjectCollide::PairFacts &fa = m_collisionFacts[(size_t)pair.first], &fb = m_collisionFacts[(size_t)pair.second];
+				const bool moverInert = (aContained || fb.container != nullptr) && (bContained || fa.container != nullptr);
+				if (moverInert && ObjectCollide::pairIsInert(fa, fb))
+				{
+					++m_collisionPairsSkipped;
+					continue;
+				}
+			}
 			a.ai->onCollide(b.ai->adapter());
 			b.ai->onCollide(a.ai->adapter());
 			// lane HORDE-2: the collide modules of both objects (ZH Object::onCollide: SquishCollide, HordeMemberCollide, ...), the lower id first (inference, S-581)
