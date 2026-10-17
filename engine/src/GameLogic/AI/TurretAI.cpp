@@ -170,6 +170,7 @@ public:
 	}
 	void crc(StateHasher &h) const override { h.addU32(m_nextIdleScan); }
 	void crcPersistent(StateHasher &h) const override { h.addU32(m_nextIdleScan); }
+	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
 
 private:
 	unsigned m_nextIdleScan = 0; // + 0x20
@@ -206,6 +207,7 @@ public:
 	}
 	void crc(StateHasher &h) const override { h.addFloat(m_desiredAngle); }
 	void crcPersistent(StateHasher &h) const override { h.addFloat(m_desiredAngle); }
+	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
 
 private:
 	float m_desiredAngle = 0.0f; // + 0x20
@@ -256,6 +258,7 @@ public:
 	}
 	void crc(StateHasher &h) const override { h.addU32(m_timestamp); }
 	void crcPersistent(StateHasher &h) const override { h.addU32(m_timestamp); }
+	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
 
 private:
 	unsigned m_timestamp = 0; // + 0x20
