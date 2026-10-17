@@ -1,3 +1,61 @@
+OpenBFME Uber performance patch (2026-10-17)
+============================================
+
+Base: upstream Open-BFME/openbfme-godot 9451fc8 with the map workshop's four
+engine patches (this fork's commits up to 31a4a2a). Apply from the
+repository root:  git apply patches/openbfme-uber-performance.patch
+
+What it does. Faithful results are unchanged unless marked "Uber"; Uber stays
+deterministic across thread counts and machines (docs/UBER.md):
+
+Pathfinding (lanes PATHPERF-2, PATHPERF-4)
+  - the search asks a unit's speed once per search, remembers line-of-sight
+    cells while smoothing a path, and keeps the open list's costs beside the
+    cells (same paths, about 1.8x faster)
+  - the cell-info pool grows past 60,000 records instead of failing
+  - Uber: the path queue holds 16,384 requests; a mass order (120+ waiting)
+    gets 4x the cell budget until the queue is down to 40
+Spatial scans (lane UBER-2A)
+  - the nearest-object search skips the exact distance test when a cheap
+    bound already rules a unit out; the search heap is reused
+  - Uber: scans skip friendly partition layers; the target grid is built
+    once per frame
+Per-unit work (lane UBER-2B)
+  - a geometry keeps its bounding radii; an object keeps its collide
+    modules; the physics lookup is reused; the member pass computes its
+    angle's cos / sin once
+  - Uber: collision pairs whose handlers would all return at once are
+    skipped; a melee tick builds its reach candidates once per horde
+Recording, hashing and collisions (lane UBER-2C)
+  - Uber: a recorded game keeps the state hash of every 5th frame (replays
+    compare every recorded hash; saves record their frame's hash)
+  - the collision pass tests overlap before sorting the candidates
+  - the state hash walks only the AI states that keep fields
+Battle pathfinding (lane UBER-3P, Uber only)
+  - a search that cannot reach its goal ends once its answer has held for
+    256 cells; an attack search without an endpoint likewise
+Clash work (lane UBER-3W)
+  - an object keeps its attribute modifier module; the collision search
+    visits only the buckets a unit's reach touches
+  - Uber: collision facts gathered on the job pool, shroud template vision
+    kept per record, cheaper large group bonus and amoeba reach scans
+
+Measured (uber bench, map mp fall back 8p, 30 frames, logic wall time per
+frame, all logic threads, owner's PC, back to back on a quiet machine):
+                       native     patched
+  Uber, 10,000 troops  172 ms      70 ms   (2.5x)
+  Uber, 30,000 troops  424 ms     129 ms   (3.3x; 1 of 30 frames over 200 ms,
+                                            native 30 of 30)
+  Faithful, 10,000     135 ms      95 ms   (1.4x)
+  Faithful, 30,000     374 ms     243 ms   (1.5x)
+
+Tests: uber1 (pins regenerated for the intended Uber changes; same hashes on
+1, 4 and 16 threads), pathperf1, pathfind, perf1, perf2, partition, emotion,
+target, horde*, phys1, save2, replay, mp1, net core / net retail (LAN games
+between peer processes, desync checks) pass. The online3 / netlag1 relay
+tests fail identically on native 9451fc8 on this PC (environment). A
+parallel Faithful hash was tried and reverted: it desynced a LAN game.
+
 diff --git a/docs/UBER.md b/docs/UBER.md
 index 0edd97f..f7902f8 100644
 --- a/docs/UBER.md
