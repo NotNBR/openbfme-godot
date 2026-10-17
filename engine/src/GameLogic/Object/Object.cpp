@@ -7,6 +7,7 @@
 #include "GameLogic/Module/SpecialPowerModules.h"
 #include "GameLogic/Module/SpecialAbilityModules.h"
 #include "GameLogic/Object/ObjectGeometry.h"
+#include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/Module/PhysicsBehavior.h"
 #include "GameLogic/ScriptEngine/ScriptEngine.h"
 #include "GameLogic/ScriptEngine/ScriptConditions.h"
@@ -250,10 +251,25 @@ std::unique_ptr<BehaviorModule> Object::friend_replaceModule(BehaviorModule *old
 			{
 				m_contain = m->getContain();
 			}
+			rebuildCollideModules();
 			return out;
 		}
 	}
 	throw std::logic_error("Object::friend_replaceModule: the module is not this object's");
+}
+
+void Object::rebuildCollideModules()
+{
+	m_collideModules.clear();
+	m_collideModulesKnown = true;
+	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
+	{
+		if (CollideModuleInterface *c = m ? m->getCollide() : nullptr)
+		{
+			m_collideModules.push_back(c);
+			m_collideModulesKnown = m_collideModulesKnown && c->pairFactsKnown();
+		}
+	}
 }
 
 void Object::buildModules()
@@ -312,6 +328,7 @@ void Object::buildModules()
 			m_ai = a;
 		}
 	}
+	rebuildCollideModules();
 	// COMBAT-2: the finished object's body applies its initial damage state once (an INI InitialHealth below the thresholds shows DAMAGED / REALLYDAMAGED / RUBBLE from the start)
 	if (m_body)
 	{

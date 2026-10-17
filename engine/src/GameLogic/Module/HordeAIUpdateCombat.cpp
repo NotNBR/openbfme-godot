@@ -922,6 +922,8 @@ bool HordeAIUpdate::isMeleeTargetReady(Object &targetIn)
 
 static bool aiSlot1B8(Object &m);
 static Object *amoebaReach(Object &m, Object &target);
+static std::vector<Object *> amoebaReachCandidates(Object &target);
+static Object *amoebaReachAmong(Object &m, const std::vector<Object *> &cands);
 static bool amoebaAttack(Object &m, Object &victim);
 
 // RW 0x86D75E (the target changes) + Amoeba onNewTarget (RW 0x99006A)
@@ -1014,16 +1016,34 @@ static Object *amoebaReach(Object &m, Object &target)
 	{
 		return nullptr;
 	}
+	return amoebaReachAmong(m, amoebaReachCandidates(target));
+}
+
+// the reach check's candidates: the target's living members, then the target itself when it is alive and not a horde object
+static std::vector<Object *> amoebaReachCandidates(Object &target)
+{
 	std::vector<Object *> cands = aliveMembers(target);
 	if (CombatQueries::isAlive(target) && !isHordeObject(target))
 	{
 		cands.push_back(&target);
 	}
+	return cands;
+}
+
+static Object *amoebaReachAmong(Object &m, const std::vector<Object *> &cands)
+{
+	ObjectWeapons *w = m.getWeapons();
+	Weapon *weapon = w ? w->currentWeapon() : nullptr;
+	if (!weapon || !weapon->getTemplate() || !weapon->getTemplate()->m_meleeWeapon)
+	{
+		return nullptr;
+	}
 	Object *best = nullptr;
 	float bestD = 0.0f;
 	for (Object *e : cands)
 	{
-		if (m.getRelationship(*e) != ENEMIES || !w->isWithinAttackRange(*e))
+		// lane UBER-2B: a candidate of a list built before this member (the Uber tick's) may have died since; a fresh list holds only living ones
+		if (!CombatQueries::isAlive(*e) || m.getRelationship(*e) != ENEMIES || !w->isWithinAttackRange(*e))
 		{
 			continue;
 		}
@@ -1671,13 +1691,21 @@ bool HordeAIUpdate::hasMeleeAttackingMember() const
 // around the member, RW 0x6ED843). INFERENCE (S-588): the touching enemy is the reach check's enemy of the target (RW 0x6F2956 rules); no repositioning.
 void HordeAIUpdate::holdGroundTick(Object &target)
 {
+	// lane UBER-2B (Uber only): the target's candidates once per tick instead of once per member (a list built per member and frame). Uber rule change: the
+	// list is the tick's start (amoebaReachAmong still skips a soldier that died since); a soldier that joined the target during the tick waits for the next
+	const bool uber = getObject()->logic().uber();
+	std::vector<Object *> tickCands;
+	if (uber)
+	{
+		tickCands = amoebaReachCandidates(target);
+	}
 	for (Object *m : membersOf())
 	{
 		if (m->testStatus((unsigned)CombatNames::statuses().isMeleeAttacking))
 		{
 			continue;
 		}
-		if (Object *e = amoebaReach(*m, target))
+		if (Object *e = uber ? amoebaReachAmong(*m, tickCands) : amoebaReach(*m, target))
 		{
 			if (amoebaAttack(*m, *e))
 			{

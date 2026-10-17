@@ -107,7 +107,7 @@ float shapeSphere(const PathfindShape &s)
 }
 } // namespace
 
-float PathfindGeometry::boundingCircleRadius() const
+float PathfindGeometry::computeBoundingCircleRadius() const
 {
 	// RW 0xAD2860: start at 0.01f (0x3C23D70A), keep the larger (fcomp: an equal value is taken from the shape, the same value)
 	float best = 0.01f;
@@ -127,7 +127,7 @@ float PathfindGeometry::boundingCircleRadius() const
 	return best;
 }
 
-float PathfindGeometry::boundingSphereRadius() const
+float PathfindGeometry::computeBoundingSphereRadius() const
 {
 	float best = 0.0f; // RW 0xAD287A
 	for (size_t i = 0; i < shapeCount(); ++i)
