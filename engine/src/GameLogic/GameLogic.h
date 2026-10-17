@@ -720,6 +720,10 @@ private:
 	void hashObjectsUber(StateHasher &x) const;
 	mutable std::vector<const Object *> m_uberHashObjects;  ///< scratch of hashObjectsUber (the logic owner thread only)
 	mutable std::vector<std::uint32_t> m_uberHashValues;
+	// lane UBER-2C: the Faithful objects section gathered on the logic job pool (hashObjectsFaithful): each run of objects records its words, then they
+	// are folded in object order, the same value as the serial walk
+	void hashObjectsFaithful(StateHasher &x) const;
+	mutable std::vector<std::vector<std::uint32_t>> m_faithfulHashWords; ///< scratch of hashObjectsFaithful (the logic owner thread only)
 	struct HashContributor
 	{
 		int token;

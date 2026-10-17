@@ -1065,10 +1065,7 @@ std::uint32_t GameLogic::hashState(std::vector<StateHashSection> *sections, std:
 			hashObjectsUber(x); // lane UBER-1
 			return;
 		}
-		for (const Object *o = m_objectHead; o; o = o->getNextObject())
-		{
-			o->crc(x);
-		}
+		hashObjectsFaithful(x); // lane UBER-2C: the serial walk's words, gathered in parallel
 	});
 	if (objects)
 	{
@@ -1191,6 +1188,47 @@ std::uint32_t GameLogic::hashState(std::vector<StateHashSection> *sections, std:
 // then chains the object count and every (id, object hash) in object list order on this thread. Chunks are fixed runs of kObjectsPerJob objects and
 // each value lands in its object's slot, so the result is the same with any thread count; it differs from the Faithful hash on purpose (an Uber
 // game never compares hashes with a Faithful one: the profile identity refuses the mix).
+void GameLogic::hashObjectsFaithful(StateHasher &x) const
+{
+	// one thread: the serial walk itself
+	if (JobSystem::logic().threadCount() <= 1)
+	{
+		for (const Object *o = m_objectHead; o; o = o->getNextObject())
+		{
+			o->crc(x);
+		}
+		return;
+	}
+	// every object's crc reads only its own state and what nothing changes while the hash runs (the Uber hash calls the same crc on the job pool);
+	// the runs' words are folded in object order, so the value is the walk's whatever the thread count
+	constexpr size_t kObjectsPerJob = 64;
+	m_uberHashObjects.clear();
+	for (const Object *o = m_objectHead; o; o = o->getNextObject())
+	{
+		m_uberHashObjects.push_back(o);
+	}
+	const std::vector<const Object *> &objects = m_uberHashObjects;
+	const size_t runs = JobSystem::chunkCount(objects.size(), kObjectsPerJob);
+	if (m_faithfulHashWords.size() < runs)
+	{
+		m_faithfulHashWords.resize(runs);
+	}
+	std::vector<std::vector<std::uint32_t>> &words = m_faithfulHashWords;
+	JobSystem::logic().parallelFor(objects.size(), kObjectsPerJob, [&objects, &words](size_t run, size_t begin, size_t end) {
+		std::vector<std::uint32_t> &out = words[run];
+		out.clear();
+		StateHasher recorder(&out);
+		for (size_t i = begin; i < end; ++i)
+		{
+			objects[i]->crc(recorder);
+		}
+	});
+	for (size_t run = 0; run < runs; ++run)
+	{
+		x.fold(words[run]);
+	}
+}
+
 void GameLogic::hashObjectsUber(StateHasher &x) const
 {
 	constexpr size_t kObjectsPerJob = 64;

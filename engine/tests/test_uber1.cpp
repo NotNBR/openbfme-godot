@@ -104,7 +104,7 @@ void storeUberHashes(const char *name, const std::vector<std::uint32_t> &hashes)
 // its hash, said in the commit). The state hash's own dispatches are counted apart from the frame's (PERF-2's collision jobs): with more than one
 // thread the hash itself ran chunks on workers. The Uber hash is not the Faithful one, and a Faithful hash dispatches nothing.
 TEST_CASE("uber1: the Uber battle hashes as its pin vector in every frame with 1, 4 and 16 logic threads and in a repeated run; the hash's own jobs run on "
-		  "workers; Faithful hashes differently and serially")
+		  "workers; Faithful hashes differently, the same with one logic thread and four")
 {
 	OPENBFME_REQUIRE_START(s);
 	LogicThreadsGuard guard;
@@ -168,7 +168,16 @@ TEST_CASE("uber1: the Uber battle hashes as its pin vector in every frame with 1
 	uberbench::runBattle(*s->mount->fs, *s->world, s->options, s->settings, units, 1, SimulationProfile::Faithful, true, faithful);
 	REQUIRE(faithful.hashes.size() == 1u);
 	CHECK(faithful.hashes[0] != reference[0]);
-	CHECK(faithful.hashDispatches == 0u); // the Faithful hash is the one serial walk
+	// lane UBER-2C: the Faithful hash gathers its objects' words on the pool (one dispatch) and folds them in order: the serial walk's value, the same with
+	// one thread (which walks serially and dispatches nothing)
+	CHECK(faithful.hashDispatches == 1u);
+	JobSystem::logic().setThreadCount(1);
+	uberbench::Run serial;
+	uberbench::runBattle(*s->mount->fs, *s->world, s->options, s->settings, units, 1, SimulationProfile::Faithful, true, serial);
+	REQUIRE(serial.hashes.size() == 1u);
+	CHECK(serial.hashes[0] == faithful.hashes[0]);
+	CHECK(serial.hashDispatches == 0u);
+	JobSystem::logic().setThreadCount(4);
 }
 
 namespace
