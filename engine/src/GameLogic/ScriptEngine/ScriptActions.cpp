@@ -73,6 +73,9 @@ const std::set<int> &clientActions()
 			// bar edits (RW 0x7C6793 ...: TheControlBar). Lane BACKLOG3: the radar event actions are ported below (radarEventAction)
 			"VICTORY_SCREEN", "FLASH_OBJECTIVES_BUTTON", "COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE", "COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT",
 			"TOGGLE_AVI_CAPTURE", "ENABLE_OBJECT_SOUND", "DISABLE_OBJECT_SOUND",
+			// mapworkshop (openbfme-cinematics.patch): what RotWK's cinematic maps (maps\cin *) set up a shot with: the map's camera animation, the
+			// drawable icons off and the far plane pushed out (scripts/campaign_cine.gd presents them)
+			"MOVE_CAMERA_BY_ANIMATION", "OPTIONS_SET_DRAWICON_UI_MODE", "SET_CAMERA_CLIP_DEPTH_MULTIPLIER",
 		};
 		std::set<int> out;
 		for (const char *n : names)
