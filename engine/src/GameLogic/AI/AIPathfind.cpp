@@ -109,6 +109,10 @@ float shapeSphere(const PathfindShape &s)
 
 float PathfindGeometry::boundingCircleRadius() const
 {
+	if (radiiStored)
+	{
+		return storedCircle; // lane UBER-2C
+	}
 	// RW 0xAD2860: start at 0.01f (0x3C23D70A), keep the larger (fcomp: an equal value is taken from the shape, the same value)
 	float best = 0.01f;
 	for (size_t i = 0; i < shapeCount(); ++i)
@@ -129,6 +133,10 @@ float PathfindGeometry::boundingCircleRadius() const
 
 float PathfindGeometry::boundingSphereRadius() const
 {
+	if (radiiStored)
+	{
+		return storedSphere; // lane UBER-2C
+	}
 	float best = 0.0f; // RW 0xAD287A
 	for (size_t i = 0; i < shapeCount(); ++i)
 	{
@@ -144,6 +152,17 @@ float PathfindGeometry::boundingSphereRadius() const
 		}
 	}
 	return best;
+}
+
+// lane UBER-2C: the radii the getters compute, kept (see AIPathfindHost.h)
+void PathfindGeometry::storeRadii()
+{
+	radiiStored = false;
+	const float circle = boundingCircleRadius();
+	const float sphere = boundingSphereRadius();
+	storedCircle = circle;
+	storedSphere = sphere;
+	radiiStored = true;
 }
 
 void PathfindGeometry::applyShapeOffset(const PathfindShape &s, float angle, Coord3D &pos)

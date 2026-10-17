@@ -74,6 +74,13 @@ struct PathfindGeometry
 	float boundingCircleRadius() const;
 	// RW GeometryInfo +0x14 (RW 0xAD2860): the largest bounding sphere (RW 0xAD2770) of the ACTIVE shapes, at least 0.
 	float boundingSphereRadius() const;
+	// lane UBER-2C: RotWK keeps the two radii in the GeometryInfo (+0x10 / +0x14), computed when the shapes change; storeRadii() does the same for a
+	// complete geometry (a template's, an object's own copy after its shape flags changed), and the two getters then read them: a weapon range test asked
+	// both, in x87-exact maths, for every shot candidate (8% of a 10,000-troop battle's frame). A geometry without stored radii computes them on every call.
+	// Whoever changes a geometry after storeRadii() calls it again
+	void storeRadii();
+	bool radiiStored = false;
+	float storedCircle = 0.0f, storedSphere = 0.0f;
 	// RW 0xAD14F0: `pos` moved by the shape's offset turned by `angle` (x += cos * offX - sin * offY, y += sin * offX + cos * offY, z += offZ)
 	static void applyShapeOffset(const PathfindShape &s, float angle, Coord3D &pos);
 	// RW 0xAD1D60: the 2D box (lo.x, lo.y, hi.x, hi.y) around `pos` and every ACTIVE shape of the object at `pos` turned by `angle`
