@@ -141,10 +141,6 @@ const char *PhysicsBehavior::stopLine()
 
 PhysicsBehavior *PhysicsBehavior::find(Object &obj)
 {
-	if (obj.modulesBuilt())
-	{
-		return obj.physicsModule(); // lane UBER-2C: kept by Object::buildModules
-	}
 	for (const std::unique_ptr<BehaviorModule> &m : obj.modules())
 	{
 		if (PhysicsBehavior *p = dynamic_cast<PhysicsBehavior *>(m.get()))
