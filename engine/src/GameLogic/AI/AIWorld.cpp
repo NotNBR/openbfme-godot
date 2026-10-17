@@ -1142,22 +1142,26 @@ void AIWorld::processCollisions()
 					for (int k = start[b]; k < start[b + 1]; ++k)
 					{
 						const int j = items[(size_t)k];
-						if ((size_t)j > i) // the pair is handled from the lower index
+						if ((size_t)j <= i) // the pair is handled from the lower index
 						{
-							candidates.push_back(j);
+							continue;
 						}
+						// lane UBER-2C: the overlap test before the sort (it judges each partner on its own, so the overlapping set and its id order are
+						// the same): a melee's neighbour buckets hold dozens of units a unit does not touch, and sorting them all was 9% of a 30,000-troop
+						// clash's logic frame
+						const CollisionUnit &b = units[(size_t)j];
+						const float dx = SimMath::subf32(a.x, b.x), dy = SimMath::subf32(a.y, b.y), rr = SimMath::addf32(a.r, b.r);
+						if (SimMath::addf32(SimMath::mulf32(dx, dx), SimMath::mulf32(dy, dy)) >= SimMath::mulf32(rr, rr))
+						{
+							continue;
+						}
+						candidates.push_back(j);
 					}
 				}
 			}
 			std::sort(candidates.begin(), candidates.end()); // the pairs of one unit meet in id order, whatever the bucket layout
 			for (int j : candidates)
 			{
-				const CollisionUnit &b = units[(size_t)j];
-				const float dx = SimMath::subf32(a.x, b.x), dy = SimMath::subf32(a.y, b.y), rr = SimMath::addf32(a.r, b.r);
-				if (SimMath::addf32(SimMath::mulf32(dx, dx), SimMath::mulf32(dy, dy)) >= SimMath::mulf32(rr, rr))
-				{
-					continue;
-				}
 				pairs.emplace_back((int)i, j);
 			}
 		}
