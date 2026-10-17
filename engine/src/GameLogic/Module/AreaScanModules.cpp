@@ -125,6 +125,18 @@ unsigned hordeMembersAllowed(GameLogic &logic, Object &horde, const ObjectFilter
 	return n;
 }
 
+// lane UBER-3W: an object with a horde contain (hordeMembersAllowed's first test), asked by the range walk before the distance
+class PartitionFilterHordeContain : public PartitionFilter
+{
+public:
+	bool allow(Object &o) override
+	{
+		ContainModuleInterface *c = o.getContain();
+		return c && c->getHordeContainInterface();
+	}
+	bool beforeDistance() const override { return true; }
+};
+
 template <class T>
 T *findModuleOf(Object &obj)
 {
@@ -202,8 +214,11 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
 		// changed since the frame's partition update is looked for on its old layer
 		const int ownerIndex = owner ? owner->getPlayerIndex() : -1;
 		PartitionFilterLayers ownerLayer(ownerIndex >= 0 && ownerIndex < PartitionManager::kLayerCount - 1 ? 1u << ownerIndex : 0u);
+		// lane UBER-3W, Uber only: the filter above accepts only an object with a horde contain; that test (pure, no counting) goes first and the walk asks it
+		// before the distance, so the hordes' soldiers around (some thirty for every horde in reach) cost no square root. The same hits in the same order
+		PartitionFilterHordeContain hordeOnly;
 		const PartitionHits hits = logic.uber()
-			? logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter, &ownerLayer }, ITER_FASTEST)
+			? logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &hordeOnly, &filter, &ownerLayer }, ITER_FASTEST)
 			: logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter }, ITER_FASTEST);
 		unsigned count = 0;
 		for (size_t i = 0; i < hits.size(); ++i)

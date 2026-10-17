@@ -686,6 +686,10 @@ void PartitionManager::walk(const Node *node, std::uint32_t childNodes, int x0, 
 			}
 			else
 			{
+				if (m_walkPreFilter && !m_walkPreFilter->allow(*e->object))
+				{
+					continue; // lane UBER-3W: the chain's first filter refuses it (a pure one; asked before the distance's square root)
+				}
 				if (m_walkPreReject && surelyBeyond(type, *center, *e, radiusSqr))
 				{
 					continue; // the exact test below would reject it (performance)
@@ -761,6 +765,7 @@ PartitionHits PartitionManager::iterateObjectsInRange(const Coord3D &center, flo
 	const int y1 = (int)cellY(SimMath::pc24Add(radius, center.y));
 	const float radiusSqr = SimMath::pc24Mul(radius, radius);
 	m_walkPreReject = m_preReject && !(x0 == 0 && y0 == 0 && x1 == kCells - 1 && y1 == kCells - 1);
+	m_walkPreFilter = (filters.begin() != filters.end() && (*filters.begin())->beforeDistance()) ? *filters.begin() : nullptr;
 	std::vector<PartitionHit> out = takeBuffer();
 	for (int i = 0; i < kLayerCount; ++i)
 	{
@@ -770,6 +775,7 @@ PartitionHits PartitionManager::iterateObjectsInRange(const Coord3D &center, flo
 		}
 		layers >>= 1;
 	}
+	m_walkPreFilter = nullptr;
 	sortHits(out, order);
 	return PartitionHits(*this, std::move(out));
 }

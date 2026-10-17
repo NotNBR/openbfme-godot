@@ -246,6 +246,10 @@ private:
 		bool groundValid = false;                               ///< RW object + 0x418 / + 0x41C (the integer position) and + 0x1C4
 		int groundX = 0, groundY = 0;
 		float groundRef = 0.0f;
+		// lane UBER-3W (Uber only, derived, not hashed): templateVision of the template it was read for (prepareRecord read it for every processing: a
+		// geometry list built per record and frame, 1.2% of a one-thread 30,000-troop clash frame)
+		const ThingTemplate *tvTemplate = nullptr;
+		TemplateVision tv;
 	};
 
 	Cell *cellAt(int x, int y);

@@ -94,6 +94,8 @@ public:
 	virtual bool allow(Object &obj) = 0;
 	// bit k: player k's layer may hold an allowed object (RW 0xA39490 ANDs them); layer -1 is always walked
 	virtual std::uint32_t playerLayerMask() const { return 0xFFFFFFFFu; }
+	// lane UBER-3W: true for a pure filter the range walk may ask before the distance test, when it is the chain's first (the same hits: the chain still asks it)
+	virtual bool beforeDistance() const { return false; }
 };
 
 // a filter made of a predicate (the port's filters that have no own class); the callable is held by value (no std::function allocation per scan):
@@ -315,5 +317,6 @@ private:
 	mutable std::vector<SearchNode> m_searchHeap;                          ///< getClosestObject's heap storage, kept between calls (lane UBER-2A)
 	bool m_preReject = true;
 	mutable bool m_walkPreReject = true; ///< this walk's: off when the query rectangle is the whole grid (every candidate is near: the bound would only cost)
+	mutable PartitionFilter *m_walkPreFilter = nullptr; ///< lane UBER-3W: this range walk's beforeDistance filter (iterateObjectsInRange), else null
 	int m_mineBit = -1;
 };

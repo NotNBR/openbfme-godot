@@ -1040,8 +1040,31 @@ static Object *amoebaReachAmong(Object &m, const std::vector<Object *> &cands)
 	}
 	Object *best = nullptr;
 	float bestD = 0.0f;
+	// lane UBER-3W (Uber only): the distance first, and the weapon range (its bonus, its reach: 2.5% of a one-thread 30,000-troop clash frame, once per member
+	// and candidate) only for a candidate that would beat the best so far; the nearest enemy in range is the same. Uber because the range test leaves the
+	// melee reach it computed in the weapon's range host, which then holds another candidate's value (every reader but a point target's sets it first)
+	const bool rangeLast = m.logic().uber();
 	for (Object *e : cands)
 	{
+		if (rangeLast)
+		{
+			if (!CombatQueries::isAlive(*e) || m.getRelationship(*e) != ENEMIES)
+			{
+				continue;
+			}
+			const float d2 = CombatQueries::edgeDistanceSquared2D(m, *m.getPosition(), *e, *e->getPosition()); // RW 0x66352C
+			if (best && !(d2 < bestD || (d2 == bestD && e->getID() < best->getID())))
+			{
+				continue;
+			}
+			if (!w->isWithinAttackRange(*e))
+			{
+				continue;
+			}
+			best = e;
+			bestD = d2;
+			continue;
+		}
 		// lane UBER-2B: a candidate of a list built before this member (the Uber tick's) may have died since; a fresh list holds only living ones
 		if (!CombatQueries::isAlive(*e) || m.getRelationship(*e) != ENEMIES || !w->isWithinAttackRange(*e))
 		{
