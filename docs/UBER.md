@@ -473,6 +473,14 @@ found no closest cell at all and gave no path, after 72% of all their cells.
   240 / 261 ms. The queue's cells per call 23,000 -> 8,600, the horde repaths
   served in the 14 clash frames 170 -> 209. The 10k battle is unchanged within
   the noise (83-89 -> 86-94 ms default threads, 103-107 -> 106 ms one thread).
+- **Uber rule change (second step):** `findAttackPath` with no endpoint yet
+  ends once its closest cell has held for 256 examined cells and gives the
+  fallback the exhausted search gives (the path to that cell). In the clash
+  126 of 200 attack searches found no endpoint and spent 75% of their cells
+  after such a pause; no endpoint of the other 74 came after one. Result on
+  top of the first step (30k, 30 frames, a busy PC): 174 -> 161 ms default
+  threads (clash frames 182 -> 154), 254 -> 237 ms one thread; the 10k battle
+  within the noise. The Uber pin vector was regenerated again.
 
 ### U2: parallel queries and paths, GPU animation (next)
 
