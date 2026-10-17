@@ -243,7 +243,6 @@ void buildInfo(const ThingTemplate &tt, INIEnvironment &env, ObjectMovementInfo 
 			errs.push_back(std::string("Geometry: ") + e.what());
 		}
 	}
-	out.geometry.storeRadii(); // lane UBER-2C: the template's geometry is complete
 	realField(tt, "FenceWidth", out.fenceWidth, errs);
 	realField(tt, "FenceXOffset", out.fenceXOffset, errs);
 	realField(tt, "PathfindDiameter", out.pathfindDiameter, errs);
@@ -474,7 +473,6 @@ const PathfindGeometry &ObjectPathfindAdapter::getGeometry() const
 		{
 			m_ownGeometry.shapes[i].active = active[i] != 0;
 		}
-		m_ownGeometry.storeRadii(); // lane UBER-2C: the copy's active shapes changed
 		m_ownGeometryVersion = m_object->geometryVersion();
 	}
 	return m_ownGeometry;
