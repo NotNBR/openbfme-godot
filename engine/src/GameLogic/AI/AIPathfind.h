@@ -983,6 +983,7 @@ private:
 	bool m_searchShortcuts = true;
 	bool m_uberLimits = false; // lane PATHPERF-4
 	bool m_uberBurst = false;  // lane PATHPERF-4: the queue is draining a burst (hashed in an Uber game)
+	mutable std::vector<std::vector<std::uint32_t>> m_crcWords; // lane UBER-2C: crc's runs of cells (the hashing thread only)
 	// lane PATHPERF-2: the line memo (LineMemoScope): an open-addressed table of (cell index * 10 + entry code + 1) -> blocked, entries valid in generation
 	// m_lineMemoGen; the parameters are bound by the scope's first isLinePassable call
 	struct LineMemoEntry

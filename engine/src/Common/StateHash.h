@@ -35,10 +35,17 @@ public:
 	}
 	void fold(const std::vector<std::uint32_t> &words)
 	{
+		if (m_record)
+		{
+			m_record->insert(m_record->end(), words.begin(), words.end());
+			return;
+		}
+		std::uint32_t crc = m_crc; // the rotate-add of addU32, without its recording test per word
 		for (std::uint32_t v : words)
 		{
-			addU32(v);
+			crc = ((crc << 1) | (crc >> 31)) + v;
 		}
+		m_crc = crc;
 	}
 	void addI32(std::int32_t v) { addU32((std::uint32_t)v); }
 	void addBool(bool v) { addU32(v ? 1u : 0u); }

@@ -168,9 +168,9 @@ TEST_CASE("uber1: the Uber battle hashes as its pin vector in every frame with 1
 	uberbench::runBattle(*s->mount->fs, *s->world, s->options, s->settings, units, 1, SimulationProfile::Faithful, true, faithful);
 	REQUIRE(faithful.hashes.size() == 1u);
 	CHECK(faithful.hashes[0] != reference[0]);
-	// lane UBER-2C: the Faithful hash gathers its objects' words on the pool (one dispatch) and folds them in order: the serial walk's value, the same with
-	// one thread (which walks serially and dispatches nothing)
-	CHECK(faithful.hashDispatches == 1u);
+	// lane UBER-2C: the Faithful hash gathers its objects' and its pathfinder cells' words on the pool (two dispatches) and folds them in order: the serial
+	// walk's value, the same with one thread (which walks serially and dispatches nothing)
+	CHECK(faithful.hashDispatches == 2u);
 	JobSystem::logic().setThreadCount(1);
 	uberbench::Run serial;
 	uberbench::runBattle(*s->mount->fs, *s->world, s->options, s->settings, units, 1, SimulationProfile::Faithful, true, serial);
