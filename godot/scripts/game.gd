@@ -571,6 +571,7 @@ var _net_lobby_again := false
 var _lan_shell_game := false ## lane UBERJOIN-1: the running game was started by the LAN lobby screen (LanGameStart): its room is left at the game's end, Continue shows the lobby screen
 var _continuing := false
 var _campaign_flow: Node        # lane CAMP-1: scripts/campaign_flow.gd
+var _icons_drawn := true        # mapworkshop (openbfme-cinematics.patch): OPTIONS_SET_DRAWICON_UI_MODE
 var _campaign_complete := false
 var _cli_campaign := ""
 var _cli_mission := 0
@@ -1420,6 +1421,7 @@ func _process(delta: float) -> void:
 		_restore_switched_profile() # lane UBERJOIN-1
 		_online_count_tick()
 	elif _state == State.PLAYING:
+		_hold_control_bar() # mapworkshop (openbfme-cinematics.patch)
 		if _online_note != null:
 			_online_note.visible = false
 		if _stats != null:
@@ -2044,7 +2046,7 @@ func _set_control_bar_hidden(hidden: bool) -> void:
 		# the HUD movie is the shell's only game screen (_enter_game); a menu pushed over it (the quit menu) stays as it is
 		_shell.set_level_visible(_palantir_level(), not hidden)
 	if _hud != null:
-		_hud.visible = not hidden
+		_hud.visible = not hidden and _icons_drawn # mapworkshop (openbfme-cinematics.patch): OPTIONS_SET_DRAWICON_UI_MODE
 	# the tests read it back from the render list a few frames later
 	for i in 3:
 		await get_tree().process_frame
@@ -2058,6 +2060,18 @@ func _script_input(enable: bool) -> void:
 	print("GAME script input %s" % ("enabled" if enable else "disabled"))
 	if _hud != null:
 		_hud.script_input(enable)
+
+
+## mapworkshop (openbfme-cinematics.patch): a hide holds while it lasts. RotWK's cinematic maps hide the UI in their first frame (HIDE_UI), before a
+## skirmish or LAN game has shown its HUD movie (Palantir.apt comes after the network start): the shell's later show is undone, the HUD node kept hidden
+func _hold_control_bar() -> void:
+	if not _control_bar_hidden:
+		return
+	var stack: PackedStringArray = _shell.shell_stack()
+	if stack.size() > 0 and stack[0] == "Palantir.apt" and control_bar_drawn():
+		_shell.set_level_visible(_palantir_level(), false)
+	if _hud != null and _hud.visible:
+		_hud.visible = false
 
 
 ## the Apt level of the HUD movie (the bottom of the shell's stack in a game)
@@ -2204,6 +2218,10 @@ func _enter_game(rep: Dictionary) -> void:
 		_caster.seek_requested.connect(_caster_seek, CONNECT_DEFERRED)
 		_caster.go_live_requested.connect(_caster_go_live, CONNECT_DEFERRED)
 		_game_nodes.append(_caster)
+	# mapworkshop (openbfme-cinematics.patch): a skirmish or LAN game presents its map's script requests (the camera, the letterbox, HIDE_UI, the
+	# camera animations) as a campaign mission does (scripts/campaign_flow.gd enter_mission); the HUD's camera rules outside them
+	if _campaign_flow == null or not _campaign_flow.active:
+		_start_script_view(rep)
 
 
 var _caster_seeking := false
@@ -2341,6 +2359,26 @@ func _caster_seek(target: int, go_live: bool = false) -> void:
 		"error": error, "status": _world.caster_transport_status()}
 	print("CASTER SEEK ", JSON.stringify(receipt))
 	caster_seek_finished.emit(receipt)
+
+
+## mapworkshop (openbfme-cinematics.patch): scripts/campaign_cine.gd in HUD mode over a skirmish or LAN game
+func _start_script_view(rep: Dictionary) -> void:
+	var cine: Node = load("res://scripts/campaign_cine.gd").new()
+	cine.hud_mode = true
+	cine.dev_overlay = _dev_overlay
+	cine.control_bar_hook = Callable(self, "_set_control_bar_hidden")
+	cine.icons_hook = Callable(self, "_set_icons_drawn")
+	add_child(cine)
+	_game_nodes.append(cine)
+	cine.setup(_world, _camera, rep.start.camera_start, cine, null)
+
+
+## mapworkshop (openbfme-cinematics.patch): OPTIONS_SET_DRAWICON_UI_MODE. The health bars and the other drawable icons are the HUD node's drawing
+## (InGameHudNode's icon canvas item), so they go with it, as HIDE_UI's does; INFERENCE: retail's mode leaves the Palantir alone, and here so does this
+func _set_icons_drawn(on: bool) -> void:
+	_icons_drawn = on
+	if _hud != null:
+		_hud.visible = on and not _control_bar_hidden
 
 
 ## HUD-1's install point: the live game exists and Palantir.apt is pushed (the factory table makes it an AptPalantir). The HUD node takes the GameWorld, the camera, the
