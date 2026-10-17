@@ -616,42 +616,44 @@ double PartitionManager::distance(DistanceCalculationType type, const Coord3D &c
 // Not retail (performance): a bound in binary64 (SSE, deterministic) of the distance() value. The exact value carries at most a few 2^-24 relative roundings
 // (the PC24 differences, squares, sums, the float store of type 2, the PC24 root and radius subtraction), so a candidate whose bound exceeds radiusSqr by the
 // relative margin 1e-5 (and, for the bounding types, after an absolute margin of 1e-5 of the magnitudes involved) is rejected by the exact test as well. A
-// NaN compares false and goes to the exact test; so does every candidate near the boundary.
-bool PartitionManager::surelyBeyond(DistanceCalculationType type, const Coord3D &c, const Entry &e, double radiusSqr) const
+// NaN compares false and goes to the exact test; so does every candidate near the boundary. lane UBER-2A: plain binary64 operators (the build has
+// -ffp-contract=off and SSE2) instead of the out-of-line SimMath::addD / subD / mulD calls, so the test inlines into the walks; the bound never decides
+// anything itself, it only skips an exact test that would reject (a conservative bound whatever its last bit)
+inline bool PartitionManager::surelyBeyond(DistanceCalculationType type, const Coord3D &c, const Entry &e, double radiusSqr) const
 {
 	const Coord3D *p = e.object->getPosition();
-	const double limit = SimMath::mulD(radiusSqr, 1.00001);
-	const double dx = SimMath::subD((double)p->x, (double)c.x);
-	const double dy = SimMath::subD((double)p->y, (double)c.y);
-	const double s2 = SimMath::addD(SimMath::mulD(dx, dx), SimMath::mulD(dy, dy));
-	auto absD = [](double v) { return v < 0.0 ? SimMath::subD(0.0, v) : v; };
+	const double limit = radiusSqr * 1.00001;
+	const double dx = (double)p->x - (double)c.x;
+	const double dy = (double)p->y - (double)c.y;
+	const double s2 = dx * dx + dy * dy;
+	auto absD = [](double v) { return v < 0.0 ? 0.0 - v : v; };
 	switch (type)
 	{
 		case FROM_CENTER_2D:
 			return s2 > limit;
 		case FROM_CENTER_3D:
 		{
-			const double dz = SimMath::subD((double)p->z, (double)c.z);
-			return SimMath::addD(s2, SimMath::mulD(dz, dz)) > limit;
+			const double dz = (double)p->z - (double)c.z;
+			return s2 + dz * dz > limit;
 		}
 		case FROM_BOUNDINGSPHERE_2D:
 		{
 			const double r = (double)entryGeometry(e).circle;
 			const double q = SimMath::sqrtd(s2);
-			const double err = SimMath::addD(SimMath::mulD(SimMath::addD(q, absD(r)), 1.0e-5), 1.0e-20);
-			const double lo = SimMath::subD(SimMath::subD(q, r), err);
-			return lo > 0.0 && SimMath::mulD(lo, lo) > limit;
+			const double err = (q + absD(r)) * 1.0e-5 + 1.0e-20;
+			const double lo = (q - r) - err;
+			return lo > 0.0 && lo * lo > limit;
 		}
 		case FROM_BOUNDINGSPHERE_3D:
 		{
 			const Geometry &g = entryGeometry(e);
-			const double dz0 = SimMath::subD((double)p->z, (double)c.z);
-			const double dz = SimMath::addD(dz0, (double)g.centerZ);
-			const double q = SimMath::sqrtd(SimMath::addD(s2, SimMath::mulD(dz, dz)));
-			const double mag = SimMath::addD(SimMath::addD(q, absD((double)g.sphere)), SimMath::addD(absD((double)g.centerZ), absD(dz0)));
-			const double err = SimMath::addD(SimMath::mulD(mag, 1.0e-5), 1.0e-20);
-			const double lo = SimMath::subD(SimMath::subD(q, (double)g.sphere), err);
-			return lo > 0.0 && SimMath::mulD(lo, lo) > limit;
+			const double dz0 = (double)p->z - (double)c.z;
+			const double dz = dz0 + (double)g.centerZ;
+			const double q = SimMath::sqrtd(s2 + dz * dz);
+			const double mag = (q + absD((double)g.sphere)) + (absD((double)g.centerZ) + absD(dz0));
+			const double err = mag * 1.0e-5 + 1.0e-20;
+			const double lo = (q - (double)g.sphere) - err;
+			return lo > 0.0 && lo * lo > limit;
 		}
 		default:
 			return false;
@@ -1045,16 +1047,18 @@ void PartitionManager::sortHits(std::vector<PartitionHit> &hits, IterOrderType o
 
 // ---- RW 0xA3BDB0: the closest object -------------------------------------------------------------------------------------------------------------------------
 
-namespace
-{
 // a node of the search (24 bytes in RW: key, node, child node count, x, y, size)
-struct SearchNode
+struct PartitionManager::SearchNode
 {
 	std::int32_t key = 0;
 	const void *node = nullptr;
 	std::uint32_t childNodes = 0;
 	std::int32_t x = 0, y = 0, size = 0;
 };
+
+namespace
+{
+using SearchNode = PartitionManager::SearchNode;
 
 // RW 0xA3B0A0 __push_heap (a max-heap on the key: `parent.key < value.key` moves the parent down)
 void searchPushHeap(SearchNode *first, int hole, int top, SearchNode value)
@@ -1123,7 +1127,23 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
 		type = FROM_CENTER_2D;
 	}
 	std::uint32_t layers = layerMask(filters);
+	// lane UBER-2A (performance): the heap's storage is kept between calls (no allocation per scan); a nested query (a filter that scans) finds it taken and
+	// makes its own
 	std::vector<SearchNode> heap;
+	heap.swap(m_searchHeap);
+	heap.clear();
+	struct GiveBack
+	{
+		std::vector<SearchNode> &heap, &keep;
+		~GiveBack()
+		{
+			if (keep.capacity() < heap.capacity())
+			{
+				heap.clear();
+				keep.swap(heap);
+			}
+		}
+	} giveBack{ heap, m_searchHeap };
 	// RW 0xA3BE70: one root per walked layer, appended (all keys 0)
 	for (int i = 0; i < kLayerCount; ++i)
 	{
@@ -1178,6 +1198,10 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
 		const Node *node = static_cast<const Node *>(cur.node);
 		for (const Entry *e = node->head; e; e = e->nodeNext)
 		{
+			if (m_preReject && surelyBeyond(type, center, *e, (double)best))
+			{
+				continue; // lane UBER-2A (performance): the exact test below would reject it (d > best), the same decision
+			}
 			const double d = distance(type, center, *e, 0.0f);
 			const float cand = SimMath::fstpDword(d);
 			if (d > (double)best)
