@@ -102,6 +102,7 @@ public:
 	int aiPriority() const override;
 	bool hasLocomotor() const override;
 	float secondsToReach(float x, float y) const override;
+	bool reachInputs(float &x, float &y, float &speed) const override;
 	bool isStationary() const override;
 	bool footprintSkippedByStatus() const override;
 	bool ignoresAsTarget(const PathfindObject &other) const override;

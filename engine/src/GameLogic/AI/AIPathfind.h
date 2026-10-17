@@ -478,13 +478,18 @@ class PathfindOpenHeap
 public:
 	bool empty() const { return m_v.empty(); }
 	size_t size() const { return m_v.size(); }
-	void clear() { m_v.clear(); }
+	void clear()
+	{
+		m_v.clear();
+		m_k.clear();
+	}
 	void push(PathfindCell *c);
 	PathfindCell *pop();
 	const std::vector<PathfindCell *> &items() const { return m_v; }
 
 private:
 	std::vector<PathfindCell *> m_v;
+	std::vector<std::uint16_t> m_k; // lane PATHPERF-2: m_v[i]'s total cost (see push)
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -817,6 +822,22 @@ public:
 	// lane PATHPERF-1 (tests): false switches the search memo (occupantFacts) and the unit index (findUnit) off, every answer then asked afresh / looked up in
 	// the map; test_pathperf1_hier.cpp compares the searches both ways. Not part of the state (it changes no result)
 	void setSearchShortcuts(bool on) { m_searchShortcuts = on; }
+	// lane PATHPERF-2: while a scope lives (Path::optimize), isLinePassable remembers each line cell's verdict: whether the cell, entered from a given
+	// neighbour (or as the line's first cell), blocks the line. Optimize's greedy scan walks the lines from one anchor to ever farther nodes, which cross
+	// mostly the same cells in the same direction, and nothing the verdict reads changes inside it. Only isLinePassable calls with the scope's first
+	// (object, surfaces, blocked, allowPinched, layer) use it; with the shortcuts off it is not used
+	class LineMemoScope
+	{
+	public:
+		explicit LineMemoScope(Pathfinder &pf);
+		~LineMemoScope();
+		LineMemoScope(const LineMemoScope &) = delete;
+		LineMemoScope &operator=(const LineMemoScope &) = delete;
+
+	private:
+		Pathfinder &m_pf;
+		bool m_outer;
+	};
 private:
 	enum { kUnitIndexMax = 1 << 20 };
 	void releaseSlot(PathfindObjectID id, Slot &slot);
@@ -846,9 +867,17 @@ private:
 	// lane PATHPERF-1: what checkForMovement and occupantCost ask of an occupant `id` and of the searching unit `obj` (only side-effect-free getters, all
 	// asked at once). While internalFindPath runs for `obj` nothing they read can change, so the answers are kept per search (generation counted) and an
 	// occupant met in many cells is resolved once; elsewhere they are asked afresh. Null when the occupant's object is gone
+	// lane PATHPERF-2: a unit's secondsToReach inputs (PathfindObject::reachInputs), asked once per search: state 0 not asked yet, 1 asked, 2 not provided
+	struct ReachMemo
+	{
+		std::uint8_t state = 0;
+		float x = 0.0f, y = 0.0f, speed = 0.0f;
+	};
+	float reachSeconds(const PathfindObject &o, ReachMemo &memo, float x, float y) const;
 	struct OccupantFacts
 	{
 		unsigned gen = 0;
+		mutable ReachMemo reach; // lane PATHPERF-2
 		const PathfindObject *o = nullptr;
 		PathfindRelationship rel = PATHFIND_ENEMIES; // obj's relationship to o
 		bool parked = false, hasAI = false, hasLocomotor = false, infantry = false, largeRect = false, throughEachOther = false;
@@ -906,9 +935,27 @@ private:
 	std::vector<OccupantFacts> m_memo;
 	OccupantFacts m_memoScratch;
 	SearcherFacts m_memoSelf;
+	ReachMemo m_memoSelfReach; // lane PATHPERF-2: m_memoObj's secondsToReach inputs
 	const PathfindObject *m_memoObj = nullptr;
 	unsigned m_memoGen = 0;
 	bool m_memoActive = false;
 	bool m_searchShortcuts = true;
+	// lane PATHPERF-2: the line memo (LineMemoScope): an open-addressed table of (cell index * 10 + entry code + 1) -> blocked, entries valid in generation
+	// m_lineMemoGen; the parameters are bound by the scope's first isLinePassable call
+	struct LineMemoEntry
+	{
+		std::uint32_t key = 0, gen = 0;
+		bool blocked = false;
+	};
+	bool lineMemoFind(std::uint32_t key, bool &blocked) const;
+	void lineMemoStore(std::uint32_t key, bool blocked);
+	std::vector<LineMemoEntry> m_lineMemo;
+	size_t m_lineMemoCount = 0;
+	std::uint32_t m_lineMemoGen = 0;
+	bool m_lineMemoActive = false, m_lineMemoBound = false;
+	const PathfindObject *m_lineMemoObj = nullptr;
+	unsigned m_lineMemoSurfaces = 0;
+	bool m_lineMemoBlockedArg = false, m_lineMemoPinchedArg = false;
+	PathfindLayerEnum m_lineMemoLayer = LAYER_GROUND;
 	std::vector<std::string> m_stops;
 };

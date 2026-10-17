@@ -170,6 +170,10 @@ public:
 	// RW 0x6ED21E: the unit has a locomotor and the time (seconds) it needs to get to (x, y): hypot / speed
 	virtual bool hasLocomotor() const { return false; }
 	virtual float secondsToReach(float x, float y) const { (void)x; (void)y; return 0.0f; }
+	// lane PATHPERF-2: the two inputs of secondsToReach, so the search can ask them once per unit: `x`, `y` the position, `speed` the speed (0: secondsToReach
+	// answers 0). secondsToReach(qx, qy) must equal speed > 0 ? divf32(length2d(subf32(qx, x), subf32(qy, y)), speed) : 0 for every point. false: not
+	// provided, the search asks secondsToReach itself
+	virtual bool reachInputs(float &x, float &y, float &speed) const { (void)x; (void)y; (void)speed; return false; }
 	// the object stands still (AI vtable +0x228 false): only such units hold a position slot
 	virtual bool isStationary() const { return true; }
 	// object status bits the footprint code reads (RW status index 0x58 and 0x4D; names INFERRED: S-164)

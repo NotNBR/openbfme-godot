@@ -595,6 +595,17 @@ float ObjectPathfindAdapter::secondsToReach(float x, float y) const
 	return speed > 0.0f ? SimMath::divf32(dist, speed) : 0.0f;
 }
 
+// lane PATHPERF-2: secondsToReach's position and speed (speed 0 without an AI or a locomotor: secondsToReach answers 0 then)
+bool ObjectPathfindAdapter::reachInputs(float &x, float &y, float &speed) const
+{
+	const Coord3D &p = *m_object->getPosition();
+	x = p.x;
+	y = p.y;
+	AIUpdateInterface *a = ai();
+	speed = (a && a->curLocomotor()) ? a->curLocomotorSpeed() : 0.0f;
+	return true;
+}
+
 // RW 0x66288A (AI vtable +0x228): false (stationary) unless the unit follows a path with a special node
 bool ObjectPathfindAdapter::isStationary() const
 {

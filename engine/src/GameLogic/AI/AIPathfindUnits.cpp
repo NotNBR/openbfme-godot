@@ -293,6 +293,7 @@ const Pathfinder::OccupantFacts *Pathfinder::occupantFacts(const PathfindObject 
 		}
 	}
 	f->gen = m_memoGen;
+	f->reach = ReachMemo();
 	f->o = m_world ? m_world->findObjectByID(id) : nullptr;
 	if (!f->o)
 	{
@@ -309,6 +310,27 @@ const Pathfinder::OccupantFacts *Pathfinder::occupantFacts(const PathfindObject 
 	f->aiPriority = o.aiPriority();
 	f->container = o.getContainer();
 	return f;
+}
+
+// lane PATHPERF-2: secondsToReach from the memo's inputs. The speed is the costly part (Locomotor::getMaxSpeedForCondition reads the damage state, the
+// charge status and the crew), and nothing it reads changes during a search; the arithmetic is secondsToReach's own. With the shortcuts off every
+// answer is asked afresh (test_pathperf1_bench.cpp compares both ways)
+float Pathfinder::reachSeconds(const PathfindObject &o, ReachMemo &memo, float x, float y) const
+{
+	if (!m_searchShortcuts)
+	{
+		return o.secondsToReach(x, y);
+	}
+	if (memo.state == 0)
+	{
+		memo.state = o.reachInputs(memo.x, memo.y, memo.speed) ? 1 : 2;
+	}
+	if (memo.state == 2)
+	{
+		return o.secondsToReach(x, y);
+	}
+	const float dist = SimMath::length2d(SimMath::subf32(x, memo.x), SimMath::subf32(y, memo.y));
+	return memo.speed > 0.0f ? SimMath::divf32(dist, memo.speed) : 0.0f;
 }
 
 // ---------------------------------------------------------------------------------------------------------

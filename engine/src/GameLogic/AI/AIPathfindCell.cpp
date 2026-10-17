@@ -475,22 +475,28 @@ unsigned PathfindCell::costSoFar(const PathfindCell *parent) const
 // ---------------------------------------------------------------------------------------------------------
 // PathfindOpenHeap (RW 0x6ECF1D push, 0x6ECF65 pop; see AIPathfind.h)
 // ---------------------------------------------------------------------------------------------------------
+// lane PATHPERF-2: the totals live beside the cells (m_k, parallel to m_v), so a comparison reads one dense array instead of cell -> info -> total.
+// A cell's total is set before its push and never changed while it is open (every push site skips open and closed cells), so the copy is its total.
 void PathfindOpenHeap::push(PathfindCell *c)
 {
 	c->info()->m_open = 1;
+	const std::uint16_t key = (std::uint16_t)c->getTotalCost();
 	m_v.push_back(c);
+	m_k.push_back(key);
 	size_t i = m_v.size() - 1;
 	while (i > 0)
 	{
 		const size_t p = (i - 1) / 2;
-		if (!(m_v[p]->getTotalCost() > c->getTotalCost()))
+		if (!(m_k[p] > key))
 		{
 			break;
 		}
 		m_v[i] = m_v[p];
+		m_k[i] = m_k[p];
 		i = p;
 	}
 	m_v[i] = c;
+	m_k[i] = key;
 }
 
 PathfindCell *PathfindOpenHeap::pop()
@@ -499,40 +505,47 @@ PathfindCell *PathfindOpenHeap::pop()
 	top->info()->m_open = 0;
 	const size_t n = m_v.size();
 	PathfindCell *val = m_v[n - 1];
+	const std::uint16_t valKey = m_k[n - 1];
 	m_v[n - 1] = m_v[0];
+	m_k[n - 1] = m_k[0];
 	const size_t len = n - 1; // the heap without the moved root
 	size_t h = 0;
 	size_t ch = 2 * h + 2;
 	while (ch < len)
 	{
-		if (m_v[ch]->getTotalCost() > m_v[ch - 1]->getTotalCost())
+		if (m_k[ch] > m_k[ch - 1])
 		{
 			ch--;
 		}
 		m_v[h] = m_v[ch];
+		m_k[h] = m_k[ch];
 		h = ch;
 		ch = 2 * h + 2;
 	}
 	if (ch == len)
 	{
 		m_v[h] = m_v[len - 1];
+		m_k[h] = m_k[len - 1];
 		h = len - 1;
 	}
 	// sift the saved element up from the hole with the push rule
 	while (h > 0)
 	{
 		const size_t p = (h - 1) / 2;
-		if (!(m_v[p]->getTotalCost() > val->getTotalCost()))
+		if (!(m_k[p] > valKey))
 		{
 			break;
 		}
 		m_v[h] = m_v[p];
+		m_k[h] = m_k[p];
 		h = p;
 	}
 	if (len > 0)
 	{
 		m_v[h] = val;
+		m_k[h] = valKey;
 	}
 	m_v.pop_back();
+	m_k.pop_back();
 	return top;
 }
