@@ -1053,6 +1053,8 @@ void AIWorld::processCollisions()
 	// candidates in the same sorted order and the pairs are handled exactly as before
 	std::vector<CollisionUnit> &units = m_collisionUnits;
 	units.clear();
+	const bool uberFacts = m_logic.uber();
+	const ThingTemplate *crushWarm = nullptr;
 	for (const auto &kv : m_ais) // ordered by id
 	{
 		AIUpdateInterface *ai = kv.second;
@@ -1061,6 +1063,17 @@ void AIWorld::processCollisions()
 			continue; // lane GARRISON-1: a contain's rider out of the world (RW 0x68C18F) is not in the partition (ZH PartitionManager::processCollisions)
 		}
 		units.push_back(CollisionUnit{ kv.first, ai, 0.0f, 0.0f, 0.0f, 0, &ai->adapter().getGeometry() });
+		if (uberFacts)
+		{
+			// lane UBER-3W: the crush info of every unit's template is in GameLogic's cache before the facts are taken on the job pool (below); a horde's
+			// soldiers have consecutive ids and one template, so this is one lookup per horde
+			const ThingTemplate *tt = static_cast<const ThingTemplate *>(ai->getObject()->getTemplate())->getFinalOverride();
+			if (tt != crushWarm)
+			{
+				m_logic.crushInfo(tt);
+				crushWarm = tt;
+			}
+		}
 	}
 	if (units.size() < 2)
 	{
@@ -1130,21 +1143,29 @@ void AIWorld::processCollisions()
 		for (size_t i = first; i < last; ++i)
 		{
 			const CollisionUnit &a = units[i];
-			const int cx = a.bucket % w, cy = a.bucket / w;
-			// a partner overlaps when its centre is within a.r + b.r <= a.r + maxRadius: the buckets that reach that far, however large the footprints are
-			const int reach = SimMath::truncToInt32(SimMath::divf32(SimMath::addf32(a.r, maxRadius), cell)) + 1;
+			// a partner overlaps when its centre is within a.r + b.r <= a.r + maxRadius on each axis (the float overlap test below cannot pass with |dx| or |dy|
+			// at or beyond a.r + b.r). lane UBER-3W: the buckets that box reaches (one unit wider against rounding), not a whole bucket ring each way around a's
+			// bucket: a soldier's box touches 1 to 4 buckets instead of 9; the overlapping set is the same, so the pairs and their order are too
+			const float reachR = SimMath::addf32(SimMath::addf32(a.r, maxRadius), 1.0f);
+			const auto bucketOf = [&](float v, float lo, int count) {
+				const int c = SimMath::truncToInt32(SimMath::divf32(SimMath::subf32(v, lo), cell)); // truncation: a negative offset above -cell gives 0, clamped anyway
+				return c < 0 ? 0 : (c > count - 1 ? count - 1 : c);
+			};
+			const int x0 = bucketOf(SimMath::subf32(a.x, reachR), minX, w), x1 = bucketOf(SimMath::addf32(a.x, reachR), minX, w);
+			const int y0 = bucketOf(SimMath::subf32(a.y, reachR), minY, h), y1 = bucketOf(SimMath::addf32(a.y, reachR), minY, h);
 			candidates.clear();
-			for (int ny = std::max(0, cy - reach); ny <= std::min(h - 1, cy + reach); ++ny)
+			for (int ny = y0; ny <= y1; ++ny)
 			{
-				for (int nx = std::max(0, cx - reach); nx <= std::min(w - 1, cx + reach); ++nx)
+				for (int nx = x0; nx <= x1; ++nx)
 				{
 					const size_t b = (size_t)ny * (size_t)w + (size_t)nx;
-					for (int k = start[b]; k < start[b + 1]; ++k)
+					// a bucket lists its units in index order: the partners above i are its tail (lane UBER-3W: walked from the end, the candidates are sorted below)
+					for (int k = start[b + 1] - 1; k >= start[b]; --k)
 					{
 						const int j = items[(size_t)k];
 						if ((size_t)j <= i) // the pair is handled from the lower index
 						{
-							continue;
+							break;
 						}
 						// lane UBER-2C: the overlap test before the sort (it judges each partner on its own, so the overlapping set and its id order are
 						// the same): a melee's neighbour buckets hold dozens of units a unit does not touch, and sorting them all was 9% of a 30,000-troop
@@ -1166,26 +1187,38 @@ void AIWorld::processCollisions()
 			}
 		}
 	});
-	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass (taken at the unit's first pair, on this thread:
-	// ObjectCollide::pairFacts reads lazily filled caches). A pair whose handlers would all return at those tests is counted and skipped: AIMover::onCollide
-	// returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert says. Uber rule change (snapshot
-	// semantics): a unit's facts are those of its first pair, so a later pair after a crush or a stun in the same pass reads them from before it
+	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass. A pair whose handlers would all return at those tests is
+	// counted and skipped: AIMover::onCollide returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert
+	// says. lane UBER-3W: the facts of every unit with a pair are taken before the first pair meets, on the logic job pool (each job writes only its own
+	// units' facts and their objects' lazily found physics module; the one shared lazy cache, GameLogic::crushInfo, was filled above on this thread). They
+	// were taken on this thread at the unit's first pair, 5% of a one-thread 30,000-troop clash frame. Uber rule change (snapshot semantics): a unit's facts
+	// are those from before the pass's first pair (UBER-2B: before its own first pair), so a pair after a crush or a stun in the same pass reads them from before it
 	const bool filter = m_logic.uber();
 	if (filter)
 	{
 		m_collisionFacts.resize(units.size());
 		m_collisionFactState.assign(units.size(), 0);
-	}
-	const auto factsOf = [&](int i) -> std::uint8_t {
-		std::uint8_t &state = m_collisionFactState[(size_t)i];
-		if (state == 0)
+		for (size_t chunk = 0; chunk < chunkCount; ++chunk)
 		{
-			AIUpdateInterface *ai = units[(size_t)i].ai;
-			m_collisionFacts[(size_t)i] = ObjectCollide::pairFacts(*ai->getObject());
-			state = ai->isContained() ? 2 : 1; // 2: AIUpdateInterface::isContained
+			for (const std::pair<int, int> &pair : m_collisionChunks[chunk].pairs)
+			{
+				m_collisionFactState[(size_t)pair.first] = 3; // 3: wanted
+				m_collisionFactState[(size_t)pair.second] = 3;
+			}
 		}
-		return state;
-	};
+		jobs.parallelFor(units.size(), kUnitsPerJob, [this, &units](size_t, size_t begin, size_t end) {
+			for (size_t i = begin; i < end; ++i)
+			{
+				if (m_collisionFactState[i] == 3)
+				{
+					AIUpdateInterface *ai = units[i].ai;
+					m_collisionFacts[i] = ObjectCollide::pairFacts(*ai->getObject());
+					m_collisionFactState[i] = ai->isContained() ? 2 : 1; // 2: AIUpdateInterface::isContained
+				}
+			}
+		});
+	}
+	const auto factsOf = [&](int i) -> std::uint8_t { return m_collisionFactState[(size_t)i]; };
 	bool alliedPair = false;
 	for (size_t chunk = 0; chunk < chunkCount; ++chunk)
 	{

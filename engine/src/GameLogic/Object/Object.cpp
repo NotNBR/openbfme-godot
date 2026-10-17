@@ -270,6 +270,8 @@ void Object::rebuildCollideModules()
 			m_collideModulesKnown = m_collideModulesKnown && c->pairFactsKnown();
 		}
 	}
+	m_attributePool = findModule("AttributeModifierPoolUpdate"); // lane UBER-3W: attributeModifierPoolModule's answer from here on
+	m_moduleCachesBuilt = true;
 }
 
 void Object::buildModules()
@@ -2010,7 +2012,7 @@ bool Object::addAttributeModifier(const std::string &listName, int duration)
 			return true;
 		}
 	}
-	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
+	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(attributeModifierPoolModule());
 	if (!pool)
 	{
 		return false;
@@ -2048,7 +2050,7 @@ void Object::removeAttributeModifier(const std::string &listName)
 			return;
 		}
 	}
-	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate")); // RW 0x68C4A6
+	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(attributeModifierPoolModule()); // RW 0x68C4A6
 	if (!pool)
 	{
 		return;
@@ -2069,7 +2071,7 @@ void Object::removeAttributeModifier(const std::string &listName)
 
 bool Object::attributeModifierSum(int type, const char *name, float &out) const
 {
-	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
+	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(attributeModifierPoolModule());
 	if (!pool)
 	{
 		return false;
@@ -2079,7 +2081,7 @@ bool Object::attributeModifierSum(int type, const char *name, float &out) const
 
 bool Object::attributeModifierProduct(int type, const char *name, bool innate, float &out) const
 {
-	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
+	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(attributeModifierPoolModule());
 	if (!pool)
 	{
 		return false;

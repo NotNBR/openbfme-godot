@@ -1226,7 +1226,22 @@ void ShroudManager::prepareRecord(Record &r, Prepared &p)
 		return;
 	}
 	// the template is read once per processing (RW reads its fields directly: always the current values)
-	p.tv = templateVision(*p.obj->getTemplate()->getFinalOverride());
+	const ThingTemplate *tt = p.obj->getTemplate()->getFinalOverride();
+	if (m_logic.uber())
+	{
+		// lane UBER-3W (Uber only): read again only when the record's object has another final template (a template's vision rows do not change in a game;
+		// each record is prepared by one job, so the record's copy is written by one thread)
+		if (r.tvTemplate != tt)
+		{
+			r.tv = templateVision(*tt);
+			r.tvTemplate = tt;
+		}
+		p.tv = r.tv;
+	}
+	else
+	{
+		p.tv = templateVision(*tt);
+	}
 	coverCells(*p.obj, p.tv, p.cells);
 	const Coord3D &pos = *p.obj->getPosition();
 	p.cx = SimMath::floorToInt(SimMath::pc24Mul(SimMath::pc24Sub(pos.x, m_loX), m_cellSizeInv));
@@ -1540,6 +1555,20 @@ float shroudClearingRange(const Object &obj, ShroudManager &sm, const ShroudMana
 float ShroudManager::visionRange(const Object &obj)
 {
 	const ThingTemplate *tt = static_cast<const ThingTemplate *>(obj.getTemplate())->getFinalOverride();
+	if (m_logic.uber())
+	{
+		// lane UBER-3W (Uber only): the record's template vision (prepareRecord's), read again only for another template (the emotion tracker asks this for
+		// every horde and frame)
+		if (Record *r = recordOf(obj))
+		{
+			if (r->tvTemplate != tt)
+			{
+				r->tv = templateVision(*tt);
+				r->tvTemplate = tt;
+			}
+			return shroudClearingRange(obj, *this, r->tv);
+		}
+	}
 	return shroudClearingRange(obj, *this, templateVision(*tt));
 }
 
