@@ -4149,6 +4149,7 @@ func _on_online_started(start_json: String) -> void:
 func _net_open() -> void:
 	var r: Dictionary
 	if _net_host > 0:
+		_sync_simulation_profile() # studio: the hosted game runs the player's simulation profile (Options.ini OpenBFMEUberPerformance)
 		var slots: Array = []
 		var i := 0
 		for spec in _net_slots.split(";"):
@@ -4160,6 +4161,8 @@ func _net_open() -> void:
 		while slots.size() < 8:
 			slots.append({"state": 1, "name": "", "faction": "", "color": -1, "start_pos": -1, "team": -1, "player_template": -1}) # SLOT_CLOSED
 		var message := {"mode": "skirmish", "map": _map_key, "map_crc": 0, "map_size": 0, "seed": _seed if _seed != 0 else Time.get_ticks_msec(), "starting_cash": 1500, "slots": slots}
+		if _world.simulation_profile() == "uber":
+			message["simulation_profile"] = 1 # studio: the lobby's game carries it (absent: Faithful), as the lobby's identity does
 		r = _world.net_host(_net_host, message, _net_run_ahead, _net_crc)
 	else:
 		r = _world.net_join(_net_join, _net_name)

@@ -84,6 +84,8 @@ func setup(w: Node3D, cam: Camera3D, start: Vector3, ui_parent: Node, audio: Nod
 	ui.add_child(_objectives)
 	ui_parent.add_child(ui)
 	_base_far = camera.far
+	if hud_mode:
+		_sky() # mapworkshop (openbfme-cinematics.patch): a skirmish or LAN game has the sky and the haze throughout
 	_place_camera()
 
 
@@ -167,9 +169,9 @@ func _process(delta: float) -> void:
 
 ## mapworkshop (openbfme-cinematics.patch): MOVE_CAMERA_BY_ANIMATION plays the map's CameraAnimationList entry of that name: a "look" animation's
 ## camera keys and look-at keys, each through its keys by Catmull-Rom ('catm', or straight for 'line') at 30 frames a second (a RotWK capture: a
-## still 7.5 s into a 14 s orbit matched that point, mapworkshop's docs/game/scripts.md), its first key's field of view horizontal (the HUD's
-## KEEP_WIDTH). The camera holds the last pose until a script move or another animation. A "free" animation is not played: the convention of its
-## rotation is not decoded (reported).
+## still 7.5 s into a 14 s orbit matched that point, mapworkshop's docs/game/scripts.md); the camera keys' field of view (horizontal, the HUD's
+## KEEP_WIDTH) and roll (radians about the line of sight, positive banking right: the picture turns anticlockwise) the same way. The camera holds the
+## last pose until a script move or another animation. A "free" animation is not played: the convention of its rotation is not decoded (reported).
 func _play_animation(name: String) -> void:
 	var a: Dictionary = world.get_camera_animation(name)
 	if not a.get("ok", false) or a["type"] != "look" or a["keys"].is_empty() or a["look_at"].is_empty():
@@ -177,37 +179,71 @@ func _play_animation(name: String) -> void:
 		return
 	_anim = a
 	_anim_ms = 0.0
+	_sky()
+
+
+## mapworkshop (openbfme-cinematics.patch): the world's background is black, and the skybox model RotWK's cinematic maps place (CINE_skybox_*)
+## covers only part of a view: a camera high or far out looks past its rim into the black (the v2 battle film, 17 October 2026). A skirmish
+## or LAN game, and a campaign mission while it plays a camera animation, gets a procedural sky behind the world and a light haze that fades
+## the distance into that sky's horizon (INFERENCE: an approximation of RotWK's view). The ambient light stays the map's (a colour), and so do
+## reflections (none).
+func _sky() -> void:
+	var env: Environment = camera.get_world_3d().environment if camera.get_world_3d() != null else null
+	if env == null or env.background_mode == Environment.BG_SKY:
+		return
+	var horizon := Color(0.66, 0.65, 0.6)
+	var mat := ProceduralSkyMaterial.new()
+	mat.sky_top_color = Color(0.3, 0.43, 0.6)
+	mat.sky_horizon_color = horizon
+	mat.ground_horizon_color = horizon
+	mat.ground_bottom_color = Color(0.33, 0.3, 0.25)
+	var sky := Sky.new()
+	sky.sky_material = mat
+	env.sky = sky
+	env.background_mode = Environment.BG_SKY
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+	env.fog_enabled = true
+	env.fog_light_color = horizon
+	env.fog_density = 0.0000075
+	env.fog_sky_affect = 0.0
 
 
 func _place_animation() -> void:
 	var f := _anim_ms * 0.03
 	var eye := _through(_anim["keys"], f)
 	var at := _through(_anim["look_at"], f)
+	var lens := _through(_anim["keys"], f, true)
 	camera.position = Vector3(eye.x, eye.z, -eye.y)
 	if not eye.is_equal_approx(at):
 		camera.look_at(Vector3(at.x, at.z, -at.y))
-	camera.fov = rad_to_deg(float(_anim["keys"][0].fov))
+	if lens.y != 0.0:
+		camera.rotate_object_local(Vector3(0, 0, 1), -lens.y)
+	camera.fov = clampf(rad_to_deg(lens.x), 1.0, 179.0)
 	target = at
 
 
-## the point of the keys (SAGE) at frame f
-func _through(keys: Array, f: float) -> Vector3:
+## the point of the keys (SAGE) at frame f; with `lens`, their field of view and roll (x, y) instead
+func _through(keys: Array, f: float, lens := false) -> Vector3:
 	var n := keys.size()
 	if n == 1 or f <= float(keys[0].frame):
-		return keys[0].pos
+		return _key(keys[0], lens)
 	if f >= float(keys[n - 1].frame):
-		return keys[n - 1].pos
+		return _key(keys[n - 1], lens)
 	var i := 0
 	while i < n - 2 and f > float(keys[i + 1].frame):
 		i += 1
-	var p1: Vector3 = keys[i].pos
-	var p2: Vector3 = keys[i + 1].pos
+	var p1 := _key(keys[i], lens)
+	var p2 := _key(keys[i + 1], lens)
 	var t := (f - float(keys[i].frame)) / maxf(float(keys[i + 1].frame - keys[i].frame), 1.0)
 	if String(keys[i].interp) == "line":
 		return p1.lerp(p2, t)
-	var p0: Vector3 = keys[maxi(i - 1, 0)].pos
-	var p3: Vector3 = keys[mini(i + 2, n - 1)].pos
+	var p0 := _key(keys[maxi(i - 1, 0)], lens)
+	var p3 := _key(keys[mini(i + 2, n - 1)], lens)
 	return 0.5 * ((2.0 * p1) + (p2 - p0) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t)
+
+
+func _key(key: Dictionary, lens: bool) -> Vector3:
+	return Vector3(float(key.fov), float(key.roll), 0.0) if lens else key.pos
 
 
 func _place_camera() -> void:
