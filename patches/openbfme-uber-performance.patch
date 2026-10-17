@@ -1,54 +1,8 @@
-OpenBFME Uber performance patch (2026-10-17)
-============================================
-
-Base: upstream Open-BFME/openbfme-godot 9451fc8 with the map workshop's four
-engine patches (this fork's commits up to 31a4a2a). Apply from the
-repository root:  git apply patches/openbfme-uber-performance.patch
-
-What it does. Faithful results are unchanged unless marked "Uber"; Uber stays
-deterministic across thread counts and machines (docs/UBER.md):
-
-Pathfinding (lanes PATHPERF-2, PATHPERF-4)
-  - the search asks a unit's speed once per search, remembers line-of-sight
-    cells while smoothing a path, and keeps the open list's costs beside the
-    cells (same paths, about 1.8x faster)
-  - the cell-info pool grows past 60,000 records instead of failing
-  - Uber: the path queue holds 16,384 requests; a mass order (120+ waiting)
-    gets 4x the cell budget until the queue is down to 40
-Spatial scans (lane UBER-2A)
-  - the nearest-object search skips the exact distance test when a cheap
-    bound already rules a unit out; the search heap is reused
-  - Uber: scans skip friendly partition layers; the target grid is built
-    once per frame
-Per-unit work (lane UBER-2B)
-  - a geometry keeps its bounding radii; an object keeps its collide
-    modules; the physics lookup is reused; the member pass computes its
-    angle's cos / sin once
-  - Uber: collision pairs whose handlers would all return at once are
-    skipped; a melee tick builds its reach candidates once per horde
-Recording and collisions (lane UBER-2C)
-  - Uber: a recorded game keeps the state hash of every 5th frame (replays
-    compare every recorded hash; saves record their frame's hash)
-  - the collision pass tests overlap before sorting the candidates
-
-Measured (uber bench, map mp fall back 8p, logic wall time per frame, all
-logic threads, owner's PC):
-                       native     patched
-  Uber, 10,000 troops  168 ms      67 ms   (2.5x)
-  Uber, 20,000 troops  246 ms     134 ms   (1.8x)
-  Uber, 30,000 troops  389 ms     155 ms   (2.5x)
-  Faithful, 10,000     187 ms     111 ms   (1.7x)
-
-Tests: uber1 (pins regenerated for the intended Uber changes; same hashes on
-1, 4 and 16 threads), pathperf1, pathfind, perf1, perf2, partition, emotion,
-target, horde2, phys1, save2, collision tests pass. Commits: 7a40cf7 8ddffa0
-233afac bcbc8e4 aba22b8 26ba0c9 77598c2 (fork main).
-
 diff --git a/docs/UBER.md b/docs/UBER.md
-index 0edd97f..d1db2b6 100644
+index 0edd97f..f7902f8 100644
 --- a/docs/UBER.md
 +++ b/docs/UBER.md
-@@ -400,6 +400,53 @@ That's a research item, not a plan.
+@@ -400,6 +400,88 @@ That's a research item, not a plan.
    would collide. The hash was the biggest change that is safe on its own: a
    pure function of the state, on every frame of every recorded game.
  
@@ -98,6 +52,41 @@ index 0edd97f..d1db2b6 100644
 +  wall about 173 -> 137 ms, phases 3 / 4 about 33 / 30 -> 23 / 19 ms; the
 +  taunt scan went from 10% to 1.5% of the logic frame. The Uber bench hash
 +  chain did not change either (no tie or owner change met in that battle).
++
++### UBER-3P: the battle's path searches that cannot succeed (done)
++
++In the 30,000-troop clash the path queue runs at its budget in every one of a
++logic frame's six calls, and each call is mostly one search: a repath toward
++a contact point in the press whose goal cannot be reached (an approximate
++search: the goal is in another zone or not a valid movement position; or its
++goal cell was rejected). Such a search ends with the path to its closest cell
++(or none), but kept expanding up to the slack or `MaxCellsFindPathLimit`: the
++calls averaged 23,000 cells against a budget of 4,000. Of 2,094 searches in
++that battle, a failed search's closest cell was final after about 10 cells
++and never replaced 250 cells later; 1,182 of the 1,644 unreachable searches
++found no closest cell at all and gave no path, after 72% of all their cells.
++
++- **Uber rule change:** `internalFindPath` ends an unreachable search once its
++  answer has held for 256 cells (the closest cell, or with none yet the
++  candidate key that would test one) and gives that answer. A tunnelling
++  search's pause starts when it leaves its obstacle. What a player can
++  notice: nothing; the paths are served sooner (in that battle 45 of the
++  unreachable searches tested a candidate after such a pause, the only ones
++  whose answer can differ). The Uber pin vector was regenerated.
++- Result (`uber bench` 30k, Uber, 30 frames, back to back, two rounds): logic
++  wall 203 / 221 -> 175 / 181 ms (default threads), 240 -> 215 ms (one
++  thread); the 15 clash frames 220 / 242 -> 179 / 184 ms, p99 316 / 363 ->
++  240 / 261 ms. The queue's cells per call 23,000 -> 8,600, the horde repaths
++  served in the 14 clash frames 170 -> 209. The 10k battle is unchanged within
++  the noise (83-89 -> 86-94 ms default threads, 103-107 -> 106 ms one thread).
++- **Uber rule change (second step):** `findAttackPath` with no endpoint yet
++  ends once its closest cell has held for 256 examined cells and gives the
++  fallback the exhausted search gives (the path to that cell). In the clash
++  126 of 200 attack searches found no endpoint and spent 75% of their cells
++  after such a pause; no endpoint of the other 74 came after one. Result on
++  top of the first step (30k, 30 frames, a busy PC): 174 -> 161 ms default
++  threads (clash frames 182 -> 154), 254 -> 237 ms one thread; the 10k battle
++  within the noise. The Uber pin vector was regenerated again.
 +
  ### U2: parallel queries and paths, GPU animation (next)
  
@@ -316,6 +305,18 @@ index 9aed424..2965f6d 100644
  
  	// ---- protocol owner ----
  	// Every advance (also advance(0) and while the worker runs or the lockstep stalls): `pending` holds what the local player issued since the last call
+diff --git a/engine/src/GameLogic/AI/AIEmotionStates.h b/engine/src/GameLogic/AI/AIEmotionStates.h
+index 137ef6a..4af71c5 100644
+--- a/engine/src/GameLogic/AI/AIEmotionStates.h
++++ b/engine/src/GameLogic/AI/AIEmotionStates.h
+@@ -69,6 +69,7 @@ public:
+ 	void onExit(StateExitType status) override;
+ 	void crc(class StateHasher &hasher) const override;
+ 	void crcPersistent(class StateHasher &hasher) const override;
++	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
+ 	void onTemporaryStateEnded() override; // RW 0x740C97 (vtables 0xC28BE0 / 0xC28C28 slot 0x1C)
+ 
+ private:
 diff --git a/engine/src/GameLogic/AI/AIPathfind.cpp b/engine/src/GameLogic/AI/AIPathfind.cpp
 index 535afd4..01d471c 100644
 --- a/engine/src/GameLogic/AI/AIPathfind.cpp
@@ -584,6 +585,54 @@ index 5d46f0d..8e65869 100644
 +	PathfindLayerEnum m_lineMemoLayer = LAYER_GROUND;
  	std::vector<std::string> m_stops;
  };
+diff --git a/engine/src/GameLogic/AI/AIPathfindAttack.cpp b/engine/src/GameLogic/AI/AIPathfindAttack.cpp
+index a3fd2c3..cba5fbc 100644
+--- a/engine/src/GameLogic/AI/AIPathfindAttack.cpp
++++ b/engine/src/GameLogic/AI/AIPathfindAttack.cpp
+@@ -27,6 +27,13 @@
+ 
+ #include <limits>
+ 
++namespace
++{
++// lane UBER-3P (Uber profile only): a search with no endpoint ends once its closest cell held for this many examined cells (internalFindPath's
++// kUberStallCells)
++constexpr int kUberAttackStallCells = 256;
++} // namespace
++
+ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomotorInfo &loco, const Coord3D *from, const PathfindObject *victim, const Coord3D *victimPos,
+ 	float victimRadius, const PathfindAttackRange &range, bool pathThrough, bool *fallback)
+ {
+@@ -153,6 +160,7 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
+ 	int bestCount = 9999999;
+ 	int closestD2 = std::numeric_limits<int>::max();
+ 	int examined = 0;
++	int closestAt = 0; // lane UBER-3P: the examined count when `closest` last changed
+ 	Path *result = nullptr;
+ 	while (!m_open.empty())
+ 	{
+@@ -166,6 +174,7 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
+ 		{
+ 			closestD2 = d2;
+ 			closest = c;
++			closestAt = examined;
+ 		}
+ 		Coord3D centre;
+ 		adjustCoordToCell(c->getXIndex(), c->getYIndex(), center, centre, c->getLayer());
+@@ -193,6 +202,13 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
+ 				}
+ 			}
+ 		}
++		// lane UBER-3P (Uber profile only, docs/UBER.md): with no endpoint yet and the closest cell unchanged for kUberAttackStallCells examined cells,
++		// the search ends with the fallback the exhausted search gives (the path to that closest cell). In the 30,000-troop clash 126 of 200 attack
++		// searches found no endpoint and spent 75% of their cells after such a pause; no endpoint of the other 74 came after one
++		if (m_uberLimits && best == nullptr && examined - closestAt >= kUberAttackStallCells)
++		{
++			break;
++		}
+ 		if (examined < m_config.findAttackPathLimit)
+ 		{
+ 			examined += examineNeighboringCells(c, goalCell, loco, isHuman, center, radius, startNdx, obj);
 diff --git a/engine/src/GameLogic/AI/AIPathfindCell.cpp b/engine/src/GameLogic/AI/AIPathfindCell.cpp
 index 746af4e..9cd10b9 100644
 --- a/engine/src/GameLogic/AI/AIPathfindCell.cpp
@@ -802,10 +851,23 @@ index 66a231d..2a87d35 100644
  	{
  		const bool tflag = obj && obj->isKindOf(PK_MACHINE); // template KindOf bit 11 (MACHINE): RW tmpl+0x108 >> 11 & 1
 diff --git a/engine/src/GameLogic/AI/AIPathfindSearch.cpp b/engine/src/GameLogic/AI/AIPathfindSearch.cpp
-index cd0e32b..1cff369 100644
+index cd0e32b..75170f3 100644
 --- a/engine/src/GameLogic/AI/AIPathfindSearch.cpp
 +++ b/engine/src/GameLogic/AI/AIPathfindSearch.cpp
-@@ -416,9 +416,24 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
+@@ -30,6 +30,12 @@
+ #include <cstdlib>
+ #include <limits>
+ 
++namespace
++{
++// lane UBER-3P (Uber profile only): a cell search that cannot reach its goal ends once its answer held for this many cells (internalFindPath)
++constexpr int kUberStallCells = 256;
++} // namespace
++
+ namespace
+ {
+ inline int realToIntFloor(float f)
+@@ -416,9 +422,24 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
  		worldToCell(&s, &start);
  		worldToCell(&e, &end);
  	}
@@ -831,7 +893,7 @@ index cd0e32b..1cff369 100644
  		if (to->getExtraPass())
  		{
  			li.latch5D = true;
-@@ -427,47 +442,172 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
+@@ -427,47 +448,172 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
  		{
  			return true;
  		}
@@ -1028,7 +1090,7 @@ index cd0e32b..1cff369 100644
  }
  
  bool Pathfinder::isGroundLineClear(const Coord3D &a, const Coord3D &b)
-@@ -641,9 +781,9 @@ int Pathfinder::occupantCost(const PathfindObject *obj, const PathfindCell *pare
+@@ -641,9 +787,9 @@ int Pathfinder::occupantCost(const PathfindObject *obj, const PathfindCell *pare
  					const float qx = SimMath::mulf32((SimMath::addf32((float)i, 0.5f)), 10.0f), qy = SimMath::mulf32((SimMath::addf32((float)j, 0.5f)), 10.0f);
  					if (selfT < 0.0f)
  					{
@@ -1040,7 +1102,7 @@ index cd0e32b..1cff369 100644
  					if (selfT > oT)
  					{
  						add = 4;
-@@ -947,6 +1087,7 @@ struct Pathfinder::SearchMemoScope
+@@ -947,6 +1093,7 @@ struct Pathfinder::SearchMemoScope
  		{
  			pf.m_memoSelf = pf.searcherFacts(obj);
  		}
@@ -1048,6 +1110,50 @@ index cd0e32b..1cff369 100644
  	}
  	~SearchMemoScope()
  	{
+@@ -1107,6 +1254,7 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
+ 	int bestPosition = 0; // RW [ebp + 0x24]: the best corridor position so far (0 to start with: a cell off the corridor, -1, never qualifies)
+ 	int bestD2 = std::numeric_limits<int>::max();
+ 	int slack = std::numeric_limits<int>::max();
++	int closestAt = 0, candidateAt = 0; // lane UBER-3P: the cell counts when `closest`, and the candidate key, last changed
+ 	while (!m_open.empty())
+ 	{
+ 		PathfindCell *c = m_open.pop();
+@@ -1163,15 +1311,35 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
+ 			}
+ 			if (candidate)
+ 			{
++				candidateAt = cellCount;
+ 				bestClose = key;
+ 				int out = 0;
+ 				if (checkDestination(obj, c->getXIndex(), c->getYIndex(), destinationLayer, radius, centerInCell, &out, false) && out == 0 &&
+ 					validMovementPosition(mv, c))
+ 				{
+ 					closest = c;
++					closestAt = cellCount;
+ 				}
+ 			}
+ 		}
++		// lane UBER-3P (Uber profile only, docs/UBER.md): a search that cannot reach its goal (an approximate search: the goal is in another zone or
++		// not a valid movement position; or the goal cell was closed, its footprint rejected) ends here once its answer has held for kUberStallCells
++		// cells: the closest cell (or, with none yet, the candidate key that would test a new one) did not change, and the exhausted search's answer
++		// (the path to that closest cell, or none) is given. In a battle the repaths toward a contact point in the press fail this way and kept
++		// expanding up to the slack or MaxCellsFindPathLimit. Measured on the 30,000-troop clash (2,094 searches): a failed search's closest cell was
++		// final after ~10 cells and never replaced 250 cells on; 1,182 of the 1,644 unreachable searches found no closest cell at all (72% of their
++		// cells), 45 of them tested a candidate after such a pause. A tunnelling search tests no candidates: its pause starts when it leaves the obstacle
++		if (m_uberLimits && (approx || goalCell->getClosed()))
++		{
++			if (m_isTunneling)
++			{
++				candidateAt = cellCount;
++			}
++			else if (cellCount - (closest != nullptr ? closestAt : candidateAt) >= kUberStallCells)
++			{
++				break;
++			}
++		}
+ 		// TARGET RW 0x6FDB7F .. 0x6FDBD9: an approximate search skips a cell beyond the slack unless it is within 10 cells; with a corridor only after 2000 cells
+ 		if (approx && d2 > slack && (!hierarchical || cellCount > 2000) && d2 >= 100)
+ 		{
 diff --git a/engine/src/GameLogic/AI/AIPathfindUnits.cpp b/engine/src/GameLogic/AI/AIPathfindUnits.cpp
 index cc25acb..1304701 100644
 --- a/engine/src/GameLogic/AI/AIPathfindUnits.cpp
@@ -1121,8 +1227,64 @@ index cc25acb..1304701 100644
  	if (m_world && m_world->getFrame() < 25u)
  	{
  		budget *= 100;
+diff --git a/engine/src/GameLogic/AI/AIStateMachine.cpp b/engine/src/GameLogic/AI/AIStateMachine.cpp
+index 4ed02d2..6fa5bc6 100644
+--- a/engine/src/GameLogic/AI/AIStateMachine.cpp
++++ b/engine/src/GameLogic/AI/AIStateMachine.cpp
+@@ -79,6 +79,14 @@ void AIStateMachine::defineState(unsigned id, std::unique_ptr<AIState> state, un
+ 		m_defaultStateId = id;
+ 	}
+ 	m_states[id] = std::move(state);
++	m_persistentStates.clear(); // lane UBER-2C: in id order, as crc walked m_states
++	for (const auto &e : m_states)
++	{
++		if (e.second->hasPersistentCrc())
++		{
++			m_persistentStates.push_back(e.second.get());
++		}
++	}
+ }
+ 
+ AIState *AIStateMachine::findState(unsigned id) const
+@@ -772,11 +780,11 @@ void AIStateMachine::crc(StateHasher &h) const
+ 	{
+ 		m_temporaryState->crc(h);
+ 	}
+-	for (const auto &e : m_states)
++	for (const AIState *s : m_persistentStates) // lane UBER-2C: the states without kept fields hash nothing and are left out
+ 	{
+-		if (e.second.get() != m_currentState && e.second.get() != m_temporaryState)
++		if (s != m_currentState && s != m_temporaryState)
+ 		{
+-			e.second->crcPersistent(h); // lane MODULES-3 (nothing for the states without kept fields)
++			s->crcPersistent(h); // lane MODULES-3
+ 		}
+ 	}
+ }
+diff --git a/engine/src/GameLogic/AI/AIStateMachine.h b/engine/src/GameLogic/AI/AIStateMachine.h
+index 74a43be..9edfe19 100644
+--- a/engine/src/GameLogic/AI/AIStateMachine.h
++++ b/engine/src/GameLogic/AI/AIStateMachine.h
+@@ -85,6 +85,9 @@ public:
+ 	virtual void crc(class StateHasher &hasher) const { (void)hasher; }
+ 	// lane MODULES-3: the fields a state keeps between its activations (RW keeps the state objects), hashed while it is neither the current nor the temporary state
+ 	virtual void crcPersistent(class StateHasher &hasher) const { (void)hasher; }
++	// lane UBER-2C: true for a state whose crcPersistent writes anything (every override of crcPersistent answers true). The machine's hash walks only
++	// those states: walking every state of every unit's machine for the empty default was most of the Faithful state hash's own time
++	virtual bool hasPersistentCrc() const { return false; }
+ 	// lane MODULES-3 r2: RW State slot 0x1C, called on the current state when a temporary state ends by itself (RW 0x751D9A); nothing for most states, the move
+ 	// states clear their internal move's "waiting for a path" (RW 0x740C97)
+ 	virtual void onTemporaryStateEnded() {}
+@@ -193,6 +196,7 @@ private:
+ 	AIUpdateInterface *m_owner;
+ 	std::string m_name;
+ 	std::map<unsigned, std::unique_ptr<AIState>> m_states;
++	std::vector<const AIState *> m_persistentStates; // lane UBER-2C: the states with hasPersistentCrc, in m_states' (id) order
+ 	AIState *m_currentState = nullptr;
+ 	AIState *m_temporaryState = nullptr;
+ 	unsigned m_temporaryStateFrameEnd = 0;
 diff --git a/engine/src/GameLogic/AI/AIWorld.cpp b/engine/src/GameLogic/AI/AIWorld.cpp
-index f54576d..e8b7d67 100644
+index f54576d..a023b69 100644
 --- a/engine/src/GameLogic/AI/AIWorld.cpp
 +++ b/engine/src/GameLogic/AI/AIWorld.cpp
 @@ -473,6 +473,7 @@ const PathfindGeometry &ObjectPathfindAdapter::getGeometry() const
@@ -1186,15 +1348,68 @@ index f54576d..e8b7d67 100644
  	if (!m_mapReady || m_ais.size() < 2)
  	{
  		return;
-@@ -1123,26 +1142,50 @@ void AIWorld::processCollisions()
- 					for (int k = start[b]; k < start[b + 1]; ++k)
+@@ -1034,6 +1053,8 @@ void AIWorld::processCollisions()
+ 	// candidates in the same sorted order and the pairs are handled exactly as before
+ 	std::vector<CollisionUnit> &units = m_collisionUnits;
+ 	units.clear();
++	const bool uberFacts = m_logic.uber();
++	const ThingTemplate *crushWarm = nullptr;
+ 	for (const auto &kv : m_ais) // ordered by id
+ 	{
+ 		AIUpdateInterface *ai = kv.second;
+@@ -1042,6 +1063,17 @@ void AIWorld::processCollisions()
+ 			continue; // lane GARRISON-1: a contain's rider out of the world (RW 0x68C18F) is not in the partition (ZH PartitionManager::processCollisions)
+ 		}
+ 		units.push_back(CollisionUnit{ kv.first, ai, 0.0f, 0.0f, 0.0f, 0, &ai->adapter().getGeometry() });
++		if (uberFacts)
++		{
++			// lane UBER-3W: the crush info of every unit's template is in GameLogic's cache before the facts are taken on the job pool (below); a horde's
++			// soldiers have consecutive ids and one template, so this is one lookup per horde
++			const ThingTemplate *tt = static_cast<const ThingTemplate *>(ai->getObject()->getTemplate())->getFinalOverride();
++			if (tt != crushWarm)
++			{
++				m_logic.crushInfo(tt);
++				crushWarm = tt;
++			}
++		}
+ 	}
+ 	if (units.size() < 2)
+ 	{
+@@ -1111,38 +1143,82 @@ void AIWorld::processCollisions()
+ 		for (size_t i = first; i < last; ++i)
+ 		{
+ 			const CollisionUnit &a = units[i];
+-			const int cx = a.bucket % w, cy = a.bucket / w;
+-			// a partner overlaps when its centre is within a.r + b.r <= a.r + maxRadius: the buckets that reach that far, however large the footprints are
+-			const int reach = SimMath::truncToInt32(SimMath::divf32(SimMath::addf32(a.r, maxRadius), cell)) + 1;
++			// a partner overlaps when its centre is within a.r + b.r <= a.r + maxRadius on each axis (the float overlap test below cannot pass with |dx| or |dy|
++			// at or beyond a.r + b.r). lane UBER-3W: the buckets that box reaches (one unit wider against rounding), not a whole bucket ring each way around a's
++			// bucket: a soldier's box touches 1 to 4 buckets instead of 9; the overlapping set is the same, so the pairs and their order are too
++			const float reachR = SimMath::addf32(SimMath::addf32(a.r, maxRadius), 1.0f);
++			const auto bucketOf = [&](float v, float lo, int count) {
++				const int c = SimMath::truncToInt32(SimMath::divf32(SimMath::subf32(v, lo), cell)); // truncation: a negative offset above -cell gives 0, clamped anyway
++				return c < 0 ? 0 : (c > count - 1 ? count - 1 : c);
++			};
++			const int x0 = bucketOf(SimMath::subf32(a.x, reachR), minX, w), x1 = bucketOf(SimMath::addf32(a.x, reachR), minX, w);
++			const int y0 = bucketOf(SimMath::subf32(a.y, reachR), minY, h), y1 = bucketOf(SimMath::addf32(a.y, reachR), minY, h);
+ 			candidates.clear();
+-			for (int ny = std::max(0, cy - reach); ny <= std::min(h - 1, cy + reach); ++ny)
++			for (int ny = y0; ny <= y1; ++ny)
+ 			{
+-				for (int nx = std::max(0, cx - reach); nx <= std::min(w - 1, cx + reach); ++nx)
++				for (int nx = x0; nx <= x1; ++nx)
+ 				{
+ 					const size_t b = (size_t)ny * (size_t)w + (size_t)nx;
+-					for (int k = start[b]; k < start[b + 1]; ++k)
++					// a bucket lists its units in index order: the partners above i are its tail (lane UBER-3W: walked from the end, the candidates are sorted below)
++					for (int k = start[b + 1] - 1; k >= start[b]; --k)
  					{
  						const int j = items[(size_t)k];
 -						if ((size_t)j > i) // the pair is handled from the lower index
 +						if ((size_t)j <= i) // the pair is handled from the lower index
  						{
 -							candidates.push_back(j);
-+							continue;
++							break;
  						}
 +						// lane UBER-2C: the overlap test before the sort (it judges each partner on its own, so the overlapping set and its id order are
 +						// the same): a melee's neighbour buckets hold dozens of units a unit does not touch, and sorting them all was 9% of a 30,000-troop
@@ -1222,30 +1437,42 @@ index f54576d..e8b7d67 100644
  			}
  		}
  	});
-+	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass (taken at the unit's first pair, on this thread:
-+	// ObjectCollide::pairFacts reads lazily filled caches). A pair whose handlers would all return at those tests is counted and skipped: AIMover::onCollide
-+	// returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert says. Uber rule change (snapshot
-+	// semantics): a unit's facts are those of its first pair, so a later pair after a crush or a stun in the same pass reads them from before it
++	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass. A pair whose handlers would all return at those tests is
++	// counted and skipped: AIMover::onCollide returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert
++	// says. lane UBER-3W: the facts of every unit with a pair are taken before the first pair meets, on the logic job pool (each job writes only its own
++	// units' facts and their objects' lazily found physics module; the one shared lazy cache, GameLogic::crushInfo, was filled above on this thread). They
++	// were taken on this thread at the unit's first pair, 5% of a one-thread 30,000-troop clash frame. Uber rule change (snapshot semantics): a unit's facts
++	// are those from before the pass's first pair (UBER-2B: before its own first pair), so a pair after a crush or a stun in the same pass reads them from before it
 +	const bool filter = m_logic.uber();
 +	if (filter)
 +	{
 +		m_collisionFacts.resize(units.size());
 +		m_collisionFactState.assign(units.size(), 0);
-+	}
-+	const auto factsOf = [&](int i) -> std::uint8_t {
-+		std::uint8_t &state = m_collisionFactState[(size_t)i];
-+		if (state == 0)
++		for (size_t chunk = 0; chunk < chunkCount; ++chunk)
 +		{
-+			AIUpdateInterface *ai = units[(size_t)i].ai;
-+			m_collisionFacts[(size_t)i] = ObjectCollide::pairFacts(*ai->getObject());
-+			state = ai->isContained() ? 2 : 1; // 2: AIUpdateInterface::isContained
++			for (const std::pair<int, int> &pair : m_collisionChunks[chunk].pairs)
++			{
++				m_collisionFactState[(size_t)pair.first] = 3; // 3: wanted
++				m_collisionFactState[(size_t)pair.second] = 3;
++			}
 +		}
-+		return state;
-+	};
++		jobs.parallelFor(units.size(), kUnitsPerJob, [this, &units](size_t, size_t begin, size_t end) {
++			for (size_t i = begin; i < end; ++i)
++			{
++				if (m_collisionFactState[i] == 3)
++				{
++					AIUpdateInterface *ai = units[i].ai;
++					m_collisionFacts[i] = ObjectCollide::pairFacts(*ai->getObject());
++					m_collisionFactState[i] = ai->isContained() ? 2 : 1; // 2: AIUpdateInterface::isContained
++				}
++			}
++		});
++	}
++	const auto factsOf = [&](int i) -> std::uint8_t { return m_collisionFactState[(size_t)i]; };
  	bool alliedPair = false;
  	for (size_t chunk = 0; chunk < chunkCount; ++chunk)
  	{
-@@ -1151,6 +1194,17 @@ void AIWorld::processCollisions()
+@@ -1151,6 +1227,17 @@ void AIWorld::processCollisions()
  			const CollisionUnit &a = units[(size_t)pair.first], &b = units[(size_t)pair.second];
  			++m_collisionPairs;
  			alliedPair = alliedPair || a.ai->adapter().getRelationship(b.ai->adapter()) != PATHFIND_ENEMIES;
@@ -1305,6 +1532,34 @@ index ee39f72..2a64f7c 100644
  	int m_moveAlliesDepth = 0; // lane PHYS-1: RW pathfinder + 0x1C1BC, the recursion guard of moveAllies
  	int m_peakTickCells = 0;
  	size_t m_peakQueued = 0;
+diff --git a/engine/src/GameLogic/AI/TurretAI.cpp b/engine/src/GameLogic/AI/TurretAI.cpp
+index 1a7a73c..ccdc096 100644
+--- a/engine/src/GameLogic/AI/TurretAI.cpp
++++ b/engine/src/GameLogic/AI/TurretAI.cpp
+@@ -170,6 +170,7 @@ public:
+ 	}
+ 	void crc(StateHasher &h) const override { h.addU32(m_nextIdleScan); }
+ 	void crcPersistent(StateHasher &h) const override { h.addU32(m_nextIdleScan); }
++	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
+ 
+ private:
+ 	unsigned m_nextIdleScan = 0; // + 0x20
+@@ -206,6 +207,7 @@ public:
+ 	}
+ 	void crc(StateHasher &h) const override { h.addFloat(m_desiredAngle); }
+ 	void crcPersistent(StateHasher &h) const override { h.addFloat(m_desiredAngle); }
++	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
+ 
+ private:
+ 	float m_desiredAngle = 0.0f; // + 0x20
+@@ -256,6 +258,7 @@ public:
+ 	}
+ 	void crc(StateHasher &h) const override { h.addU32(m_timestamp); }
+ 	void crcPersistent(StateHasher &h) const override { h.addU32(m_timestamp); }
++	bool hasPersistentCrc() const override { return true; } // lane UBER-2C
+ 
+ private:
+ 	unsigned m_timestamp = 0; // + 0x20
 diff --git a/engine/src/GameLogic/Combat/TargetFinder.cpp b/engine/src/GameLogic/Combat/TargetFinder.cpp
 index 9da8444..410d29e 100644
 --- a/engine/src/GameLogic/Combat/TargetFinder.cpp
@@ -1510,10 +1765,29 @@ index 7411d23..99d3db6 100644
  	unsigned logicFrame() const override { return obj().logic().getFrame(); }
  	bool containerAllowsBackingUp() const override { return false; }
 diff --git a/engine/src/GameLogic/Module/AreaScanModules.cpp b/engine/src/GameLogic/Module/AreaScanModules.cpp
-index d4f701d..7e2cc42 100644
+index d4f701d..cc18184 100644
 --- a/engine/src/GameLogic/Module/AreaScanModules.cpp
 +++ b/engine/src/GameLogic/Module/AreaScanModules.cpp
-@@ -197,7 +197,14 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
+@@ -125,6 +125,18 @@ unsigned hordeMembersAllowed(GameLogic &logic, Object &horde, const ObjectFilter
+ 	return n;
+ }
+ 
++// lane UBER-3W: an object with a horde contain (hordeMembersAllowed's first test), asked by the range walk before the distance
++class PartitionFilterHordeContain : public PartitionFilter
++{
++public:
++	bool allow(Object &o) override
++	{
++		ContainModuleInterface *c = o.getContain();
++		return c && c->getHordeContainInterface();
++	}
++	bool beforeDistance() const override { return true; }
++};
++
+ template <class T>
+ T *findModuleOf(Object &obj)
+ {
+@@ -197,7 +209,17 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
  			}
  			return n > 0;
  		});
@@ -1523,8 +1797,11 @@ index d4f701d..7e2cc42 100644
 +		// changed since the frame's partition update is looked for on its old layer
 +		const int ownerIndex = owner ? owner->getPlayerIndex() : -1;
 +		PartitionFilterLayers ownerLayer(ownerIndex >= 0 && ownerIndex < PartitionManager::kLayerCount - 1 ? 1u << ownerIndex : 0u);
++		// lane UBER-3W, Uber only: the filter above accepts only an object with a horde contain; that test (pure, no counting) goes first and the walk asks it
++		// before the distance, so the hordes' soldiers around (some thirty for every horde in reach) cost no square root. The same hits in the same order
++		PartitionFilterHordeContain hordeOnly;
 +		const PartitionHits hits = logic.uber()
-+			? logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter, &ownerLayer }, ITER_FASTEST)
++			? logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &hordeOnly, &filter, &ownerLayer }, ITER_FASTEST)
 +			: logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter }, ITER_FASTEST);
  		unsigned count = 0;
  		for (size_t i = 0; i < hits.size(); ++i)
@@ -1616,7 +1893,7 @@ index c15aa26..0e6cbfa 100644
  			victim = h.object;
  			break;
 diff --git a/engine/src/GameLogic/Module/HordeAIUpdateCombat.cpp b/engine/src/GameLogic/Module/HordeAIUpdateCombat.cpp
-index e0e878b..36530ed 100644
+index e0e878b..a371077 100644
 --- a/engine/src/GameLogic/Module/HordeAIUpdateCombat.cpp
 +++ b/engine/src/GameLogic/Module/HordeAIUpdateCombat.cpp
 @@ -922,6 +922,8 @@ bool HordeAIUpdate::isMeleeTargetReady(Object &targetIn)
@@ -1628,7 +1905,7 @@ index e0e878b..36530ed 100644
  static bool amoebaAttack(Object &m, Object &victim);
  
  // RW 0x86D75E (the target changes) + Amoeba onNewTarget (RW 0x99006A)
-@@ -1014,16 +1016,34 @@ static Object *amoebaReach(Object &m, Object &target)
+@@ -1014,16 +1016,57 @@ static Object *amoebaReach(Object &m, Object &target)
  	{
  		return nullptr;
  	}
@@ -1656,15 +1933,38 @@ index e0e878b..36530ed 100644
 +	}
  	Object *best = nullptr;
  	float bestD = 0.0f;
++	// lane UBER-3W (Uber only): the distance first, and the weapon range (its bonus, its reach: 2.5% of a one-thread 30,000-troop clash frame, once per member
++	// and candidate) only for a candidate that would beat the best so far; the nearest enemy in range is the same. Uber because the range test leaves the
++	// melee reach it computed in the weapon's range host, which then holds another candidate's value (every reader but a point target's sets it first)
++	const bool rangeLast = m.logic().uber();
  	for (Object *e : cands)
  	{
 -		if (m.getRelationship(*e) != ENEMIES || !w->isWithinAttackRange(*e))
++		if (rangeLast)
++		{
++			if (!CombatQueries::isAlive(*e) || m.getRelationship(*e) != ENEMIES)
++			{
++				continue;
++			}
++			const float d2 = CombatQueries::edgeDistanceSquared2D(m, *m.getPosition(), *e, *e->getPosition()); // RW 0x66352C
++			if (best && !(d2 < bestD || (d2 == bestD && e->getID() < best->getID())))
++			{
++				continue;
++			}
++			if (!w->isWithinAttackRange(*e))
++			{
++				continue;
++			}
++			best = e;
++			bestD = d2;
++			continue;
++		}
 +		// lane UBER-2B: a candidate of a list built before this member (the Uber tick's) may have died since; a fresh list holds only living ones
 +		if (!CombatQueries::isAlive(*e) || m.getRelationship(*e) != ENEMIES || !w->isWithinAttackRange(*e))
  		{
  			continue;
  		}
-@@ -1671,13 +1691,21 @@ bool HordeAIUpdate::hasMeleeAttackingMember() const
+@@ -1671,13 +1714,21 @@ bool HordeAIUpdate::hasMeleeAttackingMember() const
  // around the member, RW 0x6ED843). INFERENCE (S-588): the touching enemy is the reach check's enemy of the target (RW 0x6F2956 rules); no repositioning.
  void HordeAIUpdate::holdGroundTick(Object &target)
  {
@@ -1860,7 +2160,7 @@ index 5fd0f2d..bb663ec 100644
  	++m_stats.passes;
  	// lane HORDE-2: the RotWK member pass (RW 0x873FE8, read with Ghidra) calls the member order (vslot 0x90 = RW 0x877A7A) with force = 1 - isMoving(horde)
 diff --git a/engine/src/GameLogic/Object/Object.cpp b/engine/src/GameLogic/Object/Object.cpp
-index b0db7d0..9d3e202 100644
+index b0db7d0..d8a1b9d 100644
 --- a/engine/src/GameLogic/Object/Object.cpp
 +++ b/engine/src/GameLogic/Object/Object.cpp
 @@ -7,6 +7,7 @@
@@ -1871,7 +2171,7 @@ index b0db7d0..9d3e202 100644
  #include "GameLogic/Module/PhysicsBehavior.h"
  #include "GameLogic/ScriptEngine/ScriptEngine.h"
  #include "GameLogic/ScriptEngine/ScriptConditions.h"
-@@ -250,12 +251,27 @@ std::unique_ptr<BehaviorModule> Object::friend_replaceModule(BehaviorModule *old
+@@ -250,12 +251,29 @@ std::unique_ptr<BehaviorModule> Object::friend_replaceModule(BehaviorModule *old
  			{
  				m_contain = m->getContain();
  			}
@@ -1894,12 +2194,14 @@ index b0db7d0..9d3e202 100644
 +			m_collideModulesKnown = m_collideModulesKnown && c->pairFactsKnown();
 +		}
 +	}
++	m_attributePool = findModule("AttributeModifierPoolUpdate"); // lane UBER-3W: attributeModifierPoolModule's answer from here on
++	m_moduleCachesBuilt = true;
 +}
 +
  void Object::buildModules()
  {
  	const ObjectTemplateInfo &info = m_logic.templateInfo(m_template);
-@@ -312,6 +328,7 @@ void Object::buildModules()
+@@ -312,6 +330,7 @@ void Object::buildModules()
  			m_ai = a;
  		}
  	}
@@ -1907,8 +2209,44 @@ index b0db7d0..9d3e202 100644
  	// COMBAT-2: the finished object's body applies its initial damage state once (an INI InitialHealth below the thresholds shows DAMAGED / REALLYDAMAGED / RUBBLE from the start)
  	if (m_body)
  	{
+@@ -1993,7 +2012,7 @@ bool Object::addAttributeModifier(const std::string &listName, int duration)
+ 			return true;
+ 		}
+ 	}
+-	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
++	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(attributeModifierPoolModule());
+ 	if (!pool)
+ 	{
+ 		return false;
+@@ -2031,7 +2050,7 @@ void Object::removeAttributeModifier(const std::string &listName)
+ 			return;
+ 		}
+ 	}
+-	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate")); // RW 0x68C4A6
++	AttributeModifierPool *pool = static_cast<AttributeModifierPool *>(attributeModifierPoolModule()); // RW 0x68C4A6
+ 	if (!pool)
+ 	{
+ 		return;
+@@ -2052,7 +2071,7 @@ void Object::removeAttributeModifier(const std::string &listName)
+ 
+ bool Object::attributeModifierSum(int type, const char *name, float &out) const
+ {
+-	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
++	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(attributeModifierPoolModule());
+ 	if (!pool)
+ 	{
+ 		return false;
+@@ -2062,7 +2081,7 @@ bool Object::attributeModifierSum(int type, const char *name, float &out) const
+ 
+ bool Object::attributeModifierProduct(int type, const char *name, bool innate, float &out) const
+ {
+-	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(findModule("AttributeModifierPoolUpdate"));
++	const AttributeModifierPool *pool = static_cast<const AttributeModifierPool *>(attributeModifierPoolModule());
+ 	if (!pool)
+ 	{
+ 		return false;
 diff --git a/engine/src/GameLogic/Object/Object.h b/engine/src/GameLogic/Object/Object.h
-index e02930a..6065a92 100644
+index e02930a..fa36b3a 100644
 --- a/engine/src/GameLogic/Object/Object.h
 +++ b/engine/src/GameLogic/Object/Object.h
 @@ -61,6 +61,7 @@
@@ -1919,7 +2257,7 @@ index e02930a..6065a92 100644
  class ExperienceTracker;
  class GameLogic;
  class ObjectClientHooks;
-@@ -360,6 +361,9 @@ public:
+@@ -360,7 +361,13 @@ public:
  	BodyModuleInterface *getBodyModule() const { return m_body; }
  	ContainModuleInterface *getContain() const { return m_contain; }
  	AIUpdateInterface *getAIUpdateInterface() const { return m_ai; }
@@ -1927,20 +2265,26 @@ index e02930a..6065a92 100644
 +	const std::vector<CollideModuleInterface *> &collideModules() const { return m_collideModules; }
 +	bool collideModulesKnown() const { return m_collideModulesKnown; } ///< every collide module answers pairFactsKnown (ObjectCollide::PairFacts)
  	BehaviorModule *findModule(std::string_view className) const; // the first module of this class (helpers included), or null (a view: callers pass literals)
++	// lane UBER-3W: findModule("AttributeModifierPoolUpdate") (RW 0x68C4A6), kept with the collide list once the modules are built (the attribute queries of
++	// crush levels, vision and armour searched the module list by name on every call: 2.6% of a 30,000-troop clash frame); the same module either way
++	BehaviorModule *attributeModifierPoolModule() const { return m_moduleCachesBuilt ? m_attributePool : findModule("AttributeModifierPoolUpdate"); }
  	// RW 0x68BB14: the first module with an exit interface (array order); lane PROD-1
  	ExitInterface *getObjectExitInterface() const;
-@@ -511,6 +515,9 @@ private:
+ 	// RW 0x68C327: the ProductionUpdate's queue interface, or null
+@@ -511,6 +518,11 @@ private:
  	std::int32_t m_triggerCellX = 0, m_triggerCellY = 0; ///< RW + 0x418 / + 0x41C (the integer position of the last check)
  
  	std::vector<std::unique_ptr<BehaviorModule>> m_modules; ///< helpers first, then the template's behaviors
 +	std::vector<CollideModuleInterface *> m_collideModules; ///< lane UBER-2B: m_modules' collide interfaces, in order (rebuilt by buildModules / friend_replaceModule)
 +	bool m_collideModulesKnown = true;
++	BehaviorModule *m_attributePool = nullptr; ///< lane UBER-3W: findModule("AttributeModifierPoolUpdate"), valid once m_moduleCachesBuilt
++	bool m_moduleCachesBuilt = false;
 +	void rebuildCollideModules();
  	size_t m_helperCount = 0;
  	BodyModuleInterface *m_body = nullptr;
  	ContainModuleInterface *m_contain = nullptr;
 diff --git a/engine/src/GameLogic/Object/PartitionManager.cpp b/engine/src/GameLogic/Object/PartitionManager.cpp
-index 2f3bfe5..05d0a97 100644
+index 2f3bfe5..48d70fb 100644
 --- a/engine/src/GameLogic/Object/PartitionManager.cpp
 +++ b/engine/src/GameLogic/Object/PartitionManager.cpp
 @@ -616,42 +616,44 @@ double PartitionManager::distance(DistanceCalculationType type, const Coord3D &c
@@ -2007,7 +2351,34 @@ index 2f3bfe5..05d0a97 100644
  		}
  		default:
  			return false;
-@@ -1045,10 +1047,8 @@ void PartitionManager::sortHits(std::vector<PartitionHit> &hits, IterOrderType o
+@@ -684,6 +686,10 @@ void PartitionManager::walk(const Node *node, std::uint32_t childNodes, int x0,
+ 			}
+ 			else
+ 			{
++				if (m_walkPreFilter && !m_walkPreFilter->allow(*e->object))
++				{
++					continue; // lane UBER-3W: the chain's first filter refuses it (a pure one; asked before the distance's square root)
++				}
+ 				if (m_walkPreReject && surelyBeyond(type, *center, *e, radiusSqr))
+ 				{
+ 					continue; // the exact test below would reject it (performance)
+@@ -759,6 +765,7 @@ PartitionHits PartitionManager::iterateObjectsInRange(const Coord3D &center, flo
+ 	const int y1 = (int)cellY(SimMath::pc24Add(radius, center.y));
+ 	const float radiusSqr = SimMath::pc24Mul(radius, radius);
+ 	m_walkPreReject = m_preReject && !(x0 == 0 && y0 == 0 && x1 == kCells - 1 && y1 == kCells - 1);
++	m_walkPreFilter = (filters.begin() != filters.end() && (*filters.begin())->beforeDistance()) ? *filters.begin() : nullptr;
+ 	std::vector<PartitionHit> out = takeBuffer();
+ 	for (int i = 0; i < kLayerCount; ++i)
+ 	{
+@@ -768,6 +775,7 @@ PartitionHits PartitionManager::iterateObjectsInRange(const Coord3D &center, flo
+ 		}
+ 		layers >>= 1;
+ 	}
++	m_walkPreFilter = nullptr;
+ 	sortHits(out, order);
+ 	return PartitionHits(*this, std::move(out));
+ }
+@@ -1045,10 +1053,8 @@ void PartitionManager::sortHits(std::vector<PartitionHit> &hits, IterOrderType o
  
  // ---- RW 0xA3BDB0: the closest object -------------------------------------------------------------------------------------------------------------------------
  
@@ -2019,7 +2390,7 @@ index 2f3bfe5..05d0a97 100644
  {
  	std::int32_t key = 0;
  	const void *node = nullptr;
-@@ -1056,6 +1056,10 @@ struct SearchNode
+@@ -1056,6 +1062,10 @@ struct SearchNode
  	std::int32_t x = 0, y = 0, size = 0;
  };
  
@@ -2030,7 +2401,7 @@ index 2f3bfe5..05d0a97 100644
  // RW 0xA3B0A0 __push_heap (a max-heap on the key: `parent.key < value.key` moves the parent down)
  void searchPushHeap(SearchNode *first, int hole, int top, SearchNode value)
  {
-@@ -1123,7 +1127,23 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
+@@ -1123,7 +1133,23 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
  		type = FROM_CENTER_2D;
  	}
  	std::uint32_t layers = layerMask(filters);
@@ -2054,7 +2425,7 @@ index 2f3bfe5..05d0a97 100644
  	// RW 0xA3BE70: one root per walked layer, appended (all keys 0)
  	for (int i = 0; i < kLayerCount; ++i)
  	{
-@@ -1178,6 +1198,10 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
+@@ -1178,6 +1204,10 @@ Object *PartitionManager::getClosestObject(const Coord3D &center, float maxDist,
  		const Node *node = static_cast<const Node *>(cur.node);
  		for (const Entry *e = node->head; e; e = e->nodeNext)
  		{
@@ -2066,10 +2437,19 @@ index 2f3bfe5..05d0a97 100644
  			const float cand = SimMath::fstpDword(d);
  			if (d > (double)best)
 diff --git a/engine/src/GameLogic/Object/PartitionManager.h b/engine/src/GameLogic/Object/PartitionManager.h
-index ee29a65..7468135 100644
+index ee29a65..6e5268e 100644
 --- a/engine/src/GameLogic/Object/PartitionManager.h
 +++ b/engine/src/GameLogic/Object/PartitionManager.h
-@@ -112,6 +112,22 @@ private:
+@@ -94,6 +94,8 @@ public:
+ 	virtual bool allow(Object &obj) = 0;
+ 	// bit k: player k's layer may hold an allowed object (RW 0xA39490 ANDs them); layer -1 is always walked
+ 	virtual std::uint32_t playerLayerMask() const { return 0xFFFFFFFFu; }
++	// lane UBER-3W: true for a pure filter the range walk may ask before the distance test, when it is the chain's first (the same hits: the chain still asks it)
++	virtual bool beforeDistance() const { return false; }
+ };
+ 
+ // a filter made of a predicate (the port's filters that have no own class); the callable is held by value (no std::function allocation per scan):
+@@ -112,6 +114,22 @@ private:
  	Fn m_fn;
  };
  
@@ -2092,7 +2472,7 @@ index ee29a65..7468135 100644
  struct PartitionHit
  {
  	Object *object = nullptr;
-@@ -134,6 +150,12 @@ public:
+@@ -134,6 +152,12 @@ public:
  		, m_size(list.size())
  	{
  	}
@@ -2105,7 +2485,7 @@ index ee29a65..7468135 100644
  	PartitionFilter *const *begin() const { return m_data; }
  	PartitionFilter *const *end() const { return m_data + m_size; }
  	bool empty() const { return m_size == 0; }
-@@ -235,12 +257,14 @@ public:
+@@ -235,12 +259,14 @@ public:
  
  	void crc(StateHasher &h) const;
  	static std::vector<std::string> stopLines();
@@ -2121,14 +2501,80 @@ index ee29a65..7468135 100644
  	struct Geometry
  	{
  		float circle = 0.01f; ///< GeometryInfo + 0x10
-@@ -288,6 +312,7 @@ private:
+@@ -288,7 +314,9 @@ private:
  	std::vector<std::unique_ptr<Entry>> m_byId; ///< Object + 0x4E8, indexed by object id
  	mutable std::unordered_map<const ThingTemplate *, Geometry> m_geometry; ///< looked up only (never iterated); element references stay valid
  	mutable std::vector<std::vector<PartitionHit>> m_hitPool;              ///< the buffers of finished queries (PartitionHits)
 +	mutable std::vector<SearchNode> m_searchHeap;                          ///< getClosestObject's heap storage, kept between calls (lane UBER-2A)
  	bool m_preReject = true;
  	mutable bool m_walkPreReject = true; ///< this walk's: off when the query rectangle is the whole grid (every candidate is near: the bound would only cost)
++	mutable PartitionFilter *m_walkPreFilter = nullptr; ///< lane UBER-3W: this range walk's beforeDistance filter (iterateObjectsInRange), else null
  	int m_mineBit = -1;
+ };
+diff --git a/engine/src/GameLogic/System/ShroudManager.cpp b/engine/src/GameLogic/System/ShroudManager.cpp
+index 42a6db8..1564a21 100644
+--- a/engine/src/GameLogic/System/ShroudManager.cpp
++++ b/engine/src/GameLogic/System/ShroudManager.cpp
+@@ -1226,7 +1226,22 @@ void ShroudManager::prepareRecord(Record &r, Prepared &p)
+ 		return;
+ 	}
+ 	// the template is read once per processing (RW reads its fields directly: always the current values)
+-	p.tv = templateVision(*p.obj->getTemplate()->getFinalOverride());
++	const ThingTemplate *tt = p.obj->getTemplate()->getFinalOverride();
++	if (m_logic.uber())
++	{
++		// lane UBER-3W (Uber only): read again only when the record's object has another final template (a template's vision rows do not change in a game;
++		// each record is prepared by one job, so the record's copy is written by one thread)
++		if (r.tvTemplate != tt)
++		{
++			r.tv = templateVision(*tt);
++			r.tvTemplate = tt;
++		}
++		p.tv = r.tv;
++	}
++	else
++	{
++		p.tv = templateVision(*tt);
++	}
+ 	coverCells(*p.obj, p.tv, p.cells);
+ 	const Coord3D &pos = *p.obj->getPosition();
+ 	p.cx = SimMath::floorToInt(SimMath::pc24Mul(SimMath::pc24Sub(pos.x, m_loX), m_cellSizeInv));
+@@ -1540,6 +1555,20 @@ float shroudClearingRange(const Object &obj, ShroudManager &sm, const ShroudMana
+ float ShroudManager::visionRange(const Object &obj)
+ {
+ 	const ThingTemplate *tt = static_cast<const ThingTemplate *>(obj.getTemplate())->getFinalOverride();
++	if (m_logic.uber())
++	{
++		// lane UBER-3W (Uber only): the record's template vision (prepareRecord's), read again only for another template (the emotion tracker asks this for
++		// every horde and frame)
++		if (Record *r = recordOf(obj))
++		{
++			if (r->tvTemplate != tt)
++			{
++				r->tv = templateVision(*tt);
++				r->tvTemplate = tt;
++			}
++			return shroudClearingRange(obj, *this, r->tv);
++		}
++	}
+ 	return shroudClearingRange(obj, *this, templateVision(*tt));
+ }
+ 
+diff --git a/engine/src/GameLogic/System/ShroudManager.h b/engine/src/GameLogic/System/ShroudManager.h
+index e0236ce..142047b 100644
+--- a/engine/src/GameLogic/System/ShroudManager.h
++++ b/engine/src/GameLogic/System/ShroudManager.h
+@@ -246,6 +246,10 @@ private:
+ 		bool groundValid = false;                               ///< RW object + 0x418 / + 0x41C (the integer position) and + 0x1C4
+ 		int groundX = 0, groundY = 0;
+ 		float groundRef = 0.0f;
++		// lane UBER-3W (Uber only, derived, not hashed): templateVision of the template it was read for (prepareRecord read it for every processing: a
++		// geometry list built per record and frame, 1.2% of a one-thread 30,000-troop clash frame)
++		const ThingTemplate *tvTemplate = nullptr;
++		TemplateVision tv;
+ 	};
+ 
+ 	Cell *cellAt(int x, int y);
 diff --git a/engine/src/GameNetwork/LockstepDriver.cpp b/engine/src/GameNetwork/LockstepDriver.cpp
 index 03ceae1..48af5ca 100644
 --- a/engine/src/GameNetwork/LockstepDriver.cpp
@@ -2158,7 +2604,7 @@ index f86ba14..eae2ab5 100644
  	{
  		return fail(error);
 diff --git a/engine/tests/data/uber1/battle3000_40.hashes b/engine/tests/data/uber1/battle3000_40.hashes
-index 34c6ff3..683646b 100644
+index 34c6ff3..91ce755 100644
 --- a/engine/tests/data/uber1/battle3000_40.hashes
 +++ b/engine/tests/data/uber1/battle3000_40.hashes
 @@ -1,40 +1,40 @@
@@ -2214,34 +2660,34 @@ index 34c6ff3..683646b 100644
 +e8fe79c5
 +1cb90b85
 +8f18fc47
-+fb072141
-+3c7c5b67
-+7c518a1b
-+53893659
-+38e543d8
-+c93735cf
-+55505016
-+93585820
-+e87ca70f
-+b20eab9a
-+65dd9045
-+f031e05c
-+35f3fa46
-+1457a58c
-+1af55788
-+8ac7d832
-+f5108161
-+ca36386b
-+11aa7fa8
-+77ad9b34
-+343f9c6a
-+645547f3
-+4ee8ac36
-+4a812754
-+3bd22801
-+fe7bf1c1
-+dd9dea51
-+804b63ba
++5ecd353f
++75d0c3e7
++6c9093dc
++e470abab
++cd5decbd
++c23809c7
++8871839b
++3d331ca0
++f37b327c
++d36959b9
++06517525
++e68c99b7
++0a089cc3
++f036643b
++a972ac23
++8782b385
++1f1f1c53
++df54eec0
++94772916
++3b80f281
++7e3e1e6e
++c4353ee1
++1ced86ee
++ebc925b2
++bc1632c2
++a0e0b612
++1ac42221
++55c923c8
 diff --git a/engine/tests/test_partition_manager.cpp b/engine/tests/test_partition_manager.cpp
 index 7944cf7..f008a87 100644
 --- a/engine/tests/test_partition_manager.cpp
