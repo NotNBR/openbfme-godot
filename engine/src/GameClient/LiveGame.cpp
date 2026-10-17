@@ -964,8 +964,16 @@ std::shared_ptr<const FrameCompletion> LiveGame::captureCompletion(const WorkIte
 	}
 	else if (item.capture.hashEveryFrame || m_options.hashEveryFrame)
 	{
-		c->hash = m_logic->computeStateHash();
-		c->hashed = true;
+		if (!m_options.hashEveryFrame && m_logic->uber() && c->frame % (UnsignedInt)LiveGameFrameDriver::kUberRecordedHashEvery != 0 &&
+			!(item.driver && item.driver->hashWanted(c->frame)))
+		{
+			c->hashSkipped = true; // lane UBER-2C: the Uber recording's cadence
+		}
+		else
+		{
+			c->hash = m_logic->computeStateHash();
+			c->hashed = true;
+		}
 	}
 	std::uint32_t rng = 0x811C9DC5u;
 	for (std::uint32_t w : m_logic->random().seedArray())

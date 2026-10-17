@@ -82,6 +82,7 @@ private:
 	SimulationProfile m_targetProfile = SimulationProfile::Faithful;
 	std::vector<std::uint8_t> m_logBytes; ///< the save's log, continued by handOver
 	void checkCoverage(UnsignedInt target);
+	bool hashRequired(UnsignedInt f, UnsignedInt target) const; // lane UBER-2C
 	bool m_restoreThread = false;
 	double m_elapsedMs = 0.0;
 };

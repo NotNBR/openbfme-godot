@@ -97,6 +97,10 @@ Dictionary GameWorld::save_game(const String &path, const Dictionary &options)
 	const std::uint32_t hash = m_game->logic().computeStateHash();
 	SaveGameFile f;
 	std::string error;
+	if (!m_localWriter->hasHashOf(frame))
+	{
+		m_localWriter->recordHash(frame, hash); // lane UBER-2C: an Uber recording holds every 5th frame's hash; the saved frame's goes in now
+	}
 	if (!m_localWriter->logUpTo(frame, hash, f.log, &error))
 	{
 		return fail(error);
