@@ -416,6 +416,32 @@ seconds (150 hordes: 4.6 s, 300 single soldiers: 9.6 s, `pathperf1 bench`).
   reservations in a big battle. Nothing changes until the first 60,000 are in
   use (the Faithful pins pass unchanged).
 
+### UBER-2A: the "what is near me" queries (done)
+
+The 10k Uber profile had the taunt scans (`tauntScan` -> `getClosestObject`)
+at 10% of the logic frame, nearly all of it the exact x87 distance of every
+partition entry the search visited, plus the combat range checks recomputing
+the bounding radii (6%), the large group bonus scans (4%) and `TargetFinder`
+(4%, most of it rebuilding its grid about a dozen times a frame).
+
+- **Both profiles (the same answers):** `getClosestObject` skips the exact
+  distance of a candidate the double-precision bound puts beyond the best
+  distance so far (the range walk's pre-reject, now inlined), and keeps its
+  heap storage between calls. The Faithful pins and the Faithful bench hash
+  chain are unchanged. (The bounding radii are UBER-2B's cache.)
+- **Uber rule changes:** the taunt scan, the dual weapon switch scan and
+  `TargetFinder` walk only the layers of the players the seeker sees as
+  enemies (`Team::enemyLayerMask`), the large group bonus only its owner's;
+  `TargetFinder` builds its grid once a frame and appends the objects made
+  later in the frame instead of rebuilding. What a player can notice: nothing
+  (of two candidates at exactly the same distance another may win; an object
+  whose owner changed this frame is found on its old layer until the next
+  partition update).
+- Result (`uber bench` 10k, Uber, 30 frames, back to back on a busy PC): logic
+  wall about 173 -> 137 ms, phases 3 / 4 about 33 / 30 -> 23 / 19 ms; the
+  taunt scan went from 10% to 1.5% of the logic frame. The Uber bench hash
+  chain did not change either (no tie or owner change met in that battle).
+
 ### U2: parallel queries and paths, GPU animation (next)
 
 - **Snapshot queries.** Before each module phase, the queries a module will

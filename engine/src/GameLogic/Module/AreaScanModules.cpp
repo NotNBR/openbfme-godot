@@ -197,7 +197,14 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
 			}
 			return n > 0;
 		});
-		const PartitionHits hits = logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter }, ITER_FASTEST);
+		// lane UBER-2A, Uber only: the filter accepts only the owner's objects, which lie on the owner's layer or on layer -1 (walked always): the other players'
+		// trees are skipped. The hits and their order are the same (an unsorted scan lists them layer by layer); Uber rule change: an object whose owner
+		// changed since the frame's partition update is looked for on its old layer
+		const int ownerIndex = owner ? owner->getPlayerIndex() : -1;
+		PartitionFilterLayers ownerLayer(ownerIndex >= 0 && ownerIndex < PartitionManager::kLayerCount - 1 ? 1u << ownerIndex : 0u);
+		const PartitionHits hits = logic.uber()
+			? logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter, &ownerLayer }, ITER_FASTEST)
+			: logic.partition().iterateObjectsInRange(*obj->getPosition(), m_data->m_radius, FROM_BOUNDINGSPHERE_3D, { &filter }, ITER_FASTEST);
 		unsigned count = 0;
 		for (size_t i = 0; i < hits.size(); ++i)
 		{
