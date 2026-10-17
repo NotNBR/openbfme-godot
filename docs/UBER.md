@@ -447,6 +447,33 @@ the bounding radii (6%), the large group bonus scans (4%) and `TargetFinder`
   taunt scan went from 10% to 1.5% of the logic frame. The Uber bench hash
   chain did not change either (no tie or owner change met in that battle).
 
+### UBER-3P: the battle's path searches that cannot succeed (done)
+
+In the 30,000-troop clash the path queue runs at its budget in every one of a
+logic frame's six calls, and each call is mostly one search: a repath toward
+a contact point in the press whose goal cannot be reached (an approximate
+search: the goal is in another zone or not a valid movement position; or its
+goal cell was rejected). Such a search ends with the path to its closest cell
+(or none), but kept expanding up to the slack or `MaxCellsFindPathLimit`: the
+calls averaged 23,000 cells against a budget of 4,000. Of 2,094 searches in
+that battle, a failed search's closest cell was final after about 10 cells
+and never replaced 250 cells later; 1,182 of the 1,644 unreachable searches
+found no closest cell at all and gave no path, after 72% of all their cells.
+
+- **Uber rule change:** `internalFindPath` ends an unreachable search once its
+  answer has held for 256 cells (the closest cell, or with none yet the
+  candidate key that would test one) and gives that answer. A tunnelling
+  search's pause starts when it leaves its obstacle. What a player can
+  notice: nothing; the paths are served sooner (in that battle 45 of the
+  unreachable searches tested a candidate after such a pause, the only ones
+  whose answer can differ). The Uber pin vector was regenerated.
+- Result (`uber bench` 30k, Uber, 30 frames, back to back, two rounds): logic
+  wall 203 / 221 -> 175 / 181 ms (default threads), 240 -> 215 ms (one
+  thread); the 15 clash frames 220 / 242 -> 179 / 184 ms, p99 316 / 363 ->
+  240 / 261 ms. The queue's cells per call 23,000 -> 8,600, the horde repaths
+  served in the 14 clash frames 170 -> 209. The 10k battle is unchanged within
+  the noise (83-89 -> 86-94 ms default threads, 103-107 -> 106 ms one thread).
+
 ### U2: parallel queries and paths, GPU animation (next)
 
 - **Snapshot queries.** Before each module phase, the queries a module will
