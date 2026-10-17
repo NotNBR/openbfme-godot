@@ -41,3 +41,6 @@ engine/src/Libraries/Lua/** text eol=lf
 
 # lane UI-5: the launcher's fonts (tools/release/public_binaries.txt pins their bytes)
 *.ttf binary
+
+# A git patch must keep its bytes: CRLF conversion would make git apply fail on its LF context lines.
+patches/*.patch -text
