@@ -58,6 +58,7 @@ void GameWorld::bindScriptMethods()
 	ClassDB::bind_method(D_METHOD("update_script_view", "delta_ms", "camera"), &GameWorld::update_script_view);
 	ClassDB::bind_method(D_METHOD("get_script_report"), &GameWorld::get_script_report);
 	ClassDB::bind_method(D_METHOD("get_waypoint", "name"), &GameWorld::get_waypoint);
+	ClassDB::bind_method(D_METHOD("get_camera_animation", "name"), &GameWorld::get_camera_animation); // mapworkshop (openbfme-cinematics.patch)
 	ClassDB::bind_method(D_METHOD("debug_script_place", "name", "where"), &GameWorld::debug_script_place);
 	ClassDB::bind_method(D_METHOD("debug_script_kill", "name"), &GameWorld::debug_script_kill);
 	ClassDB::bind_method(D_METHOD("debug_script_unit", "name"), &GameWorld::debug_script_unit);
@@ -68,6 +69,58 @@ void GameWorld::bindScriptMethods()
 	ClassDB::bind_method(D_METHOD("get_pending_script_audio"), &GameWorld::get_pending_script_audio);
 	ClassDB::bind_method(D_METHOD("get_script_audio_applied"), &GameWorld::get_script_audio_applied);
 	ClassDB::bind_method(D_METHOD("debug_script_action", "name", "params"), &GameWorld::debug_script_action); // lane BACKLOG3
+}
+
+Dictionary GameWorld::get_camera_animation(const String &name) const
+{
+	Dictionary d;
+	d["ok"] = false;
+	if (!m_game)
+	{
+		return d;
+	}
+	const std::string want = name.utf8().get_data();
+	for (const CameraAnimation &a : m_game->map().chunks.cameraAnimations)
+	{
+		if (a.name != want)
+		{
+			continue;
+		}
+		d["ok"] = true;
+		d["type"] = g(a.type);
+		d["frames"] = (int64_t)a.numFrames;
+		d["start_offset"] = (int64_t)a.startOffset;
+		Array keys;
+		for (const CameraAnimationFrame &f : a.keys)
+		{
+			Dictionary k;
+			k["frame"] = (int64_t)f.frame;
+			k["interp"] = g(f.interp);
+			k["pos"] = Vector3(f.pos[0], f.pos[1], f.pos[2]);
+			Array q;
+			for (float v : f.quat)
+			{
+				q.push_back(v);
+			}
+			k["quat"] = q;
+			k["fov"] = f.fovLike;
+			k["roll"] = f.roll;
+			keys.push_back(k);
+		}
+		d["keys"] = keys;
+		Array lookAt;
+		for (const CameraLookAtKey &f : a.lookAtKeys)
+		{
+			Dictionary k;
+			k["frame"] = (int64_t)f.frame;
+			k["interp"] = g(f.interp);
+			k["pos"] = Vector3(f.lookAt[0], f.lookAt[1], f.lookAt[2]);
+			lookAt.push_back(k);
+		}
+		d["look_at"] = lookAt;
+		return d;
+	}
+	return d;
 }
 
 Dictionary GameWorld::get_waypoint(const String &name) const

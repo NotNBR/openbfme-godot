@@ -28,6 +28,13 @@ var hud_mode := false      # lane CAMP-1: in the game (scripts/campaign_flow.gd)
 var movie_hook := Callable() # lane CAMP-1H: PLAY_MOVIE_IN_GAME's title goes there (scripts/campaign_flow.gd plays it with scripts/movie_player.gd)
 var dev_overlay := true      # lane CAMP-2: the developer text (logic frame, camera / input state, the objective list): the viewers' only; the game sets it from --dev-overlay
 var control_bar_hook := Callable() # lane CAMP-2: HideControlBar / ShowControlBar (bool hidden) for CAMERA_LETTERBOX_BEGIN / END and HIDE_UI / SHOW_UI (game.gd)
+# mapworkshop (openbfme-cinematics.patch): RotWK's cinematic maps' own requests (maps\cin *): OPTIONS_SET_DRAWICON_UI_MODE (game.gd _set_icons_drawn),
+# SET_CAMERA_CLIP_DEPTH_MULTIPLIER and MOVE_CAMERA_BY_ANIMATION (_play_animation)
+var icons_hook := Callable()
+var _clip := 1.0           # the far plane's multiplier
+var _base_far := 0.0       # the camera's far plane without it (outside HUD mode; in HUD mode the HUD sets retail's every frame before this node)
+var _anim: Dictionary = {} # the camera animation playing (GameWorld.get_camera_animation), held at its last key once done
+var _anim_ms := 0.0
 
 
 func setup(w: Node3D, cam: Camera3D, start: Vector3, ui_parent: Node, audio: Node = null) -> void:
@@ -76,6 +83,7 @@ func setup(w: Node3D, cam: Camera3D, start: Vector3, ui_parent: Node, audio: Nod
 	_objectives.add_theme_constant_override("outline_size", 4)
 	ui.add_child(_objectives)
 	ui_parent.add_child(ui)
+	_base_far = camera.far
 	_place_camera()
 
 
@@ -96,6 +104,15 @@ func _process(delta: float) -> void:
 			movie_hook.call(String(r.params[0].string))
 		# lane CAMP-2: ScriptActions::executeAction (RW 0x7CAFA5): cases 118 / 119 doLetterBoxMode (RW 0x7BC8B7: HideControlBar(true) or ShowControlBar(false),
 		# then the display's letterbox), cases 347 / 348 HIDE_UI / SHOW_UI (HideControlBar(true) / ShowControlBar(false)); in the requests' order
+		# mapworkshop (openbfme-cinematics.patch): a script move takes the camera from an animation; the cinematic maps' set-up requests
+		if r.action == "MOVE_CAMERA_BY_ANIMATION" and r.params.size() > 0:
+			_play_animation(String(r.params[0].string))
+		elif r.action.begins_with("MOVE_CAMERA") or r.action == "RESET_CAMERA" or r.action == "SETUP_CAMERA" or r.action == "CAMERA_FOLLOW_NAMED":
+			_anim = {}
+		elif r.action == "OPTIONS_SET_DRAWICON_UI_MODE" and r.params.size() > 0 and icons_hook.is_valid():
+			icons_hook.call(int(r.params[0].int) != 0)
+		elif r.action == "SET_CAMERA_CLIP_DEPTH_MULTIPLIER" and r.params.size() > 0:
+			_clip = maxf(float(r.params[0].real), 0.01)
 		if control_bar_hook.is_valid():
 			if r.action == "CAMERA_LETTERBOX_BEGIN" or r.action == "HIDE_UI":
 				control_bar_hook.call(true)
@@ -111,8 +128,13 @@ func _process(delta: float) -> void:
 	# ZOOM_CAMERA / PITCH_CAMERA: factors of the default framing (S-1182)
 	distance = _base_distance * float(st.get("zoom", 1.0))
 	pitch = _base_pitch * float(st.get("pitch", 1.0))
-	if not hud_mode or st.letterbox or st.moving or st.input_disabled:
+	if not _anim.is_empty():
+		_anim_ms += delta * 1000.0
+		_place_animation() # mapworkshop (openbfme-cinematics.patch): the animation has the camera
+	elif not hud_mode or st.letterbox or st.moving or st.input_disabled:
 		_place_camera()
+	if _clip != 1.0:
+		camera.far = (camera.far if hud_mode else _base_far) * _clip # mapworkshop (openbfme-cinematics.patch): SET_CAMERA_CLIP_DEPTH_MULTIPLIER
 	if _audio != null:
 		_audio.set_listener(Vector3(target.x, target.y, target.z), Vector3(sin(angle), cos(angle), 0.0))
 	var size := get_viewport().get_visible_rect().size
@@ -141,6 +163,51 @@ func _process(delta: float) -> void:
 		lines.append(("[x] " if o.completed else "[ ] ") + "objective %d" % o.index)
 	_objectives.text = "\n".join(lines) if dev_overlay else ""
 	_objectives.position = Vector2(size.x - 220.0, bar + 40.0)
+
+
+## mapworkshop (openbfme-cinematics.patch): MOVE_CAMERA_BY_ANIMATION plays the map's CameraAnimationList entry of that name: a "look" animation's
+## camera keys and look-at keys, each through its keys by Catmull-Rom ('catm', or straight for 'line') at 30 frames a second (a RotWK capture: a
+## still 7.5 s into a 14 s orbit matched that point, mapworkshop's docs/game/scripts.md), its first key's field of view horizontal (the HUD's
+## KEEP_WIDTH). The camera holds the last pose until a script move or another animation. A "free" animation is not played: the convention of its
+## rotation is not decoded (reported).
+func _play_animation(name: String) -> void:
+	var a: Dictionary = world.get_camera_animation(name)
+	if not a.get("ok", false) or a["type"] != "look" or a["keys"].is_empty() or a["look_at"].is_empty():
+		print("SCRIPTREQ camera animation '%s' not played: %s" % [name, "a free animation" if a.get("type", "") == "free" else "no look animation of that name"])
+		return
+	_anim = a
+	_anim_ms = 0.0
+
+
+func _place_animation() -> void:
+	var f := _anim_ms * 0.03
+	var eye := _through(_anim["keys"], f)
+	var at := _through(_anim["look_at"], f)
+	camera.position = Vector3(eye.x, eye.z, -eye.y)
+	if not eye.is_equal_approx(at):
+		camera.look_at(Vector3(at.x, at.z, -at.y))
+	camera.fov = rad_to_deg(float(_anim["keys"][0].fov))
+	target = at
+
+
+## the point of the keys (SAGE) at frame f
+func _through(keys: Array, f: float) -> Vector3:
+	var n := keys.size()
+	if n == 1 or f <= float(keys[0].frame):
+		return keys[0].pos
+	if f >= float(keys[n - 1].frame):
+		return keys[n - 1].pos
+	var i := 0
+	while i < n - 2 and f > float(keys[i + 1].frame):
+		i += 1
+	var p1: Vector3 = keys[i].pos
+	var p2: Vector3 = keys[i + 1].pos
+	var t := (f - float(keys[i].frame)) / maxf(float(keys[i + 1].frame - keys[i].frame), 1.0)
+	if String(keys[i].interp) == "line":
+		return p1.lerp(p2, t)
+	var p0: Vector3 = keys[maxi(i - 1, 0)].pos
+	var p3: Vector3 = keys[mini(i + 2, n - 1)].pos
+	return 0.5 * ((2.0 * p1) + (p2 - p0) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t)
 
 
 func _place_camera() -> void:

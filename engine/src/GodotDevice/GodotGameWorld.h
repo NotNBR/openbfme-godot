@@ -342,6 +342,10 @@ public:
 	Dictionary get_script_report() const;
 	// a map waypoint by name (SAGE coordinates): { ok, x, y, z }
 	Dictionary get_waypoint(const String &name) const;
+	// mapworkshop (openbfme-cinematics.patch): the loaded map's camera animation of that name (CameraAnimationList, GameClient/MapChunks.h) for
+	// MOVE_CAMERA_BY_ANIMATION: { ok, type ("look" / "free"), frames, keys: [{ frame, interp, pos (SAGE), quat, fov, roll }], look_at: [{ frame,
+	// interp, pos }] }
+	Dictionary get_camera_animation(const String &name) const;
 	// lane SCRIPT-2 test hooks (the start option test_hooks, never in a network game; between logic frames): a named unit placed at a trigger area's
 	// centre or a waypoint, a named unit killed (a horde through its members, its indestructible flag lifted): the player's part of a campaign capture
 	Dictionary debug_script_place(const String &name, const String &where);
