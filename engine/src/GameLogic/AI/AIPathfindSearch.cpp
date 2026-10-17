@@ -32,6 +32,12 @@
 
 namespace
 {
+// lane UBER-3P (Uber profile only): a cell search that cannot reach its goal ends once its answer held for this many cells (internalFindPath)
+constexpr int kUberStallCells = 256;
+} // namespace
+
+namespace
+{
 inline int realToIntFloor(float f)
 {
 	return SimMath::floorToInt(f);
@@ -1248,6 +1254,7 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
 	int bestPosition = 0; // RW [ebp + 0x24]: the best corridor position so far (0 to start with: a cell off the corridor, -1, never qualifies)
 	int bestD2 = std::numeric_limits<int>::max();
 	int slack = std::numeric_limits<int>::max();
+	int closestAt = 0, candidateAt = 0; // lane UBER-3P: the cell counts when `closest`, and the candidate key, last changed
 	while (!m_open.empty())
 	{
 		PathfindCell *c = m_open.pop();
@@ -1304,13 +1311,33 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
 			}
 			if (candidate)
 			{
+				candidateAt = cellCount;
 				bestClose = key;
 				int out = 0;
 				if (checkDestination(obj, c->getXIndex(), c->getYIndex(), destinationLayer, radius, centerInCell, &out, false) && out == 0 &&
 					validMovementPosition(mv, c))
 				{
 					closest = c;
+					closestAt = cellCount;
 				}
+			}
+		}
+		// lane UBER-3P (Uber profile only, docs/UBER.md): a search that cannot reach its goal (an approximate search: the goal is in another zone or
+		// not a valid movement position; or the goal cell was closed, its footprint rejected) ends here once its answer has held for kUberStallCells
+		// cells: the closest cell (or, with none yet, the candidate key that would test a new one) did not change, and the exhausted search's answer
+		// (the path to that closest cell, or none) is given. In a battle the repaths toward a contact point in the press fail this way and kept
+		// expanding up to the slack or MaxCellsFindPathLimit. Measured on the 30,000-troop clash (2,094 searches): a failed search's closest cell was
+		// final after ~10 cells and never replaced 250 cells on; 1,182 of the 1,644 unreachable searches found no closest cell at all (72% of their
+		// cells), 45 of them tested a candidate after such a pause. A tunnelling search tests no candidates: its pause starts when it leaves the obstacle
+		if (m_uberLimits && (approx || goalCell->getClosed()))
+		{
+			if (m_isTunneling)
+			{
+				candidateAt = cellCount;
+			}
+			else if (cellCount - (closest != nullptr ? closestAt : candidateAt) >= kUberStallCells)
+			{
+				break;
 			}
 		}
 		// TARGET RW 0x6FDB7F .. 0x6FDBD9: an approximate search skips a cell beyond the slack unless it is within 10 cells; with a corridor only after 2000 cells

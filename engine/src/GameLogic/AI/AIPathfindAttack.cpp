@@ -27,6 +27,13 @@
 
 #include <limits>
 
+namespace
+{
+// lane UBER-3P (Uber profile only): a search with no endpoint ends once its closest cell held for this many examined cells (internalFindPath's
+// kUberStallCells)
+constexpr int kUberAttackStallCells = 256;
+} // namespace
+
 Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomotorInfo &loco, const Coord3D *from, const PathfindObject *victim, const Coord3D *victimPos,
 	float victimRadius, const PathfindAttackRange &range, bool pathThrough, bool *fallback)
 {
@@ -153,6 +160,7 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
 	int bestCount = 9999999;
 	int closestD2 = std::numeric_limits<int>::max();
 	int examined = 0;
+	int closestAt = 0; // lane UBER-3P: the examined count when `closest` last changed
 	Path *result = nullptr;
 	while (!m_open.empty())
 	{
@@ -166,6 +174,7 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
 		{
 			closestD2 = d2;
 			closest = c;
+			closestAt = examined;
 		}
 		Coord3D centre;
 		adjustCoordToCell(c->getXIndex(), c->getYIndex(), center, centre, c->getLayer());
@@ -192,6 +201,13 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
 					}
 				}
 			}
+		}
+		// lane UBER-3P (Uber profile only, docs/UBER.md): with no endpoint yet and the closest cell unchanged for kUberAttackStallCells examined cells,
+		// the search ends with the fallback the exhausted search gives (the path to that closest cell). In the 30,000-troop clash 126 of 200 attack
+		// searches found no endpoint and spent 75% of their cells after such a pause; no endpoint of the other 74 came after one
+		if (m_uberLimits && best == nullptr && examined - closestAt >= kUberAttackStallCells)
+		{
+			break;
 		}
 		if (examined < m_config.findAttackPathLimit)
 		{
