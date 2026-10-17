@@ -814,9 +814,11 @@ public:
 	// ---- queue ----
 	bool queueForPath(PathfindObjectID id);
 	// lane PATHPERF-4 (Uber profile only, docs/UBER.md): retail's request rings hold 511 units (a refused unit waits for a path that never comes, until its
-	// next order) and the queue serves MaxPathfindCellsPerFrame cells a call. With the Uber limits the rings hold kUberQueueLength and the budget is
-	// kUberBudgetScale times retail's, so a mass order is served in a few frames. A Faithful game never turns them on
-	enum { kUberQueueLength = 16384, kUberBudgetScale = 4 };
+	// next order) and the queue serves MaxPathfindCellsPerFrame cells a call. With the Uber limits the rings hold kUberQueueLength and, while at least
+	// kUberBurstQueue requests wait (a mass order), the budget is kUberBudgetScale times retail's, so the burst is served in a few frames. A sustained
+	// battle's repaths keep 60-90 waiting (10,000 troops): they get retail's budget, which a larger one would only spend on the same steady trickle
+	// (+34 ms a frame at 4x). A Faithful game never turns the limits on
+	enum { kUberQueueLength = 16384, kUberBudgetScale = 4, kUberBurstQueue = 120, kUberBurstEnd = 40 };
 	void setUberLimits(bool on);
 	bool uberLimits() const { return m_uberLimits; }
 	// lane PATHPERF-4: the cell-info pool grows past PathfindConfig::cellInfoPoolSize up to this many records (about 100 MB), as retail's grows; the
@@ -980,6 +982,7 @@ private:
 	bool m_memoActive = false;
 	bool m_searchShortcuts = true;
 	bool m_uberLimits = false; // lane PATHPERF-4
+	bool m_uberBurst = false;  // lane PATHPERF-4: the queue is draining a burst (hashed in an Uber game)
 	// lane PATHPERF-2: the line memo (LineMemoScope): an open-addressed table of (cell index * 10 + entry code + 1) -> blocked, entries valid in generation
 	// m_lineMemoGen; the parameters are bound by the scope's first isLinePassable call
 	struct LineMemoEntry

@@ -407,10 +407,15 @@ a path that never comes until its next order. It also serves only
 `MaxPathfindCellsPerFrame` cells a call, so a mass order is served over
 seconds (150 hordes: 4.6 s, 300 single soldiers: 9.6 s, `pathperf1 bench`).
 
-- **Uber rule change:** the two request rings hold 16,384 units and the cell
-  budget is 4 times retail's (`Pathfinder::setUberLimits`). The same orders are
-  served in 1.4 s and 4.6 s; the heaviest frame of the 150 hordes' order is
-  40 ms (`PATHPERF1_PROFILE=uber`). The Uber pin vector was regenerated.
+- **Uber rule change:** the two request rings hold 16,384 units
+  (`Pathfinder::setUberLimits`), and during a burst the cell budget is 4 times
+  retail's: a burst starts at 120 waiting requests (a mass order) and lasts
+  until 40 or fewer wait. A sustained battle's repaths keep 60-90 waiting
+  (10,000 troops) and never start one; an always-4x budget only spent its
+  time on that steady trickle (logic 232 instead of 197 ms a frame at 10,000
+  troops, one thread). The 150 hordes' order is served in 1.6 s, the 300
+  soldiers' in 4.6 s (`PATHPERF1_PROFILE=uber`). The burst flag is in the
+  Uber state hash; the Uber pin vector was regenerated.
 - **Both profiles:** the pathfinder's cell-info pool grows past its 60,000
   records up to 1,000,000, as retail's grows, instead of failing searches and
   reservations in a big battle. Nothing changes until the first 60,000 are in

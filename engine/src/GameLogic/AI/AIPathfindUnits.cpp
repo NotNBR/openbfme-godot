@@ -1464,7 +1464,14 @@ void Pathfinder::processPathfindQueue(PathfindRequestHandler &handler)
 	int budget = m_config.cellsPerFrame;
 	if (m_uberLimits)
 	{
-		budget *= kUberBudgetScale; // lane PATHPERF-4 (Uber only)
+		// lane PATHPERF-4 (Uber only): a burst (a mass order) starts at kUberBurstQueue waiting requests and lasts until the queue is down to
+		// kUberBurstEnd; the steady repaths of a fight never start one
+		const size_t queued = m_queue1.size() + m_queue2.size();
+		m_uberBurst = m_uberBurst ? queued > (size_t)kUberBurstEnd : queued >= (size_t)kUberBurstQueue;
+		if (m_uberBurst)
+		{
+			budget *= kUberBudgetScale;
+		}
 	}
 	if (m_world && m_world->getFrame() < 25u)
 	{

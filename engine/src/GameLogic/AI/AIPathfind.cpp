@@ -225,6 +225,7 @@ Pathfinder::Pathfinder(const PathfindConfig &config, const PathfindWorld *world)
 	m_zoneManager.setBlockSize(config.zoneBlockSize);
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 }
 
 Pathfinder::~Pathfinder() {}
@@ -251,6 +252,7 @@ void Pathfinder::reset()
 	m_zoneManager.reset();
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 	m_units.clear();
 	m_unitIndex.clear();
 }
@@ -327,6 +329,7 @@ void Pathfinder::newMap(const PathfindTerrain &terrain, const std::vector<Pathfi
 	m_blockOfMapCells.assign((size_t)(bounds.hi.x + 1) * (size_t)(bounds.hi.y + 1), PathfindCell());
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 	m_units.clear();
 	m_unitIndex.clear();
 	m_stops.clear();
@@ -544,6 +547,10 @@ void Pathfinder::crc(StateHasher &h) const
 		}
 	}
 	m_zoneManager.crc(h);
+	if (m_uberLimits)
+	{
+		h.addU32(m_uberBurst ? 1u : 0u); // lane PATHPERF-4: Uber only, a Faithful game hashes as before
+	}
 	h.addU32((std::uint32_t)m_queue1.size());
 	for (size_t i = 0; i < m_queue1.size(); ++i)
 	{
