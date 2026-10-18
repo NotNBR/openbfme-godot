@@ -26,7 +26,10 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/GlobalWeatherSystem.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -161,7 +164,11 @@ TEST_CASE("weather1 setting: a map.ini Weather block is an override that starts 
 	CHECK(contains(error, "WeatherSetting defined twice"));
 	CHECK(s.overrideCount() == 0);
 	// map.ini (load type 2): an override; a second override starts from the base again, not from the first override
-	REQUIRE(s.loadText(nullptr, "map.ini", "Object Foo\n  Draw = W3DModelDraw x\n  End\nEnd\nWeather\n  SnowSpeed = 60\n  IsSnowing = Yes\nEnd\n", 2, &error));
+	// the world's blocks of a map.ini (Object, and Weapon, which the shared stub table would parse into TheWeaponStore) are skipped
+	REQUIRE_MESSAGE(s.loadText(nullptr, "map.ini",
+						"Object Foo\n  Draw = W3DModelDraw x\n  End\nEnd\nWeapon MapWeapon\n  AttackRange = 10\nEnd\nWeather\n  SnowSpeed = 60\n  IsSnowing = Yes\nEnd\n",
+						2, &error),
+		error);
 	CHECK(s.overrideCount() == 1);
 	CHECK(s.finalSetting().snowSpeed == 60.0f);
 	CHECK(s.finalSetting().isSnowing);
@@ -572,6 +579,57 @@ TEST_CASE("weather1 retail: weather.ini, environment.ini and a snowy map's map.i
 	e.setSoundValidator(anySound({ "RainStereoLoop" }));
 	REQUIRE_MESSAGE(e.loadForMap(*m->fs, "map mp evendim", &error), error);
 	CHECK(e.finalSetting().snowTexture == "EXRainDrop.tga");
+}
+
+TEST_CASE("weather1 retail: every map with a map.ini / solo.ini loads its weather; the snowing maps and their textures")
+{
+	retailtest::Mount *m = retailtest::pureMount();
+	if (!m || !m->fs)
+	{
+		retailtest::printSkip("weather1 retail: every map");
+		return;
+	}
+	FilenameList files;
+	m->fs->getFileListInDirectory("maps\\", "maps\\", "*.ini", files, true);
+	std::set<std::string> dirs;
+	for (const std::string &f : files)
+	{
+		std::string lower = f;
+		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)(c == '/' ? '\\' : std::tolower(c)); });
+		const size_t cut = lower.rfind('\\');
+		const std::string leaf = cut == std::string::npos ? lower : lower.substr(cut + 1);
+		if (leaf == "map.ini" || leaf == "solo.ini")
+		{
+			dirs.insert(lower.substr(0, cut));
+		}
+	}
+	std::vector<std::string> failed, snowing;
+	size_t overrides = 0;
+	for (const std::string &d : dirs)
+	{
+		WeatherSettingStore s;
+		s.setSoundValidator(anySound({ "RainStereoLoop" }));
+		std::string error;
+		if (!s.loadForMap(*m->fs, d, &error))
+		{
+			failed.push_back(d + ": " + error);
+			continue;
+		}
+		overrides += s.overrideCount();
+		if (s.finalSetting().isSnowing)
+		{
+			snowing.push_back(d.substr(5) + "=" + s.finalSetting().snowTexture);
+		}
+	}
+	MESSAGE(dirs.size() << " map folders, " << overrides << " Weather overrides, snowing: " << snowing.size());
+	CHECK(failed.empty());
+	for (const std::string &f : failed)
+	{
+		MESSAGE(f);
+	}
+	CHECK(std::find(snowing.begin(), snowing.end(), "map mp withered heath=EXSnowFlake2.tga") != snowing.end());
+	CHECK(std::find(snowing.begin(), snowing.end(), "map good ettenmoors=EXSnowFlake1.tga") != snowing.end());
+	CHECK(std::find(snowing.begin(), snowing.end(), "map ang barrow wights=EXSnowFlake2.tga") == snowing.end()); // its snow block is commented out
 }
 
 TEST_CASE("weather1 logic: the presented snapshot carries TheGlobalWeatherSystem's weather; the stop lines")

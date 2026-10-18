@@ -188,13 +188,53 @@ struct WeatherBlockParsers
 
 namespace
 {
+// the recording stubs' lenient extent (INIBlockStubs.cpp): every line up to the next one that starts in column 0 with a registered block keyword
+void skipBlock(INI *ini)
+{
+	for (;;)
+	{
+		const std::string *next = ini->peekNextLine();
+		if (!next)
+		{
+			return;
+		}
+		const std::string &l = *next;
+		if (!l.empty() && l[0] != ' ' && l[0] != '\t' && l[0] != '\v' && l[0] != '\f')
+		{
+			const size_t b = l.find_first_not_of(" \n\r\t=");
+			if (b != std::string::npos)
+			{
+				size_t e = l.find_first_of(" \n\r\t=", b);
+				if (e == std::string::npos)
+				{
+					e = l.size();
+				}
+				if (ini->environment().blocks.contains(l.substr(b, e - b)))
+				{
+					return;
+				}
+			}
+		}
+		ini->readLine();
+	}
+}
+
 class Load
 {
 public:
 	Load(ArchiveFileSystem *fs, WeatherSettingStore &store) : m_store(store)
 	{
 		m_env.fileSystem = fs;
-		RegisterRecordingBlockStubs(m_env.blocks, m_recorder, { "Weather", "WeatherData", "CloudEffect" }, StubExtent::Lenient);
+		// the blocks of a map.ini that the shared stub table parses for real into the world's stores (RetailObjectWorld::applyMapIni parses them
+		// there): here they are skipped like the other recording stubs (lenient extent), they are not the weather's
+		static const char *const kWorldBlocks[] = { "Locomotor", "FXList", "FXParticleSystem", "Weapon", "Armor", "DamageFX" };
+		std::vector<std::string> skip = { "Weather", "WeatherData", "CloudEffect" };
+		skip.insert(skip.end(), std::begin(kWorldBlocks), std::end(kWorldBlocks));
+		RegisterRecordingBlockStubs(m_env.blocks, m_recorder, skip, StubExtent::Lenient);
+		for (const char *k : kWorldBlocks)
+		{
+			m_env.blocks.registerBlock(k, [](INI *ini) { skipBlock(ini); });
+		}
 		m_env.blocks.registerBlock("Weather", [this](INI *ini) { WeatherBlockParsers::weather(m_store, ini); });
 		m_env.blocks.registerBlock("WeatherData", [this](INI *ini) { WeatherBlockParsers::weatherData(m_store, ini); });
 		m_env.blocks.registerBlock("CloudEffect", [this](INI *ini) { WeatherBlockParsers::cloudEffect(m_store, ini); });
