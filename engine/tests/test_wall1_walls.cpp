@@ -6,6 +6,7 @@
 
 #include "doctest.h"
 
+#include "HudTestUtil.h"
 #include "PathfindTestUtil.h"
 #include "StartTestUtil.h"
 
@@ -14,6 +15,7 @@
 #include "Common/PlayerTemplate.h"
 #include "GameClient/DrawableWallMeshes.h"
 #include "GameClient/GUI/Skirmish/IniSkirmishSetupSource.h"
+#include "GameClient/HudObjects.h"
 #include "GameClient/LiveGame.h"
 #include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
 #include "GameLogic/AI/AIPathfind.h"
@@ -769,4 +771,78 @@ TEST_CASE("wall1 walls retail: on Helm's Deep a horde ordered onto a wall top ge
 	CHECK(members == 15); // GondorFighterHorde's 15 soldiers
 	CHECK(up == members);
 	CHECK(maxStep < 20.0f); // tolerance: a walking member's stride in one logic frame (its speed / 5) stays below 20; a member put on its goal would jump much farther
+}
+// the owner's report after the pathfinder fix: a right click on a wall top still ordered nothing. RotWK gives a WALK_ON_TOP_OF_WALL object the selectable pick
+// type (RW 0x4B583C, test_hud5_gatebutton.cpp), so the order click picks the wall section the cursor is on; it is the local player's (Helm's Deep's fortress)
+// and has no command of its own, and the click on an own object ordered nothing (ZH CommandXlat.cpp:2294)
+TEST_CASE("wall1 walls retail: a right click on a Helm's Deep wall top orders the selected hero onto it (MSG_DO_MOVETO), the wall section under the cursor is no target")
+{
+	if (!hudtest::haveWorld("wall1 right click"))
+	{
+		return;
+	}
+	hudtest::Rig rig(hudtest::shared(), "map wor helms deep", "FactionMen");
+	rig.frame(2);
+	Pathfinder &pf = rig.game->ai().pathfinder();
+	const TerrainLogic *terrain = rig.logic().terrain();
+	REQUIRE(terrain);
+	const Waypoint *startWp = terrain->findWaypointByName("Player_1_Start");
+	REQUIRE(startWp);
+	Object *hero = rig.make("GondorBoromir", startWp->location.x, startWp->location.y);
+	REQUIRE(hero);
+	rig.frame(2);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	Coord3D goal;
+	PathfindLayerEnum wallLayer = LAYER_INVALID;
+	REQUIRE(reachableWallTop(pf, ai->adapter(), ai->locomotorInfo(), *hero->getPosition(), goal, wallLayer));
+	goal.z = pf.getLayerHeight(goal.x, goal.y, wallLayer);
+	// the alternate mouse setup (the right click orders); the player's selection: a left click on the hero (MSG_CREATE_SELECTED_GROUP: the order click needs the
+	// team, CommandXlat.h)
+	rig.input->commandTranslator().setUseAlternateMouse(true);
+	rig.lookAt(*hero->getPosition());
+	rig.frame(1);
+	const Coord3D hp = *hero->getPosition();
+	const ICoord2D heroPx = rig.screenOf({ hp.x, hp.y, hp.z + 6.0f });
+	rig.leftClick(heroPx.x, heroPx.y);
+	REQUIRE(rig.input->ui().selected() == std::vector<ObjectID>{ hero->getID() });
+	rig.frame(1);
+	rig.lookAt(goal);
+	rig.frame(1);
+	const ICoord2D px = rig.screenOf(goal);
+	const Object *picked = HudObjects::pickObject(rig.input->context(), px);
+	REQUIRE(picked);
+	CHECK(picked->isKindOfName("WALK_ON_TOP_OF_WALL")); // the wall section under the cursor
+	const size_t before = rig.input->messageLog().size();
+	rig.rightClick(px.x, px.y);
+	std::string moveLine;
+	for (size_t i = before; i < rig.input->messageLog().size(); ++i)
+	{
+		const std::string &l = rig.input->messageLog()[i];
+		moveLine = l.rfind("MSG_DO_MOVETO", 0) == 0 ? l : moveLine;
+	}
+	std::string outcomes;
+	for (const auto &kv : rig.input->commandTranslator().clickOutcomes())
+	{
+		outcomes += " " + kv.first + "=" + std::to_string(kv.second);
+	}
+	INFO("picked " << picked->getTemplate()->getName() << ", sent: " << moveLine << ", outcomes:" << outcomes);
+	REQUIRE(!moveLine.empty());
+	CHECK(rig.input->commandTranslator().clickOutcomes().at("command on an object") == 1); // the click met the wall section and ordered the move
+	for (int f = 0; f < 900; ++f)
+	{
+		rig.frame(1);
+		const Coord3D p = *hero->getPosition();
+		const float dx = p.x - goal.x, dy = p.y - goal.y;
+		if (dx * dx + dy * dy < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	const Coord3D at = *hero->getPosition();
+	const float dx = at.x - goal.x, dy = at.y - goal.y;
+	INFO("the hero stands at " << at.x << ", " << at.y << ", " << at.z << " on layer " << (int)ai->adapter().getLayer());
+	CHECK(dx * dx + dy * dy < 900.0f); // tolerance: the walk ends within the locomotor's close-enough distance of the clicked point
+	CHECK(isWallLayer(ai->adapter().getLayer()));
+	CHECK(at.z == pf.getLayerHeight(at.x, at.y, ai->adapter().getLayer()));
 }
