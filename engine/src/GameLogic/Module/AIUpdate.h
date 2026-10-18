@@ -425,6 +425,8 @@ protected:
 		Object *target = nullptr;
 		CommandSourceType source = CMD_FROM_AI;
 		int waypointId = -1;
+		float angle = 0.0f;          // lane SIEGE-1: the move with an angle's final angle (DeployStyleAIUpdate gives a kept command again)
+		int maxShots = 0x7FFFFFFF;   // lane SIEGE-1: the attack commands' shot limit (AICommandParms m_intValue)
 	};
 	virtual bool routeCommand(const RoutedCommand &command) { (void)command; return false; }
 	void setLastCommandSource(CommandSourceType s) { m_lastCommandSource = s; }

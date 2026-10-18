@@ -30,6 +30,7 @@
 #include "GameLogic/Module/SiegeModules.h"
 #include "GameLogic/Object/Contain/SiegeEngineContainRuntime.h"
 #include "GameLogic/Object/Object.h"
+#include "GameLogic/Object/RetailObjectWorld.h"
 #include "GameLogic/ScriptEngine/ScriptConditions.h"
 #include "GameLogic/ScriptEngine/ScriptEngine.h"
 #include "GameLogic/ScriptEngine/ScriptTemplates.h"
@@ -200,6 +201,7 @@ TEST_CASE("siege1 retail: Helm's Deep's wall sections read their dock points fro
 		return;
 	}
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3); // the docks read their bones on their first update (RW 0x85D216), one frame after they were made
 	std::map<std::string, int> walls, tower, ladder;
 	int uninitialised = 0;
@@ -243,6 +245,7 @@ TEST_CASE("siege1 retail: without WALL-2's DynamicPortalBehaviour a siege ladder
 		return;
 	}
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -304,6 +307,7 @@ TEST_CASE("siege1 retail: with a portal answering IsEndPortalAboveWall a siege l
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -390,6 +394,7 @@ TEST_CASE("siege1 retail: a deployed siege ladder's berserker goes onto the wall
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -446,6 +451,7 @@ TEST_CASE("siege1 retail: a right click on a Helm's Deep wall with a siege ladde
 		return;
 	}
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -489,6 +495,7 @@ TEST_CASE("siege1 retail: Mordor's siege tower docks only at the wall's SIEGETOW
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionMordor");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r, "MordorSiegeTower", 0);
@@ -528,6 +535,7 @@ TEST_CASE("siege1 retail: a player's order during the approach ends the deploy (
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -573,6 +581,7 @@ TEST_CASE("siege1 retail: an Uruk horde's SiegeDeployHordeSpecialPower (HordeDep
 		return;
 	}
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -609,6 +618,7 @@ TEST_CASE("siege1 retail: a unit on the wall reaches a deployed ladder at its to
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	r.game->shroud().revealMapForPlayerPermanently(r.index());
 	LadderScene sc(r);
@@ -657,6 +667,7 @@ TEST_CASE("siege1 retail: the scripts' DEPLOY_SIEGE_ON_NAMED_WALL / RETRACT_SIEG
 	}
 	PortalScope portals;
 	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(3);
 	LadderScene sc(r);
 	sc.ladder->setName("SIEGE1 Ladder");
@@ -727,6 +738,7 @@ TEST_CASE("siege1 retail: Grond (CrusherLevel 2) drives over an enemy soldier an
 		return;
 	}
 	Rig r(shared(), "map mp fall back 4p", "FactionMordor");
+	const auto worldContext = shared().world->enterContext(); // this world's stores: a started game run before may have selected its own
 	r.frame(2);
 	Player *enemy = r.game->players().findPlayerWithName("Player_2");
 	REQUIRE(enemy);
@@ -757,13 +769,14 @@ TEST_CASE("siege1 retail: Grond (CrusherLevel 2) drives over an enemy soldier an
 	CHECK_FALSE(crushes("MordorBatteringRam"));
 }
 
-TEST_CASE("siege1: the stop lines of the siege deploy are S-4870 .. S-4873 and the siege modules have their runtime classes")
+TEST_CASE("siege1: the stop lines of the siege deploy are S-4870 .. S-4873 and S-4875, and the siege modules have their runtime classes")
 {
 	const std::vector<std::string> lines = SiegeModules::stopLines();
-	REQUIRE(lines.size() == 3u);
+	REQUIRE(lines.size() == 4u);
 	CHECK(lines[0].rfind("[S-4870]", 0) == 0);
 	CHECK(lines[1].rfind("[S-4871]", 0) == 0);
 	CHECK(lines[2].rfind("[S-4872]", 0) == 0);
+	CHECK(lines[3].rfind("[S-4875]", 0) == 0);
 	CHECK(std::string(siegeExitStopLine()).rfind("[S-4873]", 0) == 0);
 	CHECK(std::string(SiegeModules::portalStopLine()) == lines[0]);
 }

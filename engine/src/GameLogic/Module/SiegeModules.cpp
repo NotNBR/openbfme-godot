@@ -2,6 +2,7 @@
 // See GameLogic/Module/SiegeModules.h for the target facts and what is inference (lane SIEGE-1).
 
 #include "GameLogic/Module/SiegeModules.h"
+#include "GameLogic/Module/DeployStyleAIUpdate.h"
 
 #include "Common/NumericState.h"
 #include "Common/Player.h"
@@ -278,7 +279,7 @@ bool siegeTowerTopReach(Object &tower, const Coord3D &sourcePos, float sourceRad
 
 std::vector<std::string> SiegeModules::stopLines()
 {
-	return { kStopPortal, kStopAdjust, kStopSiege };
+	return { kStopPortal, kStopAdjust, kStopSiege, DeployStyleAIUpdate::stopLine() };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1396,6 +1397,7 @@ void SiegeModules::registerAll(ModuleFactory &modules)
 	bindRuntime<SiegeDeploySpecialPower, SiegeDeploySpecialPowerModuleData>(modules, "SiegeDeploySpecialPower");
 	bindRuntime<SiegeDeployHordeSpecialPower, SiegeDeployHordeSpecialPowerModuleData>(modules, "SiegeDeployHordeSpecialPower");
 	bindRuntime<StopSpecialPower, StopSpecialPowerModuleData>(modules, "StopSpecialPower");
+	DeployStyleModules::registerAll(modules); // the Demolisher deploy (GameLogic/Module/DeployStyleAIUpdate.cpp)
 	// after AIUpdateInterface::registerClasses: SiegeAIUpdate replaces the base AI's binding (as DozerAIUpdate does)
 	modules.bindModuleProc("SiegeAIUpdate", MODULETYPE_BEHAVIOR, [](Thing *thing, const ModuleData *data, const ModuleFactory::ModuleTemplate &info) -> std::unique_ptr<Module> {
 		if (!thing->asObject() || !thing->asObject()->logic().aiWorld())

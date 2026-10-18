@@ -385,7 +385,7 @@ private:
 namespace SiegeModules
 {
 void registerAll(ModuleFactory &modules);
-// [S-4870] .. [S-4874]: the stop lines the siege modules note when they are made (they reach GameLogic::report().stops)
+// [S-4870] .. [S-4872] and [S-4875] (DeployStyleAIUpdate): the stop lines the siege modules note when they are made (they reach GameLogic::report().stops)
 std::vector<std::string> stopLines();
 const char *portalStopLine();
 } // namespace SiegeModules

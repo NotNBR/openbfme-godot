@@ -821,6 +821,7 @@ void AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float a
 	{
 		RoutedCommand c; // lane FLY-1
 		c.type = kCommandUnidentifiedMove;
+		c.angle = angle;
 		c.position = pos;
 		c.source = source;
 		if (routeCommand(c))

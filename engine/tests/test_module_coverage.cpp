@@ -109,11 +109,11 @@ TEST_CASE("module coverage: every registry class is ported, base AI, parsed only
 	// DualWeaponBehavior: +2 -> 121 / 186; GARRISON-2 (TransportContain, HordeTransportContain, SiegeEngineContain, HordeSiegeEngineContain,
 	// TunnelContain): +5 -> 126 / 181; MOD-4 (AISpecialPowerUpdate, RepairSpecialPower, SpawnBehavior, SlavedUpdate): +4 -> 130 / 177;
 	// AUDIO-4 (LargeGroupAudioUpdate, AnimationSoundClientBehavior): +2 -> 132 / 175; CAMP-1 (AttachUpdate): +1 -> 133 / 174;
-	// HUD-5 (GateOpenAndCloseBehavior, AIGateUpdate): +2 -> 135 / 172; DECOMP-2 (ModelCondition / Upgrade / RandomSoundSelectorClientBehavior): +3 -> 138 / 169; SPELL-3 (FloodUpdate): +1 -> 139 / 168; FACT-B (WeaponChangeSpecialPowerModule, CastleUpgrade): +2 -> 141 / 166; FACT-A (ObjectCreationUpgrade, ReplaceSelfUpgrade; its CastleUpgrade is FACT-B's): +2 -> 143 / 164; FACT-C (HordeDispatchSpecialPower; its ObjectCreationUpgrade is FACT-A's, replaced by FACT-C's port): +1 -> 144 / 163; FLY-1 (GiantBirdAIUpdate: base AI -> ported): 145, base AI 8; SIEGE-1 (SiegeDockingBehavior, SiegeDeploySpecialPower, SiegeDeployHordeSpecialPower, StopSpecialPower; SiegeAIUpdate: base AI -> ported): 150 / 159, base AI 7
-	CHECK(c.ported == 150);
-	CHECK(c.baseAi == 7);
+	// HUD-5 (GateOpenAndCloseBehavior, AIGateUpdate): +2 -> 135 / 172; DECOMP-2 (ModelCondition / Upgrade / RandomSoundSelectorClientBehavior): +3 -> 138 / 169; SPELL-3 (FloodUpdate): +1 -> 139 / 168; FACT-B (WeaponChangeSpecialPowerModule, CastleUpgrade): +2 -> 141 / 166; FACT-A (ObjectCreationUpgrade, ReplaceSelfUpgrade; its CastleUpgrade is FACT-B's): +2 -> 143 / 164; FACT-C (HordeDispatchSpecialPower; its ObjectCreationUpgrade is FACT-A's, replaced by FACT-C's port): +1 -> 144 / 163; FLY-1 (GiantBirdAIUpdate: base AI -> ported): 145, base AI 8; SIEGE-1 (SiegeDockingBehavior, SiegeDeploySpecialPower, SiegeDeployHordeSpecialPower, StopSpecialPower; SiegeAIUpdate: base AI -> ported): 150 / 159, base AI 7; SIEGE-1 (ToggleDeploySpecialAbilityUpdate; DeployStyleAIUpdate: base AI -> ported): 152 / 158, base AI 6
+	CHECK(c.ported == 152);
+	CHECK(c.baseAi == 6);
 	CHECK(c.parsedOnly == 13);
-	CHECK(c.missing == 159);
+	CHECK(c.missing == 158);
 
 	if (const char *out = std::getenv("OPENBFME_MODULE_COVERAGE_OUT"))
 	{
