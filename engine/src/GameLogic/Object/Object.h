@@ -156,6 +156,10 @@ public:
 	// RW 0x68D252: every create module's onBuildComplete, in module order; run after an object that is complete at birth was made and placed (the map loop,
 	// production, a finished construction)
 	void friend_onBuildComplete();
+	// lane WALL-2: RW 0x694692's first part: every behaviour module's onMapPlacement (the +0xC interface's slot 45) in module order. The callers: the map
+	// object loop (the map object's properties) and Construction::constructOnPlot (null). Not ported here: the rest of RW 0x694692 (the drawable call RW
+	// 0x671DE4 and objectUpgradesList, which MapObjectLoop applies itself)
+	void friend_onMapPlacement(const Dict *properties);
 	// RW 0x698F06 (the part lane ECON-1 ports): every die module's onDie, then the object's command points leave the player's pool (RW 0x698FD9). The death pipeline
 	// of the combat lane calls this; GameLogic::destroyObject does not (retail's does not either)
 	void friend_onDie(const DieModuleInterface::Event &event);

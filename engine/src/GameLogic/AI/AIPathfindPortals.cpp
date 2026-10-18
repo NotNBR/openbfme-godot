@@ -145,7 +145,7 @@ void Pathfinder::destroyWaypoint(int id)
 	}
 	if (m_waypointSlots[(size_t)s].w.hasCell)
 	{
-		removePortal(id); // its cell must not keep a slot that a later waypoint reuses (RW's caller removes the portal first: DynamicPortalBehaviour RW 0x86391A)
+		removePortal(id); // its cell must not keep a slot that a later waypoint reuses (RW's caller removes the portal first: DynamicPortalBehaviour RW 0x8639EF)
 	}
 	m_waypointSlots[(size_t)s].used = false;
 	m_waypointSlots[(size_t)s].w = PathfindWaypoint();
@@ -229,7 +229,7 @@ void Pathfinder::removePortal(int id)
 
 void Pathfinder::pathsLostPortals()
 {
-	// RW 0x6E8454 (DynamicPortalBehaviour's portal removal RW 0x86391A and FakePathfindPortalBehaviour's RW 0x864980 call it)
+	// RW 0x6E8454 (DynamicPortalBehaviour's portal removal RW 0x8639EF and FakePathfindPortalBehaviour's RW 0x864980 call it)
 	if (m_world)
 	{
 		m_world->onPathsLostPortals();

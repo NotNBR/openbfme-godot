@@ -1,0 +1,440 @@
+// OpenBFME unit tests, lane WALL-2: the portal modules (GameLogic/Module/PortalModules.h) on retail data. GPL-3.0.
+//
+// Helm's Deep's HelmsDeepCulvert carries DynamicPortalBehaviour PosternGatePortal (TriggeredBy Upgrade_PosternGate; BonePrefix Post, 4 bones; six Walk
+// waypoints at the bones 0, 1, 2, 3, 2, 1; Link From:0 Via:4 Via:5 To:3 and From:3 Via:1 Via:2 To:0). The expected structure comes from createWaypoints
+// as read (RW 0x86404D); the positions are the culvert drawable's Post01 .. Post04 bones at the object's transform.
+
+#include "doctest.h"
+
+#include "StartTestUtil.h"
+
+#include "Common/Player.h"
+#include "Common/PlayerList.h"
+#include "Common/PlayerTemplate.h"
+#include "Common/Upgrade.h"
+#include "GameClient/GUI/Skirmish/IniSkirmishSetupSource.h"
+#include "GameClient/LiveGame.h"
+#include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
+#include "GameLogic/AI/AIPathfind.h"
+#include "GameLogic/AI/AIWorld.h"
+#include "GameLogic/Map/TerrainLogic.h"
+#include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/GateModules.h"
+#include "GameLogic/Module/PortalModules.h"
+#include "GameLogic/NewGame/NewGame.h"
+#include "GameLogic/Object/Object.h"
+#include "GameLogic/SimMath.h"
+#include "GameLogic/SkirmishAI/SkirmishAIManager.h"
+#include "Libraries/WWVegas/WW3D2/assetmgr.h"
+
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace
+{
+using namespace starttest;
+
+int templateIndex(Shared &s, const std::string &name)
+{
+	for (int i = 0; i < s.world->playerTemplates().getPlayerTemplateCount(); ++i)
+	{
+		const PlayerTemplate *pt = s.world->playerTemplates().getNthPlayerTemplate(i);
+		if (pt && pt->getName() == name)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+// slot 0 (start 0, Player_1_Start: the fortress) is the human, or the skirmish AI when `aiFortress`
+NewGameMessage helmsDeep(Shared &s, bool aiFortress = false)
+{
+	NewGameMessage m;
+	m.game.mapName = "maps/map wor helms deep/map wor helms deep.map";
+	m.game.seed = 11;
+	m.game.startingCash = 1000;
+	const char *factions[2] = { "FactionMen", "FactionMordor" };
+	for (int i = 0; i < 2; ++i)
+	{
+		SkirmishGameSlot &sl = m.game.slots[i];
+		const bool human = (i == 0) != aiFortress;
+		sl.state = human ? SLOT_PLAYER : SLOT_EASY_AI;
+		sl.name = human ? u"Host" : u"Easy";
+		sl.accepted = true;
+		sl.playerTemplate = templateIndex(s, factions[i]);
+		REQUIRE(sl.playerTemplate >= 0); // tolerance: the index of a found template (-1: not found)
+		sl.startPos = i;
+		sl.color = i;
+	}
+	return m;
+}
+
+struct PortalGame
+{
+	Shared &s;
+	NewGameStart start{ RandomAlgorithm::ZH_CarryChain };
+	ArchiveW3DFileSource source;
+	WW3DAssetManager assets;
+	std::unique_ptr<LiveGame> game;
+	explicit PortalGame(Shared &sh, bool aiFortress = false) : s(sh), source(*sh.mount->fs), assets(source)
+	{
+		std::string error;
+		static std::vector<MapCacheEntry> cache;
+		if (cache.empty())
+		{
+			REQUIRE_MESSAGE(IniSkirmishSetupSource::loadMapCache(*s.mount->fs, cache, &error), error);
+		}
+		REQUIRE_MESSAGE(NewGame::prepareNewGame(helmsDeep(s, aiFortress),s.world->playerTemplates(), s.settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
+		game = std::make_unique<LiveGame>(*s.world, *s.mount->fs, assets, s.options);
+		LiveGame::Options o;
+		o.start = &start;
+		REQUIRE_MESSAGE(game->load(o, &error), error);
+	}
+	void frames(int n)
+	{
+		for (int i = 0; i < n; ++i)
+		{
+			game->advance(0.2);
+		}
+	}
+	Object *first(const char *name)
+	{
+		for (Object *o = game->logic().getFirstObject(); o; o = o->getNextObject())
+		{
+			if (o->getTemplate()->getName() == name)
+			{
+				return o;
+			}
+		}
+		return nullptr;
+	}
+};
+} // namespace
+
+TEST_CASE("wall2 modules: the stop lines of the portal modules are S-4853 .. S-4855 in id order")
+{
+	const std::vector<std::string> stops = PortalModules::stopLines();
+	REQUIRE(stops.size() == 3);
+	CHECK(stops[0].rfind("[S-4853] DynamicPortalBehaviour (RW 0x86404D)", 0) == 0);
+	CHECK(stops[1].rfind("[S-4854] DynamicPortalBehaviour (RW 0x864357): a WallBoundsMesh", 0) == 0);
+	CHECK(stops[2].rfind("[S-4855] DynamicPortalBehaviour (RW 0x864357 / 0x863D3A)", 0) == 0);
+}
+
+TEST_CASE("wall2 modules retail: Upgrade_PosternGate on Helm's Deep's culvert makes the six waypoints at its Post bones, the two portals and the INI's links")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *culvert = g.first("HelmsDeepCulvert");
+	REQUIRE(culvert);
+	DynamicPortalBehaviour *portal = DynamicPortalBehaviour::of(*culvert);
+	REQUIRE(portal);
+	CHECK_FALSE(portal->created()); // TriggeredBy Upgrade_PosternGate, no GenerateNow
+	const size_t before = pf.waypointCount();
+	const UpgradeTemplate *u = TheUpgradeCenter ? TheUpgradeCenter->findUpgrade("Upgrade_PosternGate") : nullptr;
+	REQUIRE(u);
+	culvert->giveUpgrade(u);
+	REQUIRE(portal->created());
+	CHECK(pf.waypointCount() == before + 6);
+	const std::array<int, DynamicPortalBehaviour::MAX_WAYPOINTS> &id = portal->waypointIds();
+	const PathfindWaypoint *w[6];
+	for (int i = 0; i < 6; ++i)
+	{
+		w[i] = pf.findWaypoint(id[(size_t)i]);
+		REQUIRE(w[i]);
+		CHECK(w[i]->type == PWAYPOINT_WALK);
+		CHECK(w[i]->owner == (PathfindObjectID)culvert->getID());
+		CHECK(w[i]->activationFrame == 0u); // no ActivationDelaySeconds
+		MESSAGE("waypoint " << i << " id " << w[i]->id << " at " << w[i]->pos.x << ", " << w[i]->pos.y << ", " << w[i]->pos.z);
+	}
+	// ids in WayPoint order from the counter
+	for (int i = 1; i < 6; ++i)
+	{
+		CHECK(id[(size_t)i] == id[(size_t)i - 1] + 1);
+	}
+	// the bones: WayPoint 4 is bone 2 (WayPoint 2's), 5 is bone 1
+	CHECK(w[4]->pos.x == w[2]->pos.x);
+	CHECK(w[4]->pos.y == w[2]->pos.y);
+	CHECK(w[5]->pos.x == w[1]->pos.x);
+	CHECK(w[5]->pos.y == w[1]->pos.y);
+	// Link From:0 Via:4 Via:5 To:3: 0 -> 3, the chain 0 -> 4 -> 5; From:3 Via:1 Via:2 To:0: 3 -> 0, 3 -> 1 -> 2
+	CHECK(w[0]->numLinks == 1);
+	CHECK(w[0]->links[0] == id[3]);
+	CHECK(w[3]->numLinks == 1);
+	CHECK(w[3]->links[0] == id[0]);
+	CHECK(w[0]->next == id[4]);
+	CHECK(w[4]->next == id[5]);
+	CHECK(w[5]->next == PathfindWaypoint::NO_ID);
+	CHECK(w[3]->next == id[1]);
+	CHECK(w[1]->next == id[2]);
+	// the portals: the two ends (AddPortal), the vias are none (+ 0x48 = 0)
+	CHECK(Pathfinder::isPortalWaypoint(*w[0]));
+	CHECK(Pathfinder::isPortalWaypoint(*w[3]));
+	for (int i : { 1, 2, 4, 5 })
+	{
+		CHECK_FALSE(Pathfinder::isPortalWaypoint(*w[i]));
+	}
+	CHECK(w[0]->hasCell);
+	CHECK(w[3]->hasCell);
+	// the ends lie on the ground on either side of the wall: different zones of the ground grid
+	const PathfindCell *c0 = pf.getCell(LAYER_GROUND, &w[0]->pos);
+	const PathfindCell *c3 = pf.getCell(LAYER_GROUND, &w[3]->pos);
+	REQUIRE(c0);
+	REQUIRE(c3);
+	MESSAGE("cell types " << (int)c0->getType() << " / " << (int)c3->getType() << ", zones " << c0->getZone() << " / " << c3->getZone());
+	// the upgrade's removal or the culvert's death takes them away again (RW 0x8639EF)
+	DieModuleInterface::Event e;
+	portal->onDie(e);
+	CHECK_FALSE(portal->created());
+	CHECK(portal->disabled());
+	CHECK(pf.waypointCount() == before);
+	CHECK(pf.findWaypoint(id[0]) == nullptr);
+}
+
+TEST_CASE("wall2 modules retail: through Helm's Deep's postern gate: a hero ordered across the culvert walks its waypoints, the gate's portal joins the wall's two sides")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *culvert = g.first("HelmsDeepCulvert");
+	REQUIRE(culvert);
+	Player *owner = culvert->getControllingPlayer();
+	REQUIRE(owner);
+	MESSAGE("culvert at " << culvert->getPosition()->x << ", " << culvert->getPosition()->y << " owned by player " << owner->getPlayerIndex() << " type " << (int)owner->getPlayerType());
+	const Coord3D outside{ 1730.0f, 3110.0f, 0.0f }, inside{ 1730.0f, 2810.0f, 0.0f };
+	std::string error;
+	Object *hero = g.game->createObject("GondorBoromir", owner->getPlayerIndex(), outside, 0.0f, &error);
+	REQUIRE_MESSAGE(hero, error);
+	g.frames(2);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	Coord3D from = *hero->getPosition(), to = inside;
+	MESSAGE("ground: outside " << g.game->logic().getGroundHeight(outside.x, outside.y) << ", inside " << g.game->logic().getGroundHeight(inside.x, inside.y));
+	bool partial = false;
+	Path *p = pf.findPath(&ai->adapter(), ai->locomotorInfo(), &from, &to, &partial);
+	MESSAGE("before the gate: " << (p ? (int)p->nodeCount() : -1) << " nodes, partial " << partial
+	                            << (p ? ", ends at " + std::to_string(p->getLastNode()->getPosition()->x) + ", " + std::to_string(p->getLastNode()->getPosition()->y) : std::string()));
+	// without the gate the wall (the culvert's footprint) stops the path at its outer face
+	REQUIRE(p);
+	CHECK(partial);
+	CHECK(p->getLastNode()->getPosition()->y == 2930.5f);
+	delete p;
+	const UpgradeTemplate *u = TheUpgradeCenter ? TheUpgradeCenter->findUpgrade("Upgrade_PosternGate") : nullptr;
+	REQUIRE(u);
+	culvert->giveUpgrade(u);
+	DynamicPortalBehaviour *portal = DynamicPortalBehaviour::of(*culvert);
+	REQUIRE(portal);
+	REQUIRE(portal->created());
+	partial = true;
+	p = pf.findPath(&ai->adapter(), ai->locomotorInfo(), &from, &to, &partial);
+	REQUIRE(p);
+	CHECK_FALSE(partial);
+	CHECK(p->nodeCount() == 17);
+	// the path through the gate (prependCells RW 0x6EF591): the node at Post01 (the portal crossed), then the Via chain 4, 5 prepended in reverse (Post02,
+	// Post03: the INI lists the vias backwards for that), then the far end Post04, each of them and the node after carrying the id of the waypoint the step to
+	// it starts from
+	const std::array<int, DynamicPortalBehaviour::MAX_WAYPOINTS> &id = portal->waypointIds();
+	std::vector<std::pair<float, int>> marked;
+	const float w0y = pf.findWaypoint(id[0]) ? pf.findWaypoint(id[0])->pos.y : 0.0f;
+	int ids = 0;
+	for (const PathNode *nd = p->getFirstNode(); nd; nd = nd->getNext())
+	{
+		ids += nd->getWaypointID() != PathNode::NO_WAYPOINT ? 1 : 0;
+		CHECK(nd->getLayer() == LAYER_GROUND);
+		if (nd->getWaypointID() != PathNode::NO_WAYPOINT || nd->getPosition()->y == w0y)
+		{
+			marked.push_back({ nd->getPosition()->y, nd->getWaypointID() });
+		}
+	}
+	CHECK(ids == 4);
+	const PathfindWaypoint *w0 = pf.findWaypoint(id[0]), *w1 = pf.findWaypoint(id[1]), *w2 = pf.findWaypoint(id[2]), *w3 = pf.findWaypoint(id[3]);
+	REQUIRE(w0);
+	REQUIRE(w1);
+	REQUIRE(w2);
+	REQUIRE(w3);
+	const std::vector<std::pair<float, int>> expected = { { w0->pos.y, (int)PathNode::NO_WAYPOINT }, { w1->pos.y, id[0] }, { w2->pos.y, id[5] },
+		{ w3->pos.y, id[4] }, { 2860.5f, id[3] } };
+	CHECK(marked == expected);
+	delete p;
+	ai->aiMoveToPosition(inside, CMD_FROM_PLAYER);
+	bool sawPortal = false;
+	for (int f = 0; f < 600; ++f)
+	{
+		g.frames(1);
+		sawPortal = sawPortal || ai->mover().onPortal();
+		const Coord3D q = *hero->getPosition();
+		if ((q.x - inside.x) * (q.x - inside.x) + (q.y - inside.y) * (q.y - inside.y) < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	const Coord3D at = *hero->getPosition();
+	INFO("the hero stands at " << at.x << ", " << at.y << ", " << at.z);
+	CHECK(sawPortal);
+	CHECK(at.x == 1730.5f);
+	CHECK(at.y == 2810.5f);
+	CHECK(ai->adapter().getLayer() == LAYER_GROUND);
+	CHECK_FALSE(ai->mover().onPortal());
+}
+
+TEST_CASE("wall2 modules retail: a horde ordered across Helm's Deep's culvert takes its postern gate: every member ends inside the wall; without the gate none does")
+{
+	OPENBFME_REQUIRE_START(s);
+	for (const bool gate : { false, true })
+	{
+		PortalGame g(*s);
+		g.frames(2);
+		Object *culvert = g.first("HelmsDeepCulvert");
+		REQUIRE(culvert);
+		Player *owner = culvert->getControllingPlayer();
+		REQUIRE(owner);
+		if (gate)
+		{
+			const UpgradeTemplate *u = TheUpgradeCenter ? TheUpgradeCenter->findUpgrade("Upgrade_PosternGate") : nullptr;
+			REQUIRE(u);
+			culvert->giveUpgrade(u);
+		}
+		const Coord3D outside{ 1730.0f, 3150.0f, 0.0f }, inside{ 1730.0f, 2790.0f, 0.0f };
+		std::string error;
+		Object *horde = g.game->createObject("GondorFighterHorde", owner->getPlayerIndex(), outside, 0.0f, &error);
+		REQUIRE_MESSAGE(horde, error);
+		g.frames(10);
+		AIUpdateInterface *ai = horde->getAIUpdateInterface();
+		REQUIRE(ai);
+		ai->aiMoveToPosition(inside, CMD_FROM_PLAYER);
+		int hordeOnPortal = 0;
+		for (int f = 0; f < 600; ++f)
+		{
+			g.frames(1);
+			hordeOnPortal += ai->mover().onPortal() ? 1 : 0;
+		}
+		// inside: south of the culvert's inner face (Post04 at y 2872.9)
+		int members = 0, inner = 0;
+		for (Object *o = g.game->logic().getFirstObject(); o; o = o->getNextObject())
+		{
+			if (o->getContainedBy() == horde && o->getAIUpdateInterface())
+			{
+				++members;
+				inner += o->getPosition()->y < 2872.0f ? 1 : 0; // tolerance: south of Post04, the gate's inner end
+			}
+		}
+		const Coord3D hp = *horde->getPosition();
+		MESSAGE(std::string(gate ? "with" : "without") << " the gate: horde at " << hp.x << ", " << hp.y << ", " << hordeOnPortal << " frames on a portal, " << inner << " of " << members
+		                                     << " members inside");
+		CHECK(members == 15); // GondorFighterHorde's 15 soldiers
+		if (gate)
+		{
+			// the horde's own path crosses the gate: its point ahead on the waypoint nodes for 19 frames (AI + 0x3BB; a HORDE appearance locomotor walks them on
+			// the ground, RW 0x669E47 .. 0x669E89); the members follow their formation slots with straight steps (RW 0x6F1B3E asks the target cell only)
+			CHECK(hordeOnPortal == 19);
+			CHECK(inner == members);
+			CHECK(hp.y < 2872.0f); // tolerance: the horde itself stands south of Post04
+		}
+		else
+		{
+			CHECK(hordeOnPortal == 0);
+			CHECK(inner == 0);
+		}
+	}
+}
+
+TEST_CASE("wall2 modules retail: FakePathfindPortalBehaviour: a skirmish AI's closed Helm's Deep gate is a portal pair of type 7 waypoints; opened, the pair is unregistered")
+{
+	OPENBFME_REQUIRE_START(s);
+	for (const bool aiFortress : { false, true })
+	{
+		PortalGame g(*s, aiFortress);
+		g.frames(3);
+		Pathfinder &pf = g.game->ai().pathfinder();
+		int gates = 0, made = 0;
+		for (Object *o = g.game->logic().getFirstObject(); o; o = o->getNextObject())
+		{
+			FakePathfindPortalBehaviour *fp = dynamic_cast<FakePathfindPortalBehaviour *>(o->findModule("FakePathfindPortalBehaviour"));
+			if (!fp)
+			{
+				continue;
+			}
+			++gates;
+			GateOpenAndCloseBehavior *gate = GateOpenAndCloseBehavior::findGate(*o);
+			const Player *owner = o->getControllingPlayer();
+			const bool ai = owner && g.game->logic().skirmishAI().findAI(owner->getPlayerIndex()) != nullptr;
+			MESSAGE(o->getTemplate()->getName() << " at " << o->getPosition()->x << ", " << o->getPosition()->y << " angle " << o->getOrientation() << ": gate "
+			                                    << (gate != nullptr) << ", skirmish AI " << ai << ", created " << fp->created() << ", registered " << fp->registered());
+			if (!ai || !gate)
+			{
+				CHECK_FALSE(fp->created()); // RW 0x864EAA: no AI or no gate -> sleep forever, nothing made
+				continue;
+			}
+			++made;
+			REQUIRE(fp->created());
+			const PathfindWaypoint *a = pf.findWaypoint(fp->waypoint(0));
+			const PathfindWaypoint *b = pf.findWaypoint(fp->waypoint(1));
+			REQUIRE(a);
+			REQUIRE(b);
+			CHECK(a->type == PWAYPOINT_TYPE7);
+			CHECK(b->type == PWAYPOINT_TYPE7);
+			CHECK(a->owner == (PathfindObjectID)o->getID());
+			CHECK_FALSE(a->allowEnemies);       // AllowEnemies = No
+			CHECK_FALSE(a->allowNonSkirmishAI); // AllowNonSkirmishAIUnits = No
+			CHECK(a->numLinks == 1);
+			CHECK(a->links[0] == b->id);
+			CHECK(b->links[0] == a->id);
+			// the pair is symmetric about the gate's position (the offset and 0 - the offset), each on the terrain
+			CHECK(SimMath::addf32(a->pos.x, b->pos.x) == SimMath::addf32(o->getPosition()->x, o->getPosition()->x));
+			CHECK(a->pos.z == g.game->logic().getGroundHeight(a->pos.x, a->pos.y));
+			CHECK(b->pos.z == g.game->logic().getGroundHeight(b->pos.x, b->pos.y));
+			// registered while the gate is not open (RW 0x86498E), unregistered once it is (RW 0x8649B7). The AI's own AIGateUpdate opens the gate for an ally
+			// in its trigger box (RW 0x8B4D34)
+			CHECK(gate->isOpen() == !fp->registered());
+			if (gates == 1 && !gate->isOpen())
+			{
+				CHECK(Pathfinder::isPortalWaypoint(*a));
+				std::string error;
+				// an AI unit beyond one end paths to beyond the other through the pair (the closed gate blocks the ground)
+				const Coord3D &gp = *o->getPosition();
+				const Coord3D from{ SimMath::addf32(a->pos.x, SimMath::subf32(a->pos.x, gp.x)), SimMath::addf32(a->pos.y, SimMath::subf32(a->pos.y, gp.y)), 0.0f };
+				Coord3D to{ SimMath::addf32(b->pos.x, SimMath::subf32(b->pos.x, gp.x)), SimMath::addf32(b->pos.y, SimMath::subf32(b->pos.y, gp.y)), 0.0f };
+				Object *walker = g.game->createObject("GondorFighter", owner->getPlayerIndex(), from, 0.0f, &error);
+				REQUIRE_MESSAGE(walker, error);
+				AIUpdateInterface *wai = walker->getAIUpdateInterface();
+				REQUIRE(wai);
+				Coord3D start = *walker->getPosition();
+				bool partial = true;
+				Path *p = pf.findPath(&wai->adapter(), wai->locomotorInfo(), &start, &to, &partial);
+				REQUIRE(p);
+				int ids = 0;
+				for (const PathNode *nd = p->getFirstNode(); nd; nd = nd->getNext())
+				{
+					ids += nd->getWaypointID() != PathNode::NO_WAYPOINT ? 1 : 0;
+				}
+				MESSAGE("AI unit from " << from.x << ", " << from.y << " to " << to.x << ", " << to.y << ": " << p->nodeCount() << " nodes, partial " << partial << ", "
+				                        << ids << " waypoint nodes");
+				// the closed door is no obstacle of the ground grid here (the port's gate footprint, S-1940): the search walks straight through and takes no
+				// portal (a portal hop costs 1400 more, RW 0x6F1F0D)
+				CHECK_FALSE(partial);
+				CHECK(ids == 0);
+				delete p;
+				g.game->logic().destroyObject(walker);
+				g.frames(1);
+				Object *ally = g.game->createObject("GondorFighter", owner->getPlayerIndex(), *o->getPosition(), 0.0f, &error);
+				REQUIRE_MESSAGE(ally, error);
+				int f = 0;
+				for (; f < 150 && !gate->isOpen(); ++f)
+				{
+					g.frames(1);
+				}
+				REQUIRE(gate->isOpen());
+				g.frames(1);
+				CHECK_FALSE(fp->registered());
+				CHECK_FALSE(Pathfinder::isPortalWaypoint(*pf.findWaypoint(fp->waypoint(0))));
+			}
+		}
+		MESSAGE((aiFortress ? std::string("AI fortress: ") : std::string("human fortress: ")) << gates << " gates with the module, " << made << " made their pair");
+		CHECK(gates > 0); // tolerance: Helm's Deep places gates with the module
+		CHECK((made > 0) == aiFortress);
+	}
+}
