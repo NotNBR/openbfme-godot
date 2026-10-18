@@ -360,7 +360,7 @@ bool GarrisonContain::isValidContainerFor(const Object &obj, bool checkCapacity,
 			getEntryOffset(to);
 			Coord3D from = *obj.getPosition();
 			Pathfinder &pf = ai->world().pathfinder();
-			if (!pf.clientSafeQuickDoesPathExist(ai->locomotorInfo(), &from, &to) && !quickPathToContainer(pf, ai->locomotorInfo(), from, *getObject()))
+			if (!pf.clientSafeQuickDoesPathExist(ai->locomotorInfo(), &from, &to, &ai->adapter()) && !quickPathToContainer(pf, ai->locomotorInfo(), from, *getObject()))
 			{
 				return false;
 			}

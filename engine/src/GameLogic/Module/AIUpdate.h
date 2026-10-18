@@ -327,6 +327,7 @@ public:
 	float locomotorSpeed() const override;
 	bool movingBackwards() const override;
 	bool setModelCondition(const char *name, bool on) override;
+	void revealDisguiseOnClimb() override; // lane WALL-2: RW 0x66A143 (a Climb portal)
 	void startMoveSound() override; // lane AUDIO-3: RW 0x748C0B
 	void stopMoveSound() override;
 	float relativeAngleTo(const Coord3D &p) const override;

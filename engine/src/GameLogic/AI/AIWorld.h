@@ -125,6 +125,7 @@ public:
 	bool isEffectivelyDead() const override; // lane MOVE-3: Object + 0x458 bit 0
 	bool hordeFill(int &count, int &slots) const override; // lane MOVE-3: RW 0x6F1584's contain slots 0x7C / 0x70 / 0x114
 	const PathfindWallGeometry *getWallGeometry() const override; // lane WALL-1: from the world's PathfindWallMeshSource, kept while the transform holds
+	bool isSkirmishAIControlled() const override; // lane WALL-2: Waypoint::isValidUnitType's AllowNonSkirmishAI test
 
 private:
 	// AIWorld::movementInfo of the object's template, remembered with the template it was looked up for (lane PERF-1: the pathfinder and the
@@ -230,6 +231,8 @@ public:
 	// ---- PathfindWorld ----
 	PathfindObject *findObjectByID(PathfindObjectID id) const override;
 	unsigned getFrame() const override;
+	// lane WALL-2: RW 0x6E8454 (see PathfindWorld): the logic's objects in list order, each AI whose path names a waypoint that is gone is told
+	void onPathsLostPortals() const override; // const: the pathfinder holds its world const
 
 	// ---- state hash (MOVE-1: logic state that lives outside the objects) ----
 	// the pathfinder's queues and pools: a summary, O(1) (the grid itself follows from the units' hashed state)

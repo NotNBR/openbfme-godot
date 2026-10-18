@@ -453,7 +453,7 @@ bool Pathfinder::meleeBackOff(PathfindObject &obj, const PathfindLocomotorInfo &
 	// RW 0x6FB754 (lane PLAY-4: CanApproachToTarget ported; PHYS-1 had taken isLinePassable for it, whose goal reservations of other units closed every
 	// line out of a horde, so a lone melee unit never got near a horde member)
 	const bool open = canApproachToTarget(obj, loco, *dest, weaponRange, meleeWeapon);
-	if (open && clientSafeQuickDoesPathExist(loco, &pos, dest))
+	if (open && clientSafeQuickDoesPathExist(loco, &pos, dest, &obj)) // RW 0x6F5BB0 with the unit (lane WALL-2: its portals)
 	{
 		return true;
 	}
@@ -477,7 +477,7 @@ bool Pathfinder::meleeBackOff(PathfindObject &obj, const PathfindLocomotorInfo &
 	{
 		p.x = SimMath::subf32(p.x, dx);
 		p.y = SimMath::subf32(p.y, dy);
-		if (clientSafeQuickDoesPathExist(loco, &pos, &p))
+		if (clientSafeQuickDoesPathExist(loco, &pos, &p, &obj))
 		{
 			reached = true;
 			break;

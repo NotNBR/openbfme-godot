@@ -16,8 +16,9 @@
 //     the raw nodes (node + 0) after the given node, at most 20 in all. A popped cell (RW 0x6F4AF2) that is a target ends the search: a new Path
 //     (RW 0x765A1A) gets the cells from the unit's position (RW 0x6EF591) and is marked optimised (+ 0xC = 1) as it is; else the cell is closed
 //     (RW 0x934594), the search ends once more than 3000 cell records were taken, the layer links of the cell are expanded (RW 0x6F6286: bridge / wall
-//     layers and portals, S-161: none here), then the eight neighbours (RW 0xDA2514 / 0xDA24F4: the orthogonal four first, a diagonal only beside an
-//     accepted orthogonal one) that exist, are neither open nor closed and share a layer: a neighbour whose footprint cost (RW 0x6ED46C, the cells the
+//     layers and portals, lane WALL-2), then the eight neighbours (RW 0xDA2514 / 0xDA24F4: the orthogonal four first, a diagonal only beside an
+//     accepted orthogonal one) that exist, are neither open nor closed and whose layers are compatible (RW 0x6F7C1E .. 0x6F7C63: the same test as
+//     PathfindCell::layersCompatible): a neighbour whose footprint cost (RW 0x6ED46C, the cells the
 //     parent's footprint does not cover) is negative or that fails validMovementPosition is closed; else its cost so far is the footprint cost + the step
 //     (RW 0x934602) + 10 for a pinched cell (cell bit 16) more than 3 (manhattan) from the point's cell + 1000 for an obstacle cell (type 4), its
 //     blocked-by-ally bit (info + 0x2C bit 0) is cleared, its parent set (RW 0x93442F) and its total is that plus costToGoal to the point's cell;
@@ -33,8 +34,8 @@
 //   * RW 0x767A66 (the splice): RW 0x765598 with `opt` 0 finds the segment of the raw chain closest to the patch's last node; without one the patch is
 //     dropped; else the nodes before that segment's start are deleted, the patch's last node is linked (next and next optimised) to the start's raw next,
 //     the start is deleted, the path begins with the patch, and the follower restarts at its head (+ 0x10 = head, + 0x14 = 0).
-// PORT NOTES: the occupant lists are the port's per-cell lists (OCC_GROUND_GOAL = + 0x14, OCC_POSITION = + 0x20, OCC_HORDE_POSITION = + 0x24); only the
-// ground layer exists (S-161), so the layer tests of the expansion always pass and RW 0x6F6286 adds nothing.
+// PORT NOTES: the occupant lists are the port's per-cell lists (OCC_GROUND_GOAL = + 0x14, OCC_POSITION = + 0x20, OCC_HORDE_POSITION = + 0x24); the raised
+// layers 2 .. 15 are not ported (S-161): RW 0x6F6286's layer half finds the ground grid's own cell there (closed: nothing).
 
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindStops.h"
@@ -252,7 +253,7 @@ Path *Pathfinder::patchPath(PathfindObject &obj, const PathfindLocomotorInfo &lo
 		startCell->clearParentCell();
 	}
 	startCell->startPathfind(goalCell);
-	startCell->setTotalCost(startCell->costToGoal(goalCell));
+	startCell->setTotalCost(costToGoal(startCell, goalCell)); // RW 0x6F1F0D (lane WALL-2)
 	m_open.clear();
 	m_closedList = nullptr;
 	m_open.push(startCell);
@@ -287,6 +288,7 @@ Path *Pathfinder::patchPath(PathfindObject &obj, const PathfindLocomotorInfo &lo
 		{
 			break;
 		}
+		checkChangeLayers(c, &obj); // RW 0x6F7B91 .. 0x6F7B95 (lane WALL-2)
 		bool accepted[4] = { false, false, false, false };
 		for (int i = 0; i < 8; i++)
 		{
@@ -297,6 +299,10 @@ Path *Pathfinder::patchPath(PathfindObject &obj, const PathfindLocomotorInfo &lo
 			if (n == nullptr || (n->hasInfo() && (n->getOpen() || n->getClosed())))
 			{
 				continue;
+			}
+			if (!PathfindCell::layersCompatible(*c, *n))
+			{
+				continue; // RW 0x6F7C1E .. 0x6F7C63 (lane WALL-2): the layer test of every search (a wall top's cell is no step from the ground beside it)
 			}
 			if (i >= 4 && !accepted[kSide[i - 4]] && !accepted[kSide[i - 3]])
 			{
@@ -343,7 +349,7 @@ Path *Pathfinder::patchPath(PathfindObject &obj, const PathfindLocomotorInfo &lo
 				step += 10;
 			}
 			n->setBlockedByAlly(false);
-			const unsigned rem = n->costToGoal(goalCell);
+			const unsigned rem = costToGoal(n, goalCell); // RW 0x6F1F0D (lane WALL-2)
 			if (n->getType() == PathfindCell::CELL_OBSTACLE)
 			{
 				step += 1000;

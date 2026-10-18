@@ -1542,6 +1542,16 @@ void AIUpdateInterface::stopMoveSound()
 	}
 }
 
+// lane WALL-2, RW 0x66A143 .. 0x66A166: the object's StealthUpdate (RW 0x68FBD3) with a disguise (+ 0x3C) marks it detected (RW 0x7767A9(0, 1, null, 1))
+void AIUpdateInterface::revealDisguiseOnClimb()
+{
+	StealthUpdate *st = StealthUpdate::of(*getObject());
+	if (st && st->disguiseTemplate())
+	{
+		st->markAsDetected(0, 1, nullptr, true);
+	}
+}
+
 bool AIUpdateInterface::setModelCondition(const char *name, bool on)
 {
 	if (m_destroying)

@@ -28,8 +28,8 @@
 //     connects to the ground layer, and a ramp cell beside a wall cell within 15 of that wall's height connects to that wall;
 //   * a wall-top or ramp cell drops bit 17 (the footprint's gate-area bit, which blocks every unit whose template has no CanPathThroughGates) and bit 18;
 //   * the pinch pass of ClassifyWall (a CLEAR cell with 2 of its 8 neighbours on another layer gets bit 16) is not applied;
-//   * RaisedWallMesh (a walkway on a raised layer 2 .. 15 over a passable gate) and the portals (DynamicPortalBehaviour, ladders, siege towers, EmbedPortal)
-//     are not ported (S-161).
+//   * RaisedWallMesh (a walkway on a raised layer 2 .. 15 over a passable gate) is not ported (S-161); the portals are lane WALL-2's (AIPathfindPortals.cpp,
+//     S-4850).
 
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindStops.h"

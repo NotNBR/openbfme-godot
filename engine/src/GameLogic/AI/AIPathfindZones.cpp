@@ -52,10 +52,12 @@ void PathfindZoneManager::reset()
 	m_zones.clear();
 	m_adjacent.clear();
 	m_tables.clear();
+	m_anyPortal = false;
 }
 
 void PathfindZoneManager::allocateBlocks(const PathfindRegion &globalBounds)
 {
+	m_anyPortal = false; // lane WALL-2: fresh blocks list no portals
 	// RW 0x939226: (hi - lo + blockSize) / blockSize on each axis
 	m_zoneBlockExtent.x = (globalBounds.hi.x - globalBounds.lo.x + m_blockSize) / m_blockSize;
 	m_zoneBlockExtent.y = (globalBounds.hi.y - globalBounds.lo.y + m_blockSize) / m_blockSize;

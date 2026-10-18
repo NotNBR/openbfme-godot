@@ -20,18 +20,18 @@ const char *const kShoreScanStaleEdge =
 	"for the first row, the port starts it at 0 (INFERENCE)";
 // S-161 layers
 const char *const kLayers =
-	"S-161 the raised layers 2 .. 15 (bridges, RaisedWallMesh walkways: cells of their own) and the portals (ladders, siege towers, postern gates: portal / "
-	"waypoint path nodes, RW 0x6F5547, 0x6F6286) are not modelled, nor the bridge-layer classifiers' writes of cell types 5 / 6 (RW 0x7688ED, 0x768ACC, "
-	"0x93503A: the port never makes a CELL_IMPASSABLE cell); the ground grid's wall tops (0x11 .. 0x40) and ramps (0x10) are (lane WALL-1, S-4840)";
+	"S-161 the raised layers 2 .. 15 (bridges, RaisedWallMesh walkways: cells of their own) are not modelled, nor the bridge-layer classifiers' writes of cell "
+	"types 5 / 6 (RW 0x7688ED, 0x768ACC, 0x93503A: the port never makes a CELL_IMPASSABLE cell); the ground grid's wall tops (0x11 .. 0x40) and ramps (0x10) are "
+	"(lane WALL-1, S-4840), and so are the portals (lane WALL-2, S-4850)";
 // lane MOVE-3: the blocked unit's path patch (S-1830)
 const char *const kPatchLayers =
-	"S-1830 patchPath (RW 0x6F7938) expands no layer links or portals (RW 0x6F6286, S-161: only the ground layer exists)";
+	"S-1830 patchPath (RW 0x6F7938) expands the layer links and portals of RW 0x6F6286 (lane WALL-2), but no raised layer 2 .. 15 exists (S-161)";
 // S-162 zones and the hierarchical search
 const char *const kZoneProfiles =
 	"S-162 the zone tables are built lazily per locomotor profile with the terrain variant read as obstacles-count-as-ground (INFERRED from the RW call sites); RW updates them incrementally and in a budgeted order";
 const char *const kHierarchical =
-	"S-162 the hierarchical block search of findPath (RW 0x6F9829) runs on the ground layer only (RW 0x6F8601): its bridge links (RW 0x9389CE), block portals "
-	"(RW 0x937F2D / 0x937F7F) and the mineshaft network's intermediate goal (RW 0x77559F, type 8 waypoints) are not ported, and the block-edge passability "
+	"S-162 the hierarchical block search of findPath (RW 0x6F9829) runs on the ground layer only (RW 0x6F8601): its bridge links (RW 0x9389CE) and the "
+	"mineshaft network's intermediate goal (RW 0x77559F, type 8 waypoints) are not ported (its block portals, RW 0x937F2D / 0x937F7F, are: lane WALL-2), and the block-edge passability "
 	"(RW 0x938240) is the port's zone pair test (INFERRED equal); findAttackPath's own corridor (RW 0x6FC4CB .. 0x6FC4F9) is not ported: it searches every block; "
 	"a goal inside the obstacle the unit ignores (a builder's own site) gets no corridor (INFERENCE: the port's builders aim inside the footprint)";
 // S-163 search
@@ -51,6 +51,20 @@ const char *const kWallLayer =
 	"heights (INFERENCE), wall-top and ramp cells drop bits 17 and 18, and ClassifyWall's pinch pass is not applied";
 const char *const kWallLayerCount =
 	"S-4840 more than 48 wall-top heights: the wall surface is left out of the pathfinder's map (RW allows 0x11 .. 0x40)";
+// S-4850 .. portals (lane WALL-2, AIPathfindPortals.cpp)
+const char *const kPortals =
+	"S-4850 portal waypoints live in the pathfinder (RW: TheTerrainLogic's waypoint list with the map's waypoints; the id counter restarts at each map), a map "
+	"waypoint of a portal type is not registered, the portal search's movement is the caller's locomotor set, and RW 0x68C053's object flag (Object + 0x4AC) is "
+	"never set (S-4851)";
+const char *const kPortalTable = "S-4850 more than 65534 portal waypoints: the waypoint is not created";
+const char *const kPortalType7 =
+	"S-4850 a type 7 waypoint with an owner was asked (RW 0x68230B tests the unit's AI byte + 0x3CF, not identified): it is refused";
+const char *const kPortalLostHorde =
+	"S-4852 a horde was crossing a portal that was removed: RW classifies its members before / on / after it (HordeContain slot 0x21C) and kills the ones on it; "
+	"the port only drops the horde's and its members' paths";
+const char *const kPortalLayerQuirk =
+	"S-4850 the hierarchical portal branch met a portal whose start cell is outside the block that lists it: RW then reads the raised layer of the portal's index "
+	"(RW 0x6F9156), not ported";
 const char *const kLargeRectFootprint =
 	"S-164 LARGE_RECTANGLE_PATHFIND footprints are axis-aligned boxes: the rotated polygon fill (RW 0x6ECC06 / 0x8E1E64) is not decoded";
 const char *const kLargeRectReservation =
@@ -60,7 +74,7 @@ const char *const kQueueTime =
 	"S-164 processPathfindQueue ignores the wall-clock frame-time budget of RW 0x6F2364 (GameData +0x11C0, 0x6ED163 when exceeded): the cell budget alone decides, so the port stays deterministic";
 // S-165 path
 const char *const kPath =
-	"S-165 path nodes carry no waypoint ids from the search (S-161), the backward optimiser's dot >= 0.9 rule is ported as read from RW 0x7661A3 without an independent oracle, and the path rebuild RW 0x767B0E is not ported";
+	"S-165 path nodes carry the waypoint ids of the portals the search crossed (RW 0x6EF591, lane WALL-2), the backward optimiser's dot >= 0.9 rule is ported as read from RW 0x7661A3 without an independent oracle, and the path rebuild RW 0x767B0E is not ported";
 // S-167 numerics
 const char *const kNumerics =
 	"S-167 float32 operations are plain C++ float with no fused multiply-add, square roots are the IEEE sqrt and footprint rotation uses SimMath::sinCosDet (deterministic, not libm): Windows and Linux agree, but RW mixes x87 and SSE and calls the x87 / CRT trigonometry, so bit parity with retail is not established";

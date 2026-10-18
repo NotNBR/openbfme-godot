@@ -538,7 +538,7 @@ bool canDoSpecialPowerAtLocation(Object &obj, const Coord3D &loc, const SpecialP
 			return false; // RW 0x6F5BB0: no AI (+ 0x260) and no locomotor set given -> no (INFERENCE: its earlier status / Object + 0x4AC tests, RW 0x44DDEC / 0x68C053, do not apply)
 		}
 		const PathfindLocomotorInfo loco = ai->locomotorInfo();
-		if (!world->pathfinder().clientSafeQuickDoesPathExist(loco, obj.getPosition(), &loc))
+		if (!world->pathfinder().clientSafeQuickDoesPathExist(loco, obj.getPosition(), &loc, &ai->adapter())) // lane WALL-2: with the unit, its portals
 		{
 			return false;
 		}

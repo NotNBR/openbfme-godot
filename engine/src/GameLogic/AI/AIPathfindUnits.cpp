@@ -1239,11 +1239,11 @@ bool Pathfinder::checkForAdjust(PathfindObject &obj, const PathfindLocomotorInfo
 	}
 	else
 	{
-		pathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), dest);
-		adjustedPathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), &adjustDest);
+		pathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), dest, &obj); // RW 0x6F5BB0 with the unit (lane WALL-2)
+		adjustedPathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), &adjustDest, &obj);
 		if (!pathExists)
 		{
-			if (clientSafeQuickDoesPathExist(loco, dest, &adjustDest))
+			if (clientSafeQuickDoesPathExist(loco, dest, &adjustDest, &obj))
 			{
 				adjustedPathExists = true;
 			}

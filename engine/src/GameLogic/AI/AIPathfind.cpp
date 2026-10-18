@@ -257,6 +257,10 @@ void Pathfinder::reset()
 	m_unitIndex.clear();
 	m_wallHeights.clear();
 	m_wallPieces.clear();
+	m_waypointSlots.clear(); // lane WALL-2
+	m_waypointIds.clear();
+	m_waypointCounter = 0x40000000;
+	m_portalHops.clear();
 }
 
 void Pathfinder::note(const char *stop)
@@ -337,6 +341,10 @@ void Pathfinder::newMap(const PathfindTerrain &terrain, const std::vector<Pathfi
 	m_stops.clear();
 	m_wallHeights.clear();
 	m_wallPieces.clear();
+	m_waypointSlots.clear(); // lane WALL-2: the objects' portals are registered again as they enter the new map
+	m_waypointIds.clear();
+	m_waypointCounter = 0x40000000;
+	m_portalHops.clear();
 	note(pathstops::kSlopeAndConfig);
 	note(pathstops::kLayers);
 	note(pathstops::kZoneProfiles);
@@ -465,7 +473,8 @@ std::vector<std::string> Pathfinder::allStops()
 	return { pathstops::kShore, pathstops::kSlopeAndConfig, pathstops::kRivers, pathstops::kLayers, pathstops::kZoneProfiles, pathstops::kHierarchical,
 		pathstops::kLargeRectGoal, pathstops::kPartialRebuild, pathstops::kGroupDestination, pathstops::kBaseSiteWindow, pathstops::kWallLayer,
 		pathstops::kWallLayerCount, pathstops::kLargeRectFootprint,
-		pathstops::kLargeRectReservation, pathstops::kQueueFull, pathstops::kQueueTime, pathstops::kPath, pathstops::kNumerics };
+		pathstops::kLargeRectReservation, pathstops::kQueueFull, pathstops::kQueueTime, pathstops::kPath, pathstops::kNumerics, pathstops::kPortals,
+		pathstops::kPortalTable, pathstops::kPortalType7, pathstops::kPortalLayerQuirk, pathstops::kPortalLostHorde };
 }
 
 // ---- the state hash (MOVE-1) ----
@@ -480,6 +489,14 @@ void PathfindZoneManager::crc(StateHasher &h) const
 	{
 		h.addBool(b.passable);
 		h.addBool(b.dirty);
+		if (m_anyPortal)
+		{
+			h.addU32((std::uint32_t)b.portals.size()); // lane WALL-2: only once a block listed a portal (a map without portals hashes as before)
+			for (std::uint16_t p : b.portals)
+			{
+				h.addU32(p);
+			}
+		}
 	}
 	h.addU32((std::uint32_t)m_zones.size());
 	for (const ZoneInfo &z : m_zones)
@@ -552,6 +569,7 @@ void Pathfinder::crc(StateHasher &h) const
 		}
 	}
 	m_zoneManager.crc(h);
+	crcPortals(h); // lane WALL-2: nothing unless portals exist
 	if (m_uberLimits)
 	{
 		h.addU32(m_uberBurst ? 1u : 0u); // lane PATHPERF-4: Uber only, a Faithful game hashes as before

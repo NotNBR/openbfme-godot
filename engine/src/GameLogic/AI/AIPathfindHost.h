@@ -253,6 +253,11 @@ public:
 	// lane WALL-1: the wall top and ramp surfaces of a wall piece (the draw module's WallBoundsMesh / RampMesh1 / RampMesh2 at the object's transform), null
 	// for every other object (RW 0x936B7D -> Pathfinder::ClassifyWall, BFME2 0x92F63F, asks the object's drawable)
 	virtual const PathfindWallGeometry *getWallGeometry() const { return nullptr; }
+	// lane WALL-2: RW 0x6822E2 .. 0x682307 (Waypoint::isValidUnitType without AllowNonSkirmishAIUnits): the controlling player is a skirmish AI player (RW
+	// 0x6AAC66) that TheSkirmishAIManager runs (RW 0x6A950B)
+	virtual bool isSkirmishAIControlled() const { return false; }
+	// lane WALL-2: RW 0x68C053, the first test of the portal search RW 0x6F5547 (a unit it answers true for crosses no portal; name INFERRED: S-4851)
+	virtual bool refusesPortals() const { return false; }
 };
 
 // TheGameLogic->findObjectByID
@@ -263,6 +268,9 @@ public:
 	virtual PathfindObject *findObjectByID(PathfindObjectID id) const = 0;
 	// TheGameLogic->getFrame()
 	virtual unsigned getFrame() const = 0;
+	// lane WALL-2: RW 0x6E8454, after portals were removed: every object (the logic's list order) whose AI has a path that names a waypoint no longer there
+	// (RW 0x76573F) is told so (RW 0x668AF8 notifyPathHasInvalidPortals). No AI world: nothing
+	virtual void onPathsLostPortals() const {}
 };
 
 // The cell-sampling view of TheTerrainLogic. Coordinates are world units (the pathfinder passes cell corners).
