@@ -177,6 +177,9 @@ public:
 	// lane SPELL-3 (review r3): a test hook (start option test_hooks): the global weather back to none, its map attribute modifier removed from every object
 	// (GlobalWeatherSystem::clear, RW 0x71A04F) - the spell harness isolates the weather powers' casts with it
 	Dictionary debug_clear_weather();
+	// lane WEATHER-1 (logged test hook, test_hooks only): TheGlobalWeatherSystem::setWeather(weather, 0, frames) (RW 0x71A024) without a power, so a viewer
+	// sees the client weather of Freezing Rain (RAINY) or Darkness (CLOUDY) on a map loaded without starting bases (no spell book can be used there)
+	Dictionary debug_set_weather(int64_t weather, int64_t frames);
 	// read-only: the live objects of `player` [{ id, template, structure, commandcenter, x, y, z }] (between logic frames)
 	Array get_player_objects(const String &player);
 	Array get_logic_trees(double x, double y, double radius) const; // lane SPELL-3: the logic's map trees within radius (2D): x, y, id, toppled, value

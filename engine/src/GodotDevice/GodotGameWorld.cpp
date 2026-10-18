@@ -274,6 +274,7 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("debug_damage_object", "id", "amount", "source_id"), &GameWorld::debug_damage_object);
 	ClassDB::bind_method(D_METHOD("debug_set_object_status", "id", "status", "on"), &GameWorld::debug_set_object_status); // lane SPELL-3
 	ClassDB::bind_method(D_METHOD("debug_clear_weather"), &GameWorld::debug_clear_weather);                                // lane SPELL-3
+	ClassDB::bind_method(D_METHOD("debug_set_weather", "weather", "frames"), &GameWorld::debug_set_weather);                // lane WEATHER-1
 	ClassDB::bind_method(D_METHOD("get_player_objects", "player"), &GameWorld::get_player_objects);
 	ClassDB::bind_method(D_METHOD("get_logic_trees", "x", "y", "radius"), &GameWorld::get_logic_trees); // lane SPELL-3
 	ClassDB::bind_method(D_METHOD("destroy_object", "id"), &GameWorld::destroy_object);
@@ -5689,6 +5690,24 @@ Dictionary GameWorld::debug_clear_weather()
 	out["modifier_before"] = toGodot(w.modifierName());
 	w.clear();
 	w.setWeather(GlobalWeatherSystem::WEATHER_NONE, 0, 0);
+	out["ok"] = true;
+	return out;
+}
+
+Dictionary GameWorld::debug_set_weather(int64_t weather, int64_t frames)
+{
+	Dictionary out;
+	out["ok"] = false;
+	if (!m_game || !m_testHooks || m_netHost || m_netClient || m_netStarted || m_netSession || weather < 0 || weather > 4 || frames < 0)
+	{
+		out["error"] = "refused (no game, test_hooks off, a network game or a weather outside 0 .. 4)";
+		return out;
+	}
+	const auto worldContext = m_world ? m_world->enterContext() : nullptr;
+	GlobalWeatherSystem &w = m_game->logic().weather();
+	out["weather_before"] = (int64_t)w.weather();
+	w.setWeather((int)weather, 0, (unsigned)frames);
+	UtilityFunctions::print("WEATHER-1 TEST HOOK: the logic weather set to ", weather, " for ", frames, " frames");
 	out["ok"] = true;
 	return out;
 }

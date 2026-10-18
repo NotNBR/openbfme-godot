@@ -69,7 +69,7 @@ func _ready() -> void:
 		{"player": "Player_1", "faction": faction, "human": true, "team": 0, "start_index": 0},
 		{"player": "Player_2", "faction": "FactionMen", "human": false, "team": 1, "start_index": 1},
 	]
-	var rep: Dictionary = _world.load_map(_map_name, {"slots": slots, "seed": 4711, "terrain": true})
+	var rep: Dictionary = _world.load_map(_map_name, {"slots": slots, "seed": 4711, "terrain": true, "test_hooks": true})
 	if not rep.ok:
 		_fail("load_map failed: %s" % [rep.errors.slice(0, 5)])
 		return
@@ -105,9 +105,16 @@ func _look_at_base() -> Vector2:
 		if d.get("ok", true) and d.has("x"):
 			at += Vector2(d.x, d.y)
 			n += 1
+	if n == 0:
+		# no structure of Player_1 (a map without a start for it): the centre of every object
+		for id in _world.get_object_ids():
+			var o: Dictionary = _world.get_object(id)
+			if o.get("ok", false):
+				at += Vector2(o.x, o.y)
+				n += 1
 	if n > 0:
 		at /= n
-	var g := Vector3(at.x, 0.0, -at.y)
+	var g := Vector3(at.x, float(_world.get_ground_height(at.x, at.y)), -at.y)
 	var pitch := deg_to_rad(37.5)
 	_camera.position = g + Vector3(0.0, _height, _height / tan(pitch))
 	_camera.look_at(g, Vector3.UP)
@@ -142,16 +149,41 @@ func _run() -> void:
 	await _shot(_scenario + "-before")
 	if _scenario == "rain" or _scenario == "darkness":
 		_world.debug_add_science_points(_local, 500)
-		var buy: Array = ["SCIENCE_WildMenAllies", "SCIENCE_IsengardTaint", "SCIENCE_FreezingRain"] if _scenario == "rain" else ["SCIENCE_Barricade", "SCIENCE_UntamedAllegiance", "SCIENCE_Darkness"]
+		var buy: Array = ["SCIENCE_PalantirVision", "SCIENCE_WildMenAllies", "SCIENCE_FreezingRain"] if _scenario == "rain" else ["SCIENCE_EyeofSauron", "SCIENCE_Barricade", "SCIENCE_Darkness"]
 		for s in buy:
 			_world.purchase_science(_local, s)
 			await _wait(0.4)
 		var power := "SpellBookFreezingRain" if _scenario == "rain" else "SpellBookDarkness"
-		var ok: bool = _world.cast_special_power(_local, power, at.x, at.y)
+		# the Palantir's spell book button, then a click on the ground (the player's input path, InGameSpellBookModel)
+		var ok := false
+		var bar: Dictionary = _world.get_spell_bar(_local)
+		for b in bar.get("buttons", []):
+			if String(b.power) == power and b.usable:
+				ok = _world.spell_bar_press(_local, int(b.index))
+				if ok and b.needs_position:
+					ok = _world.spell_bar_click_world(_local, at.x, at.y)
 		print("WEATHERVIEW cast %s at %s: %s" % [power, at, ok])
+		if not ok:
+			# a map loaded without starting bases has no structure the spell book's requirements filter accepts: the logged test hook sets the weather
+			# the power would set (ChangeWeather RAINY / CLOUDY for its WeatherDuration, here 120 s)
+			var r: Dictionary = _world.debug_set_weather(2 if _scenario == "rain" else 1, 600)
+			print("WEATHERVIEW weather set by the test hook: ", r)
 	await _wait(_seconds)
 	var wr: Dictionary = _world.get_weather_report()
 	print("WEATHERVIEW report ", JSON.stringify(wr))
+	var book2: Dictionary = _world.get_spellbook(_local)
+	print("WEATHERVIEW logic weather ", book2.get("weather", {}), " frame ", _world.get_frame())
+	var snow: Node = _world.get_node_or_null("Weather/Snow")
+	if snow:
+		var mm: MultiMesh = snow.multimesh
+		var mat: ShaderMaterial = snow.material_override
+		print("WEATHERVIEW snow node visible %s instances %d mesh surfaces %d tex %s box %s ceiling %s traveled %s quad %s camera %s" % [
+			snow.visible, mm.instance_count, mm.mesh.get_surface_count() if mm.mesh else -1, mat.get_shader_parameter("tex"),
+			mat.get_shader_parameter("box"), mat.get_shader_parameter("ceiling"), mat.get_shader_parameter("traveled"), mat.get_shader_parameter("quad_half"), _camera.global_position])
+		if OS.get_cmdline_user_args().has("--debug-snow"):
+			mat.set_shader_parameter("quad_half", 30.0)
+			mat.set_shader_parameter("tint", Color(1, 0, 0, 1))
+			await _shot(_scenario + "-debug")
 	await _shot(_scenario)
 	if _shots != "":
 		get_tree().quit(0)
