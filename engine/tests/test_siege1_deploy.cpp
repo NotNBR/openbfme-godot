@@ -30,6 +30,11 @@
 #include "GameLogic/Module/SiegeModules.h"
 #include "GameLogic/Object/Contain/SiegeEngineContainRuntime.h"
 #include "GameLogic/Object/Object.h"
+#include "GameLogic/ScriptEngine/ScriptConditions.h"
+#include "GameLogic/ScriptEngine/ScriptEngine.h"
+#include "GameLogic/ScriptEngine/ScriptTemplates.h"
+#include "GameLogic/ScriptEngine/Scripts.h"
+#include "Common/Team.h"
 
 #include <cmath>
 #include <map>
@@ -642,6 +647,77 @@ TEST_CASE("siege1 retail: a unit on the wall reaches a deployed ladder at its to
 	}
 	// (the hero stands over the ladder's top: the footprint test of the melee reach already passes; the top branch alone is pinned above)
 	CHECK(hit == 7);
+}
+
+TEST_CASE("siege1 retail: the scripts' DEPLOY_SIEGE_ON_NAMED_WALL / RETRACT_SIEGE_FROM_WALL / DEPLOY_SIEGE_NEAR_TEAM and IS_SEIGE_ATTACHED_TO_WALL (RW 0x7BD7A7 / 0x7BD7FC / 0x7C77EB / 0x7E5760)")
+{
+	if (!haveWorld("siege1 scripts"))
+	{
+		return;
+	}
+	PortalScope portals;
+	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	r.frame(3);
+	LadderScene sc(r);
+	sc.ladder->setName("SIEGE1 Ladder");
+	sc.wall->setName("SIEGE1 Wall");
+	ScriptEngine &e = r.logic().scriptEngine();
+	auto stringParam = [](int type, const std::string &s) {
+		ScriptParameter p;
+		p.type = type;
+		p.stringValue = s;
+		return p;
+	};
+	auto action = [](const char *name, std::vector<ScriptParameter> params) {
+		ScriptActionRec a;
+		a.internalName = name;
+		a.type = a.resolved = ScriptTemplates::findAction(name);
+		a.params = std::move(params);
+		return a;
+	};
+	auto attached = [&]() {
+		ScriptCondition c;
+		c.type = c.resolved = ScriptTemplates::findCondition("IS_SEIGE_ATTACHED_TO_WALL");
+		c.params = { stringParam(14, "SIEGE1 Ladder") };
+		return ScriptConditions::evaluate(e, c);
+	};
+	CHECK_FALSE(attached());
+	e.executeAction(action("DEPLOY_SIEGE_ON_NAMED_WALL", { stringParam(14, "SIEGE1 Ladder"), stringParam(14, "SIEGE1 Wall") }));
+	CHECK(sc.deploy->phase() == SiegeDeploySpecialPower::PHASE_APPROACH);
+	CHECK(sc.deploy->dockId() == sc.wall->getID());
+	for (int f = 0; f < 120 && !sc.deploy->isDeployed(); ++f)
+	{
+		r.frame(1);
+	}
+	CHECK(attached());
+	e.executeAction(action("RETRACT_SIEGE_FROM_WALL", { stringParam(14, "SIEGE1 Ladder") }));
+	r.frame(1);
+	CHECK(sc.deploy->phase() == SiegeDeploySpecialPower::PHASE_RAISING);
+	CHECK_FALSE(attached());
+	r.frame(12);
+	REQUIRE(sc.deploy->phase() == SiegeDeploySpecialPower::PHASE_IDLE);
+	// a raised ladder keeps DEPLOYING (RotWK clears it only in the stop RW 0x8CA2F1 and the approach RW 0x8C9D06): the team form passes it over
+	static const int kDeploying = CombatNames::status("DEPLOYING");
+	CHECK(sc.ladder->testStatus((unsigned)kDeploying));
+	// the team form: the ladders' team, the walls around its centre within 5000 near to far: a second ladder deploys at the nearest wall that can dock it
+	const Coord3D c2 = r.freeSpot(sc.ladder->getPosition()->x - 150.0f, sc.ladder->getPosition()->y, 60.0f);
+	Object *second = r.make("IsengardSiegeLadder", c2.x, c2.y);
+	r.frame(2);
+	SiegeDeploySpecialPower *deploy2 = SiegeDeploySpecialPower::of(*second);
+	REQUIRE(deploy2);
+	Team *team = sc.ladder->getTeam();
+	REQUIRE(team);
+	REQUIRE(second->getTeam() == team);
+	const std::string teamName = "Player_1/" + team->getName();
+	REQUIRE(ScriptConditions::team(e, teamName) == team);
+	ScriptParameter radius;
+	radius.type = 1;
+	radius.realValue = 5000.0f;
+	e.executeAction(action("DEPLOY_SIEGE_NEAR_TEAM", { stringParam(3, teamName), stringParam(3, teamName), radius }));
+	CHECK(sc.deploy->phase() == SiegeDeploySpecialPower::PHASE_IDLE);
+	CHECK(deploy2->phase() == SiegeDeploySpecialPower::PHASE_APPROACH);
+	CHECK(deploy2->dockId() != INVALID_ID);
+	CHECK(e.stats().unportedActions.empty());
 }
 
 TEST_CASE("siege1: the stop lines of the siege deploy are S-4870 .. S-4873 and the siege modules have their runtime classes")
