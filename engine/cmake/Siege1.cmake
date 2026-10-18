@@ -8,4 +8,5 @@ list(APPEND OPENBFME_SIM_SOURCES
 set(OPENBFME_SIEGE1_TESTS
     tests/test_siege1_survey.cpp
     tests/test_siege1_deploy.cpp
+    tests/test_siege1_attack.cpp
 )
