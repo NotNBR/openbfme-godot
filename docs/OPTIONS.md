@@ -210,7 +210,7 @@ another profile). Tabs:
 | | Edge scrolling: full screen only / always / off | `OpenBFMEEdgeScroll` | retail |
 | | Rotation speed 50 .. 200% | `OpenBFMERotateSpeed` | 100 |
 | | Max zoom-out: Original (1x), 1.5x, 2x, 2.5x, 3x retail's highest camera (ZOOM-1, stop S-3501) | `OpenBFMEMaxZoomOut` | 2.5 |
-| | Free camera: up to the map's size (Ctrl+Z in a game) | `OpenBFMEFreeCamera` | no |
+| | Free camera: up to the map's size, down to 40, the middle button tilts to straight down (Ctrl+Z in a game) | `OpenBFMEFreeCamera` | no |
 | | Invert drag scrolling | `OpenBFMEInvertDragScroll` | no |
 | | Keep the mouse inside the window (in a game) | `OpenBFMEConfineMouse` | no |
 | Interface | Health bars: selected (retail) / selected and damaged / always (all players: every unit and building, infantry and cavalry included) | `OpenBFMEHealthBars` | retail |

@@ -92,7 +92,8 @@ in the menus, or **Open log folder** in any error or crash message. After a
 crash, the next start tells you which log to send.
 
 **Free camera.** The launcher's *Free camera* setting (Settings > General) lets
-the camera zoom out to the whole map. This is an OpenBFME option,
+the camera zoom out to the whole map, zoom in closer, and tilt from the horizon to
+straight down with the middle button. This is an OpenBFME option,
 not part of the original game; in a game, Ctrl+Z switches it on and off. From
 the command line it is `-- --free-camera`.
 
