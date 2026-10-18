@@ -162,7 +162,14 @@ public:
 	// Off (the default): retail's limits. On: the camera may zoom out up to freeMaxHeight() above the ground (the larger map extent, at least the map's
 	// maximum height); the default view, the start of a map and a reset still use the map's maximum height. The far plane and the fog range move out by
 	// the distance the eye is beyond retail's maximum (fogShift), so the zoomed-out picture is not cut off or fogged over; at retail heights nothing changes.
+	// The free camera also steers as the map workshop's test-game camera does (bfme2-map-studio native/ingame/ingame.cpp): a wheel notch zooms by 1.15
+	// (zoomIn / zoomOut), down to 40 above the ground (zoomInLimit), the middle button's vertical drag tilts from retail's near-horizon limit to 89
+	// degrees below the horizon (pitchMin; LookAtTranslator), and the eye stays 20 above the terrain under it (buildPose). Off restores retail's limits.
 	void setFreeCamera(bool on);
+	// setPitch's lower limit: retail's -0.6283185 (RW 0x65E8D0), with the free camera the pitch that looks 89 degrees down
+	float pitchMin() const;
+	// the zoom-in limit setHeightAboveGround and the scroll's height check use: the map's min height, with the free camera at most 40
+	float zoomInLimit() const;
 	// lane OPTS-2: GlobalData::applyOptionPreferences (RW 0x641E0C .. 0x641E1F) replaces GameData's HorizontalScrollSpeedFactor and
 	// VerticalScrollSpeedFactor (+ 0xA9C / + 0xAA0) with OptionPreferences::getScrollFactor (Options.ini ScrollFactor * 0.02, missing: GlobalData + 0xAFC
 	// KeyboardDefaultScrollSpeedFactor) right after GameData.ini is parsed (RW 0x6441DE, GlobalData::parseGameDataDefinition RW 0x644148), and the Options

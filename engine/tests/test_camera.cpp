@@ -929,6 +929,65 @@ TEST_CASE("play1 camera: the free camera lifts the zoom-out limit to the map's e
 	CHECK(c.farPlane() == 1800.0f);
 }
 
+TEST_CASE("play1 camera: the free camera steers as the map workshop's: the middle button tilts to straight down, a notch zooms 1.15 down to 40, off is retail")
+{
+	if (!haveWorld("play1 free camera steering"))
+	{
+		return;
+	}
+	CamRig r(shared());
+	TacticalCamera &c = *r.cam;
+	auto elevation = [&]() {
+		const float dx = c.eye().x - c.target().x, dy = c.eye().y - c.target().y, dz = c.eye().z - c.target().z;
+		return std::atan2(dz, std::sqrt(dx * dx + dy * dy));
+	};
+	// retail: the vertical drag does not tilt, the pitch stops at -0.6283185 (RW 0x65E8D0)
+	r.move(500, 400);
+	r.button(HudInput::Button::Middle, true, 500, 400);
+	r.move(500, 600);
+	r.button(HudInput::Button::Middle, false, 500, 600);
+	CHECK(c.getPitch() == 0.0f);
+	CHECK(c.pitchMin() == doctest::Approx(-0.6283185f)); // tolerance: retail's -36 degrees in radians, the camera's float constant (client camera, not simulation)
+	CHECK(c.zoomInLimit() == c.minHeight());
+	c.setFreeCamera(true);
+	// 100 pixels down = 0.5 radians more steeply down; sideways still turns
+	const float e0 = elevation();
+	r.button(HudInput::Button::Middle, true, 500, 400);
+	r.move(500, 500);
+	CHECK(c.getPitch() == doctest::Approx(-0.5f).epsilon(1e-4)); // tolerance: 100 pixels of drag times the client camera's float tilt rate
+	CHECK(elevation() == doctest::Approx(e0 + 0.5f).epsilon(1e-3)); // tolerance: the eye's elevation recomputed from float positions with atan2
+	// far down: 89 degrees below the horizon at the most
+	r.move(500, 900);
+	CHECK(c.getPitch() == doctest::Approx(c.pitchMin())); // tolerance: the clamp to the float limit after many float tilt steps
+	CHECK(elevation() == doctest::Approx(1.5533430f).epsilon(1e-3)); // tolerance: 89 degrees below the horizon, recomputed from float positions with atan2
+	// far up: retail's upper limit (near the horizon)
+	r.move(500, 0);
+	CHECK(c.getPitch() == doctest::Approx(0.6283185f)); // tolerance: retail's +36 degrees in radians, the clamp after float tilt steps
+	r.button(HudInput::Button::Middle, false, 500, 0);
+	CHECK(c.getAngle() == 0.0f);
+	// the wheel: 1.15 per notch, down to 40 above the ground
+	const float h0 = c.getHeightAboveGround();
+	r.input->mouseWheel(1, 500, 400);
+	r.input->update();
+	CHECK(c.getHeightAboveGround() == doctest::Approx(h0 / 1.15f)); // tolerance: the height after one float zoom step of 1.15
+	r.input->mouseWheel(-2, 500, 400);
+	r.input->update();
+	CHECK(c.getHeightAboveGround() == doctest::Approx(h0 * 1.15f)); // tolerance: the height after float zoom steps of 1.15 in both directions
+	for (int i = 0; i < 100; ++i)
+	{
+		c.zoomIn();
+	}
+	CHECK(c.getHeightAboveGround() == 40.0f);
+	// low and tilted to the horizon, the eye stays above the terrain under it
+	r.frame(90);
+	CHECK(c.eye().z >= r.game->logic().getGroundHeight(c.eye().x, c.eye().y) + 19.9f); // tolerance: the camera keeps at least 20 over the terrain under the eye (0.1 for the float terrain sample)
+	// off again: retail's pitch and heights
+	c.setFreeCamera(false);
+	CHECK(c.getHeightAboveGround() == c.minHeight());
+	c.setPitch(-1.0f);
+	CHECK(c.getPitch() == doctest::Approx(-0.6283185f)); // tolerance: retail's -36 degrees in radians, the clamp of a float pitch
+}
+
 // ---- lane ZOOM-1 ----------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE("zoom1 camera: the Max zoom-out factor lifts the player's limit to factor times the map's max height; the default view, a reset and 1x stay retail")
