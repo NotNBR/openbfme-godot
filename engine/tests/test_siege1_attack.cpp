@@ -77,6 +77,18 @@ TEST_CASE("siege1 attack retail: Grond breaks Minas Tirith's gate with its ram (
 	CHECK(r.dead);
 }
 
+TEST_CASE("siege1 attack retail: Mordor's catapult made inside its MinimumAttackRange (150) of Helm's Deep's gate backs off and then hits it")
+{
+	OPENBFME_REQUIRE_START(s);
+	const AttackResult r = siegeAttack(*s, kHelmsDeep, "Main Gate", "MordorCatapult", false, 100.0f, 600);
+	print("MordorCatapult", r);
+	CHECK(r.ordered);
+	CHECK(r.slotAtHit == 0);
+	CHECK(r.firstHit == 83);
+	CHECK(r.distAtHit > 150.0f); // tolerance: it fired from outside its minimum range (the drive ends where the attack state's approach puts it: 242.7)
+	CHECK(r.deathFrame == 355);
+}
+
 TEST_CASE("siege1 attack retail: a mumak, the Dwarven demolisher and Mordor's catapult break Helm's Deep's main gate")
 {
 	OPENBFME_REQUIRE_START(s);
