@@ -897,7 +897,7 @@ void HordeContain::moveHub(Object &member, const Coord3D &destIn, float orientat
 			q.z = oldPosition.z;
 			if (world.mapReady() && pf.validMovementPosition(&a->adapter(), a->locomotorInfo(), a->adapter().getLayer(), &q))
 			{
-				q.z = horde->logic().getGroundHeight(q.x, q.y);
+				q.z = a->layerHeightAt(q.x, q.y); // TheTerrainLogic at the member's layer (lane WALL-1: a wall top's or a ramp's height; the terrain on the ground)
 			}
 		}
 		// the turn comes first (RW 0x874FA6 .. 0x8750E1): a member more than 10 degrees off the slot's facing turns where it stands; nothing moves it this frame
@@ -937,6 +937,8 @@ void HordeContain::moveHub(Object &member, const Coord3D &destIn, float orientat
 		if (!ownerMoving)
 		{
 			member.setPosition(&q);
+			a->settleOnLayer(); // lane WALL-1: a member put on a wall top's slot stands on the wall
+			q = *member.getPosition();
 			host.setPendingPosition(q);
 			if (world.mapReady())
 			{

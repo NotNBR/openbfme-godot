@@ -468,6 +468,11 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
 			}
 		}
 		const bool cellBlocks = [&]() -> bool {
+			// lane WALL-1 (INFERENCE, S-4840): a line does not step between cells the search could not step between (a wall top and the ground beside it)
+			if (from && !PathfindCell::layersCompatible(*from, *to))
+			{
+				return true;
+			}
 			for (const PathfindOccupant *n = to->occupants(OCC_GROUND_GOAL); n; n = n->next)
 			{
 				const PathfindObject *o = m_world ? m_world->findObjectByID(n->owner) : nullptr;
@@ -618,10 +623,19 @@ void Pathfinder::lineMemoStore(std::uint32_t key, bool blocked)
 
 bool Pathfinder::isGroundLineClear(const Coord3D &a, const Coord3D &b)
 {
-	// no non-ground layer exists in this port (S-161): every cell is layer 1, the line is clear
-	(void)a;
-	(void)b;
-	return true;
+	// RW 0x6EE5E3: the Bresenham cells from a to b on the ground layer meet no cell of another layer (lane WALL-1: the wall tops and ramps of the ground grid)
+	if (m_wallPieces.empty())
+	{
+		return true;
+	}
+	ICoord2D s, e;
+	{
+		Coord3D p = a, q = b;
+		worldToCell(&p, &s);
+		worldToCell(&q, &e);
+	}
+	const bool met = walkLine(*this, LAYER_GROUND, s, e, [](PathfindCell *, PathfindCell *to, int, int) -> bool { return to->getLayer() != LAYER_GROUND; });
+	return !met;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -873,9 +887,11 @@ int Pathfinder::examineNeighboringCells(PathfindCell *parentCell, PathfindCell *
 				continue; // a diagonal needs one of its two orthogonal neighbours
 			}
 		}
-		if (n->getType() != PathfindCell::CELL_CLEAR || true)
+		// layer compatibility (RW step 3, BFME2 examineNeighboringCells 0x6F83F5; lane WALL-1): the same layer, one cell connecting to the other's layer, or
+		// both connecting to the ramp layer. Every cell of a map without wall pieces is on the ground: always true there
+		if (!PathfindCell::layersCompatible(*parentCell, *n))
 		{
-			// layer compatibility (RW step 3): the ground layer only
+			continue;
 		}
 		if (isHuman)
 		{
@@ -1386,7 +1402,7 @@ Path *Pathfinder::buildActualPath(const PathfindObject *obj, unsigned acceptable
 void Pathfinder::prependCells(Path *path, const Coord3D *fromPos, PathfindCell *goalCell, bool center)
 {
 	// TARGET RW 0x6EF591: the cells are walked in REVERSE order, creating the path in the desired order; the LAST node is in the unit's
-	// own cell, so the unit's position is used instead. (Waypoint cells and the layer lookup are not modelled: S-161.)
+	// own cell, so the unit's position is used instead. (Waypoint cells are not modelled: S-161.)
 	Coord3D pos;
 	PathfindCell *cell, *prevCell = nullptr;
 	const bool goalCellNull = (goalCell->getParentCell() == nullptr);
@@ -1411,7 +1427,7 @@ void Pathfinder::prependCells(Path *path, const Coord3D *fromPos, PathfindCell *
 				canOptimize = false;
 			}
 		}
-		path->prependNode(&pos, LAYER_GROUND);
+		path->prependNode(&pos, cell->getLayer()); // RW 0x6EF591: the node takes its cell's layer (lane WALL-1: a ramp's, a wall top's; every other cell is ground)
 		path->getFirstNode()->setCanOptimize(canOptimize);
 		if (cell->isBlockedByAlly())
 		{

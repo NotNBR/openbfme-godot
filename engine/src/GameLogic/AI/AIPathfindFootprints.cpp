@@ -23,7 +23,7 @@
 //     are skipped, a shape sits at the object's position moved by its turned offset, RW 0xAD14F0); the post region is the box of all active
 //     shapes (RW 0xAD1D60) grown to whole cells and by one (RW 0x937469).
 // Not modelled (S-164): the object's pathfind module calls (RW obj+0x84,
-// obj+0xA4), the wall layer, the BASE_SITE bit-17 window, status 77 and the WALL_UPGRADE query.
+// obj+0xA4), the BASE_SITE bit-17 window, status 77 and the WALL_UPGRADE query. The wall tops and ramps of a wall piece: AIPathfindWalls.cpp (S-4840).
 
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindStops.h"
@@ -123,6 +123,7 @@ void Pathfinder::classifyObjectFootprint(PathfindObject &obj, bool insert)
 			return; // these footprints are permanent (ZH)
 		}
 		removeUnitFromPathfindMap(obj);
+		classifyWall(obj, false); // lane WALL-1: a wall piece's tops and ramps leave with it (none when it never classified any)
 	}
 	if (!obj.isKindOf(PK_STRUCTURE))
 	{
@@ -145,6 +146,11 @@ void Pathfinder::classifyObjectFootprint(PathfindObject &obj, bool insert)
 		return; // don't add bounds that are up in the air
 	}
 	internal_classifyObjectFootprint(obj, insert);
+	if (insert)
+	{
+		// lane WALL-1: BFME2 0x930212 -> Pathfinder::ClassifyWall (0x92F63F) for an object whose drawable has a WallBoundsMesh / RampMesh (AIPathfindWalls.cpp)
+		classifyWall(obj, true);
+	}
 }
 
 void Pathfinder::internal_classifyObjectFootprint(PathfindObject &obj, bool insert)
@@ -153,7 +159,7 @@ void Pathfinder::internal_classifyObjectFootprint(PathfindObject &obj, bool inse
 	const bool s22 = insert ? obj.isKindOf(PK_SCALEABLE_WALL) : false;
 	if (wall || s22)
 	{
-		note(pathstops::kWallLayer);
+		note(pathstops::kBaseSiteWindow);
 	}
 	const PathfindGeometry &geom = obj.getGeometry();
 	const float angle = obj.getOrientation();

@@ -305,6 +305,11 @@ public:
 	float orientation() const override;
 	void setOrientation(float angle) override;
 	float groundHeightAt(float x, float y) const override;
+	// lane WALL-1: TheTerrainLogic->getLayerHeight(x, y, the object's layer): the terrain on the ground, a wall top's or a ramp's height on theirs
+	float layerHeightAt(float x, float y) const;
+	// lane WALL-1: after the object was put somewhere directly (a horde member snapped onto its slot, a member put on its goal): its layer settles to the cell
+	// under it (Pathfinder::settleLayer) and, off the ground, it stands on that layer's surface. Nothing for a ground unit that stays on the ground
+	void settleOnLayer();
 	void setLayer(PathfindLayerEnum layer) override;
 	bool isImmobile() const override;
 	bool isStatusImmobile() const override;

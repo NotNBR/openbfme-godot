@@ -267,6 +267,10 @@ unsigned AIUpdateInterface::hordeMemberUpdate()
 	{
 		step = obj->testModelCondition(b.backingUp) ? backingUpSpeed(*m_curLocomotor, m_locomotorSetSpeed) : m_curLocomotor->getMaxSpeedForCondition(locomotorHost());
 	}
+	if (m_world->mapReady())
+	{
+		m_mover->refreshLayer(); // lane WALL-1: the member's layer (a wall top, a ramp) before its step is tested
+	}
 	const Coord3D start = *obj->getPosition();
 	Coord3D target = start;
 	if (!(goal == AIGOAL_EXPLICIT_WITH_PATH && m_mover->path()))
@@ -376,12 +380,13 @@ unsigned AIUpdateInterface::hordeMemberUpdate()
 	if (!(goal == AIGOAL_EXPLICIT_WITH_PATH && m_mover->path()) && m_world->mapReady() &&
 		m_world->pathfinder().validMovementPosition(&adapter(), locomotorInfo(), adapter().getLayer(), &target))
 	{
-		const float ground = logic.getGroundHeight(target.x, target.y);
+		// RW 0x66D0B5: TheTerrainLogic's height at the member's layer (lane WALL-1: a wall top's or a ramp's, Pathfinder::getLayerHeight; the terrain on the ground)
+		const float ground = layerHeightAt(target.x, target.y);
 		if (ground > target.z)
 		{
 			target.z = ground;
 		}
-		// RW 0x66D0B5: a ground-layer member (layer 1) of a ground-layer container stands on the ground (the port's layers are the ground: S-161)
+		// RW 0x66D0B5: a member of a container stands on its layer's surface (RW: a ground-layer member of a ground-layer container; S-161 for the raised layers)
 		if (container)
 		{
 			target.z = ground;
@@ -390,6 +395,7 @@ unsigned AIUpdateInterface::hordeMemberUpdate()
 	// RW 0x66D100 (RW 0x70BA76): the identity rotated by the facing about z (exact: the products with 0 and 1), the target as translation
 	const float basis[9] = { c, -s, 0.0f, s, c, 0.0f, 0.0f, 0.0f, 1.0f };
 	obj->setTransform(&target, basis);
+	settleOnLayer(); // lane WALL-1: a member put on its goal (no path reached it) on a wall top stands on the wall
 	if (m_curLocomotor)
 	{
 		const float mx = SimMath::subf32(target.x, start.x), my = SimMath::subf32(target.y, start.y), mz = SimMath::subf32(target.z, start.z);

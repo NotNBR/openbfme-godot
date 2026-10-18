@@ -441,6 +441,29 @@ bool ObjectPathfindAdapter::isMobile() const
 	return !isKindOf(PK_IMMOBILE);
 }
 
+const PathfindWallGeometry *ObjectPathfindAdapter::getWallGeometry() const
+{
+	PathfindWallMeshSource *source = m_world.wallMeshes();
+	if (!source)
+	{
+		return nullptr;
+	}
+	const Coord3D &p = *m_object->getPosition();
+	const float angle = m_object->getOrientation(), scale = m_object->getInstanceScale();
+	const ThingTemplate *tt = m_object->getTemplate();
+	if (!m_wallLooked || tt != m_wallTemplate || p.x != m_wallPos.x || p.y != m_wallPos.y || p.z != m_wallPos.z || angle != m_wallAngle || scale != m_wallScale)
+	{
+		m_wallLooked = true;
+		m_wallTemplate = tt;
+		m_wallPos = p;
+		m_wallAngle = angle;
+		m_wallScale = scale;
+		m_wallGeometry = PathfindWallGeometry();
+		m_hasWall = source->wallGeometry(*m_object, m_wallGeometry) && !m_wallGeometry.empty();
+	}
+	return m_hasWall ? &m_wallGeometry : nullptr;
+}
+
 bool ObjectPathfindAdapter::isKindOf(PathfindKind kind) const
 {
 	const int bit = kindBits().bit[(int)kind];

@@ -359,6 +359,18 @@ bool PathfindCell::removeObstacle(PathfindCellInfoPool &pool, const PathfindObje
 	return true;
 }
 
+bool PathfindCell::removeObstacleId(PathfindCellInfoPool &pool, PathfindObjectID id)
+{
+	if (!m_info || id == PATHFIND_INVALID_ID || m_info->m_obstacleID != id)
+	{
+		return false;
+	}
+	m_type = CELL_CLEAR;
+	m_info->m_obstacleID = PATHFIND_INVALID_ID;
+	releaseInfo(pool);
+	return true;
+}
+
 // ---- the closed list (links through the info; the open list is the heap) ----
 int PathfindCell::releaseClosedList(PathfindCellInfoPool &pool, PathfindCell *list)
 {

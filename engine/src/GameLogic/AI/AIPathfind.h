@@ -285,6 +285,8 @@ public:
 	void reset(PathfindCellInfoPool *pool);
 	bool setTypeAsObstacle(PathfindCellInfoPool &pool, const PathfindObject &obstacle, bool isFence, const ICoord2D &pos);
 	bool removeObstacle(PathfindCellInfoPool &pool, const PathfindObject &obstacle);
+	// lane WALL-1: removeObstacle by the obstacle's id (a wall piece clears the footprint of a wall piece from its wall top; the piece may be gone)
+	bool removeObstacleId(PathfindCellInfoPool &pool, PathfindObjectID id);
 	void setType(CellType type);
 	CellType getType() const { return (CellType)m_type; }
 	bool isObstaclePresent(PathfindObjectID objID) const { return m_info && m_info->m_obstacleID == objID && objID != PATHFIND_INVALID_ID; }
@@ -364,18 +366,29 @@ public:
 			m_bit18 == o.m_bit18 && m_bit22 == o.m_bit22;
 	}
 
+	// RW 0x9380BC (the zone joins) and the neighbour test of RW examineNeighboringCells (BFME2 0x6F83F5): a step between two cells is possible when they
+	// share the layer, one connects to the other's layer, or both connect to the ramp layer
+	static bool layersCompatible(const PathfindCell &a, const PathfindCell &b)
+	{
+		return a.m_layer == b.m_layer || a.m_layer == b.m_connectsToLayer || a.m_connectsToLayer == b.m_layer ||
+			(a.m_connectsToLayer == LAYER_RAMP && b.m_connectsToLayer == LAYER_RAMP);
+	}
+	// lane WALL-1: a unit on `layer` may stand on this cell (its layer, or the layer it connects to)
+	bool allowsLayer(PathfindLayerEnum layer) const { return m_layer == (unsigned)layer || m_connectsToLayer == (unsigned)layer; }
+
 private:
 	PathfindCellInfo *m_info;
 	zoneStorageType m_zone;
-	std::uint16_t m_pinched : 1;
-	std::uint8_t m_type : 4;
-	std::uint8_t m_connectsToLayer : 4;
-	std::uint8_t m_layer : 4;
-	std::uint8_t m_bit17 : 1;
-	std::uint8_t m_bit18 : 1;
-	std::uint8_t m_bit21 : 1;
-	std::uint8_t m_bit22 : 1;
-	std::uint8_t m_bit23 : 1;
+	// the RW cell dword's fields: type bits 0 .. 3, layer bits 4 .. 9, connect layer bits 10 .. 15, pinched bit 16 (lane WALL-1: the layers are 6 bits, as RW)
+	std::uint32_t m_type : 4;
+	std::uint32_t m_layer : 6;
+	std::uint32_t m_connectsToLayer : 6;
+	std::uint32_t m_pinched : 1;
+	std::uint32_t m_bit17 : 1;
+	std::uint32_t m_bit18 : 1;
+	std::uint32_t m_bit21 : 1;
+	std::uint32_t m_bit22 : 1;
+	std::uint32_t m_bit23 : 1;
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -811,6 +824,28 @@ public:
 	bool isGroundLineClear(const Coord3D &a, const Coord3D &b);
 	void clip(Coord3D *from, Coord3D *to);
 
+	// ---- lane WALL-1: wall tops and ramps (AIPathfindWalls.cpp) ----
+	// Pathfinder::GetWallHeight (BFME2 WorldBuilder decomp 0xd3ed70): the height of `layer` at (x, y): a wall layer's height, a ramp's surface (raised to the
+	// wall under it), the terrain for the ground and every other layer
+	float getLayerHeight(float x, float y, PathfindLayerEnum layer) const;
+	// ZH TerrainLogic::getHighestLayerForDestination + getLayerHeight: the highest walkable surface at (x, y) (a wall top or a ramp over the terrain)
+	float getHighestLayerHeight(float x, float y) const;
+	// the layer of the walkable surface a point stands on (BFME2 0x6ED236 / TerrainLogic::getLayerForDestination 0x6802FE for the ground grid's layers)
+	PathfindLayerEnum getLayerAt(float x, float y) const;
+	// Pathfinder::IsPointOnRamp: (x, y) is on a ramp's surface; `z` its height there
+	bool isPointOnRamp(float x, float y, float *z = nullptr) const;
+	// Pathfinder::IsPointOnWall (BFME2 0x6E940F): the ground cell under `pos` has a wall layer (and is CLEAR when `requireClear`)
+	bool isPointOnWall(const Coord3D &pos, bool requireClear = false) const;
+	// Pathfinder::UpdateLayer (BFME2 0x6F11A1): the layer a unit at its position takes when the path node it follows is on `nodeLayer`
+	PathfindLayerEnum updateLayer(const PathfindObject &obj, PathfindLayerEnum nodeLayer) const;
+	// lane WALL-1: the layer of a unit that is not following a path node: a unit put on a wall top (a map's archers, a teleported horde member) takes the
+	// wall's layer, one whose wall is gone takes the ground (Pathfinder::AdjustLayer BFME2 0x6EF2A6 for the ground grid's layers; INFERENCE, S-4300)
+	PathfindLayerEnum settleLayer(const PathfindObject &obj) const;
+	// the wall heights by layer (index = layer - LAYER_WALL_FIRST) and the counts, for tests and reports
+	const std::vector<float> &wallHeights() const { return m_wallHeights; }
+	size_t wallPieceCount() const { return m_wallPieces.size(); }
+	size_t rampCount() const;
+
 	// ---- queue ----
 	bool queueForPath(PathfindObjectID id);
 	// lane PATHPERF-4 (Uber profile only, docs/UBER.md): retail's request rings hold 511 units (a refused unit waits for a path that never comes, until its
@@ -891,6 +926,23 @@ private:
 	void classifyObjectFootprint(PathfindObject &obj, bool insert);
 	void internal_classifyObjectFootprint(PathfindObject &obj, bool insert);
 	void classifyFence(PathfindObject &obj, bool insert);
+	// lane WALL-1: Pathfinder::ClassifyWall (BFME2 0x92F63F, pathfinder_classify.cpp): the wall tops and ramps of a wall piece into / out of the ground grid
+	void classifyWall(PathfindObject &obj, bool insert);
+	struct WallPiece
+	{
+		PathfindObjectID id = PATHFIND_INVALID_ID;
+		std::vector<PathfindWallSurface> walls;
+		std::vector<PathfindLayerEnum> wallLayers; // the layer of each wall surface
+		std::vector<PathfindWallSurface> ramps;
+		PathfindRegion cells;                      // every cell its surfaces touch, grown by 2 (RW: floor(lo / 10) - 2 .. ceil(hi / 10) + 2)
+	};
+	PathfindLayerEnum wallLayerFor(float height);
+	void stampWallSurface(const PathfindWallSurface &s, PathfindLayerEnum layer);
+	void stampRampSurface(const PathfindWallSurface &s);
+	void restampWalls(const PathfindRegion &region);
+	bool isWallPiece(PathfindObjectID id) const;
+	PathfindRegion surfaceCells(const PathfindWallSurface &s) const;
+	float wallHeightOf(PathfindLayerEnum layer) const;
 	void cleanOpenAndClosedLists();
 	Path *buildActualPath(const PathfindObject *obj, unsigned acceptableSurfaces, const Coord3D *fromPos, PathfindCell *goalCell, bool center, bool blocked);
 	void prependCells(Path *path, const Coord3D *fromPos, PathfindCell *goalCell, bool center);
@@ -1001,4 +1053,8 @@ private:
 	bool m_lineMemoBlockedArg = false, m_lineMemoPinchedArg = false;
 	PathfindLayerEnum m_lineMemoLayer = LAYER_GROUND;
 	std::vector<std::string> m_stops;
+	// lane WALL-1: the wall-top heights (RW pathfinder + 0x1BEBC, index layer - 0x11, at most 0x30 of them) and the wall pieces in insertion order (RW keeps their
+	// ids in a set at + 0x1C1C0; the port keeps each piece's surfaces so overlapping pieces can be classified again)
+	std::vector<float> m_wallHeights;
+	std::vector<WallPiece> m_wallPieces;
 };

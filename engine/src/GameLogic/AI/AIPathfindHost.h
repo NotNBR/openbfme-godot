@@ -26,14 +26,44 @@
 typedef std::uint32_t PathfindObjectID;
 static const PathfindObjectID PATHFIND_INVALID_ID = 0;
 
-// ZH GameType.h PathfindLayerEnum: 0 invalid, 1 ground, 2.. bridges, a wall layer; fits the 4 bits of a cell.
+// The RotWK layer ids (the 6 layer bits 4 .. 9 of the cell dword; BFME2 WorldBuilder decomp Pathfinder::GetWallHeight 0xd3ed70 / IsPointOnWall 0xd3f890,
+// BFME1 Pathfinder::getLayerHeight RVA 0x3D8940): 0 invalid, 1 ground, 2 .. 15 the raised (bridge) layers with cells of their own (not ported, S-161),
+// 0x10 every ramp, 0x11 .. 0x40 one id per wall-top height. Ramps and wall tops are written into the GROUND grid's cells (RW getCell answers the ground
+// grid for layer 1 and every layer from 0x10: RW 0x76550F). ZH's single LAYER_WALL = 15 is not RotWK's.
 enum PathfindLayerEnum
 {
 	LAYER_INVALID = 0,
 	LAYER_GROUND = 1,
 	LAYER_TOP = 2,
-	LAYER_WALL = 15,
-	LAYER_LAST = 15
+	LAYER_RAMP = 0x10,
+	LAYER_WALL_FIRST = 0x11,
+	LAYER_WALL_LAST = 0x40,
+	LAYER_LAST = 0x40
+};
+
+inline bool isWallLayer(PathfindLayerEnum l) { return (int)l >= (int)LAYER_WALL_FIRST && (int)l <= (int)LAYER_WALL_LAST; }
+
+// lane WALL-1: the walkable surfaces of a wall piece in world space, the triangles of its draw module's WallBoundsMesh (a flat wall top, `height` its z)
+// and RampMesh1 / RampMesh2 (a sloped way up, the triangles give the height). See GameClient/DrawableWallMeshes.h for where they come from.
+struct PathfindWallTriangle
+{
+	Coord3D v[3];
+};
+
+struct PathfindWallSurface
+{
+	std::vector<PathfindWallTriangle> triangles;
+	float loX = 0.0f, loY = 0.0f, hiX = 0.0f, hiY = 0.0f; // the 2D box of the triangles
+	float height = 0.0f;                                   // a wall top: its height; a ramp: its highest point
+	// the triangle under (x, y) (edges included) and its height there; false when no triangle holds the point
+	bool heightAt(float x, float y, float &z) const;
+};
+
+struct PathfindWallGeometry
+{
+	std::vector<PathfindWallSurface> walls; // WallBoundsMesh
+	std::vector<PathfindWallSurface> ramps; // RampMesh1, RampMesh2
+	bool empty() const { return walls.empty() && ramps.empty(); }
 };
 
 // ZH Geometry.h GeometryType
@@ -220,6 +250,9 @@ public:
 	virtual bool hordeFill(int &count, int &slots) const { (void)count; (void)slots; return false; }
 	// lane MOVE-3: Object + 0x458 bit 0 (effectively dead): RW 0x8E24D3 leaves such an object's goal alone
 	virtual bool isEffectivelyDead() const { return false; }
+	// lane WALL-1: the wall top and ramp surfaces of a wall piece (the draw module's WallBoundsMesh / RampMesh1 / RampMesh2 at the object's transform), null
+	// for every other object (RW 0x936B7D -> Pathfinder::ClassifyWall, BFME2 0x92F63F, asks the object's drawable)
+	virtual const PathfindWallGeometry *getWallGeometry() const { return nullptr; }
 };
 
 // TheGameLogic->findObjectByID

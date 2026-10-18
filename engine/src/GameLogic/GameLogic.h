@@ -353,6 +353,9 @@ public:
 		return id;
 	}
 	float getGroundHeight(float x, float y) const;
+	// lane WALL-1: ZH TerrainLogic::getHighestLayerForDestination + getLayerHeight: the highest walkable surface at (x, y), a wall top or a ramp over the
+	// terrain (the pathfinder's ground-grid layers); the terrain without an AI world
+	float getHighestLayerHeight(float x, float y) const;
 	// problems nothing explains; each distinct text is kept once and reaches report().errors
 	void reportError(const std::string &text);
 	// lane BUILD-1: a rule met at runtime that is registered as a stop but not ported (a castle's PreBuiltList ...): each distinct text reaches report().stops once

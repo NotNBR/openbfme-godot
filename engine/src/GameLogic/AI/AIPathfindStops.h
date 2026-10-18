@@ -20,8 +20,9 @@ const char *const kShoreScanStaleEdge =
 	"for the first row, the port starts it at 0 (INFERENCE)";
 // S-161 layers
 const char *const kLayers =
-	"S-161 only the ground layer exists: bridge, wall and ladder layers, portal / waypoint path nodes (RW 0x6F5547, 0x6F6286) and layer transitions are not modelled, "
-	"nor the bridge-layer classifiers' writes of cell types 5 / 6 (RW 0x7688ED, 0x768ACC, 0x93503A: the port never makes a CELL_IMPASSABLE cell)";
+	"S-161 the raised layers 2 .. 15 (bridges, RaisedWallMesh walkways: cells of their own) and the portals (ladders, siege towers, postern gates: portal / "
+	"waypoint path nodes, RW 0x6F5547, 0x6F6286) are not modelled, nor the bridge-layer classifiers' writes of cell types 5 / 6 (RW 0x7688ED, 0x768ACC, "
+	"0x93503A: the port never makes a CELL_IMPASSABLE cell); the ground grid's wall tops (0x11 .. 0x40) and ramps (0x10) are (lane WALL-1, S-4840)";
 // lane MOVE-3: the blocked unit's path patch (S-1830)
 const char *const kPatchLayers =
 	"S-1830 patchPath (RW 0x6F7938) expands no layer links or portals (RW 0x6F6286, S-161: only the ground layer exists)";
@@ -41,8 +42,15 @@ const char *const kPartialRebuild =
 const char *const kGroupDestination =
 	"S-163 adjustDestination with a group destination: the group tighten / path cost check (RW 0x6FDDE5, 0x6F70D5) is not ported";
 // S-164 footprints, reservations, queue
+const char *const kBaseSiteWindow =
+	"S-164 the BASE_SITE bit-17 window of the footprint routine is not modelled";
+// S-4840 wall tops and ramps (lane WALL-1, AIPathfindWalls.cpp)
 const char *const kWallLayer =
-	"S-164 wall layer, the wall query of the object's module and the BASE_SITE bit-17 window are not modelled";
+	"S-4840 wall tops and ramps come from the draw module's WallBoundsMesh / RampMesh1 / RampMesh2 of the default model state, tested as the meshes' "
+	"triangles (retail: the outline polygon and a Bridge built from the ramp mesh); a ramp's foot joins the ground and its top a wall within 15 of their "
+	"heights (INFERENCE), wall-top and ramp cells drop bits 17 and 18, and ClassifyWall's pinch pass is not applied";
+const char *const kWallLayerCount =
+	"S-4840 more than 48 wall-top heights: the wall surface is left out of the pathfinder's map (RW allows 0x11 .. 0x40)";
 const char *const kLargeRectFootprint =
 	"S-164 LARGE_RECTANGLE_PATHFIND footprints are axis-aligned boxes: the rotated polygon fill (RW 0x6ECC06 / 0x8E1E64) is not decoded";
 const char *const kLargeRectReservation =

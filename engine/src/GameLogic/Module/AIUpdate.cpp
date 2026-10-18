@@ -246,7 +246,8 @@ public:
 	bool zMotionSuppressed() const override { return false; }
 	unsigned logicFrame() const override { return obj().logic().getFrame(); }
 	bool containerAllowsBackingUp() const override { return false; }
-	float groundHeightAt(float x, float y) const override { return obj().logic().getGroundHeight(x, y); }
+	// RW 0x5E774A: TheTerrainLogic vslot 0x1C at the object's layer (lane WALL-1: a wall top's or a ramp's height, Pathfinder::getLayerHeight)
+	float groundHeightAt(float x, float y) const override { return m_ai.layerHeightAt(x, y); }
 	LocomotorPath *getPath() override { return m_ai.m_mover->path(); }
 	bool testObjectStatus(int bit) const override { return bit >= 0 && obj().testStatus((unsigned)bit); }
 	bool testModelCondition(int bit) const override { return obj().testModelCondition(bit); }
@@ -1305,6 +1306,40 @@ void AIUpdateInterface::setOrientation(float angle)
 float AIUpdateInterface::groundHeightAt(float x, float y) const
 {
 	return getObject()->logic().getGroundHeight(x, y);
+}
+
+float AIUpdateInterface::layerHeightAt(float x, float y) const
+{
+	if (m_world && m_adapter && m_adapter->getLayer() != LAYER_GROUND && m_world->mapReady())
+	{
+		return m_world->pathfinder().getLayerHeight(x, y, m_adapter->getLayer());
+	}
+	return getObject()->logic().getGroundHeight(x, y);
+}
+
+void AIUpdateInterface::settleOnLayer()
+{
+	if (!m_world || !m_adapter || !m_world->mapReady())
+	{
+		return;
+	}
+	const PathfindLayerEnum before = m_adapter->getLayer();
+	const PathfindLayerEnum layer = m_world->pathfinder().settleLayer(*m_adapter);
+	if (layer != before)
+	{
+		m_adapter->setLayer(layer);
+	}
+	if (layer == before && layer == LAYER_GROUND)
+	{
+		return;
+	}
+	Coord3D p = *getObject()->getPosition();
+	const float z = layerHeightAt(p.x, p.y);
+	if (p.z != z)
+	{
+		p.z = z;
+		getObject()->setPosition(&p);
+	}
 }
 
 void AIUpdateInterface::setLayer(PathfindLayerEnum layer)

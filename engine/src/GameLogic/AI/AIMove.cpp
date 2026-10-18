@@ -15,7 +15,8 @@ namespace
 {
 // the stops this component can raise (docs/STOPS.md S-166); tests pin the exact text
 const char *const kStopSpecialLayer =
-	"S-166 the special-layer (bridge, wall, ladder) branch of doLocomotor (RW 0x669E8F-0x66A27E) is not ported: a path node with a waypoint id moves like a ground node";
+	"S-166 the portal part of doLocomotor's special-layer branch (RW 0x669E8F-0x66A27E: ladders, siege towers, postern gates, bridges) is not ported: a path node "
+	"with a waypoint id moves like a ground node (the wall-top and ramp layers are followed: AIMover::refreshLayer, lane WALL-1)";
 const char *const kStopUpdate =
 	"S-166 the movement-complete block of AIUpdateInterface::update (RW 0x6695EF) skips the object goal refresh (0x68B411, 0x6EF225, 0x68B3BD), the status bit clears and the turret update; the state machine's sleep comes from the host";
 const char *const kStopPatch =
@@ -534,7 +535,7 @@ bool AIMover::computeQuickPath(const Coord3D &dest)
 	Path *p = new Path();
 	Coord3D from = obj.getPosition();
 	from.z = dest.z;
-	p->prependNode(&dest, LAYER_GROUND);
+	p->prependNode(&dest, m_pf.getLayerAt(dest.x, dest.y)); // lane WALL-1: the destination's layer (the ground on a map without walls)
 	p->prependNode(&from, obj.getLayer());
 	p->optimize(m_pf, &obj, m_host.locomotorInfo().validSurfaces, false, nullptr);
 	m_path = p;
@@ -590,7 +591,7 @@ bool AIMover::computePath(const Coord3D &destIn)
 		}
 	}
 	Path *np = nullptr;
-	if (m_pf.validMovementPosition(&obj, info, LAYER_GROUND, &dest))
+	if (m_pf.validMovementPosition(&obj, info, m_pf.getLayerAt(dest.x, dest.y), &dest)) // the destination's layer (RW 0x680A75; lane WALL-1: a wall top's)
 	{
 		const Coord3D pos = obj.getPosition();
 		bool partial = false;
@@ -733,6 +734,44 @@ Path *AIMover::pathReachingGoal(const Coord3D &from)
 	return path;
 }
 
+void AIMover::refreshLayer()
+{
+	PathfindObject &obj = m_host.pathfindObject();
+	if (!m_pf.isMapReady())
+	{
+		return;
+	}
+	PathfindLayerEnum layer = m_pf.settleLayer(obj);
+	if (layer != obj.getLayer())
+	{
+		m_host.setLayer(layer);
+	}
+	if (m_path && (m_goalType == AIGOAL_ON_PATH || m_goalType == AIGOAL_EXPLICIT_WITH_PATH))
+	{
+		// the path node nearest the unit: the current segment's start or its end (BFME2 doLocomotor 0x66A3A0 asks gd_00364521)
+		const PathNode *node = m_path->currentNode() ? m_path->currentNode() : m_path->getFirstNode();
+		if (node && node->getNext())
+		{
+			const Coord3D &p = obj.getPosition();
+			const Coord3D *a = node->getPosition(), *b = node->getNext()->getPosition();
+			const float da = SimMath::sumSquares2(SimMath::subf32(a->x, p.x), SimMath::subf32(a->y, p.y));
+			const float db = SimMath::sumSquares2(SimMath::subf32(b->x, p.x), SimMath::subf32(b->y, p.y));
+			if (db < da)
+			{
+				node = node->getNext();
+			}
+		}
+		if (node)
+		{
+			layer = m_pf.updateLayer(obj, node->getLayer());
+			if (layer != obj.getLayer())
+			{
+				m_host.setLayer(layer);
+			}
+		}
+	}
+}
+
 unsigned AIMover::doLocomotor()
 {
 	PathfindObject &obj = m_host.pathfindObject();
@@ -756,6 +795,7 @@ unsigned AIMover::doLocomotor()
 	Locomotor *loco = m_host.locomotor();
 	if (loco && !(m_isAiDead && !loco->getTemplate().m_locomotorWorksWhenDead))
 	{
+		refreshLayer();
 		const Coord3D pos = obj.getPosition();
 		switch (m_goalType)
 		{
@@ -1305,7 +1345,7 @@ StateReturnType AIMoveToState::onEnter()
 		{
 			m_ai.m_pf.snapClosestGoalPosition(obj, &m_goal);
 		}
-		m_ai.m_pf.updateGoal(obj, &m_goal, LAYER_GROUND);
+		m_ai.m_pf.updateGoal(obj, &m_goal, m_ai.m_pf.getLayerAt(m_goal.x, m_goal.y)); // lane WALL-1: the goal's layer (RW 0x680A75)
 		m_ai.m_pf.setIgnoreObstacleID(PATHFIND_INVALID_ID);
 	}
 	const Coord3D pos = obj.getPosition();

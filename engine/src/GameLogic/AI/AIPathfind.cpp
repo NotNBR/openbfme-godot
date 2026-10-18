@@ -255,6 +255,8 @@ void Pathfinder::reset()
 	m_uberBurst = false;
 	m_units.clear();
 	m_unitIndex.clear();
+	m_wallHeights.clear();
+	m_wallPieces.clear();
 }
 
 void Pathfinder::note(const char *stop)
@@ -333,6 +335,8 @@ void Pathfinder::newMap(const PathfindTerrain &terrain, const std::vector<Pathfi
 	m_units.clear();
 	m_unitIndex.clear();
 	m_stops.clear();
+	m_wallHeights.clear();
+	m_wallPieces.clear();
 	note(pathstops::kSlopeAndConfig);
 	note(pathstops::kLayers);
 	note(pathstops::kZoneProfiles);
@@ -459,7 +463,8 @@ PathfindGridStats Pathfinder::gridStats() const
 std::vector<std::string> Pathfinder::allStops()
 {
 	return { pathstops::kShore, pathstops::kSlopeAndConfig, pathstops::kRivers, pathstops::kLayers, pathstops::kZoneProfiles, pathstops::kHierarchical,
-		pathstops::kLargeRectGoal, pathstops::kPartialRebuild, pathstops::kGroupDestination, pathstops::kWallLayer, pathstops::kLargeRectFootprint,
+		pathstops::kLargeRectGoal, pathstops::kPartialRebuild, pathstops::kGroupDestination, pathstops::kBaseSiteWindow, pathstops::kWallLayer,
+		pathstops::kWallLayerCount, pathstops::kLargeRectFootprint,
 		pathstops::kLargeRectReservation, pathstops::kQueueFull, pathstops::kQueueTime, pathstops::kPath, pathstops::kNumerics };
 }
 

@@ -210,6 +210,10 @@ public:
 	void setGoalTypeRaw(AIGoalType t) { m_goalType = t; }
 	// distance left to the goal for the current goal type (RW 0x664127)
 	float locomotorDistanceToGoal() const;
+	// lane WALL-1: the special-layer part of doLocomotor (RW 0x669E8F-0x66A27E for the ground grid's layers): the unit's layer settles to the cell under it
+	// (Pathfinder::settleLayer) and, on a path, follows the nearest path node's layer (Pathfinder::UpdateLayer BFME2 0x6F11A1). The horde member update
+	// (RW 0x66C748) calls it too; its z then is the layer's height (LocomotorHost::groundHeightAt)
+	void refreshLayer();
 
 	// ---- the per-frame locomotor step (RW 0x669932): returns the number of frames until the next call is needed ----
 	unsigned doLocomotor();
