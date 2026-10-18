@@ -720,6 +720,43 @@ TEST_CASE("siege1 retail: the scripts' DEPLOY_SIEGE_ON_NAMED_WALL / RETRACT_SIEG
 	CHECK(e.stats().unportedActions.empty());
 }
 
+TEST_CASE("siege1 retail: Grond (CrusherLevel 2) drives over an enemy soldier and crushes it; a battering ram (no CrusherLevel) does not")
+{
+	if (!haveWorld("siege1 crush"))
+	{
+		return;
+	}
+	Rig r(shared(), "map mp fall back 4p", "FactionMordor");
+	r.frame(2);
+	Player *enemy = r.game->players().findPlayerWithName("Player_2");
+	REQUIRE(enemy);
+	auto crushes = [&](const char *engineName) {
+		const Coord3D c0 = r.freeSpot(1500.0f, 1500.0f, 400.0f);
+		Object *eng = r.make(engineName, c0.x, c0.y);
+		Object *soldier = r.make("GondorFighter", c0.x + 150.0f, c0.y, enemy);
+		r.frame(5);
+		const ObjectID sid = soldier->getID();
+		soldier->getAIUpdateInterface()->setAttitude(-2); // asleep: it stands in the way
+		eng->getAIUpdateInterface()->aiMoveToPosition(Coord3D{ c0.x + 400.0f, c0.y, 0.0f }, CMD_FROM_PLAYER);
+		bool dead = false;
+		for (int f = 0; f < 150 && !dead; ++f)
+		{
+			r.frame(1);
+			const Object *s = r.logic().findObjectByID(sid);
+			dead = !s || s->isEffectivelyDead();
+		}
+		r.logic().findObjectByID(eng->getID())->kill(0);
+		if (Object *s = r.logic().findObjectByID(sid))
+		{
+			s->kill(0);
+		}
+		r.frame(2);
+		return dead;
+	};
+	CHECK(crushes("MordorGrond"));
+	CHECK_FALSE(crushes("MordorBatteringRam"));
+}
+
 TEST_CASE("siege1: the stop lines of the siege deploy are S-4870 .. S-4873 and the siege modules have their runtime classes")
 {
 	const std::vector<std::string> lines = SiegeModules::stopLines();
