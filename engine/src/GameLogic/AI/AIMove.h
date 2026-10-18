@@ -99,6 +99,9 @@ public:
 	// RW 0x66A143 .. 0x66A166 (a Climb portal steeply up or down): a disguised unit (its StealthUpdate, RW 0x68FBD3, + 0x3C) is marked detected (RW 0x7767A9(0, 1,
 	// null, horde)); default nothing
 	virtual void revealDisguiseOnClimb() {}
+	// RW 0x662A0E (a type 7 portal, after destroyPath RW 0x66276B): the AI's vslot 0x60 with CMD_FROM_AI (RW 0x66D8F5, the AI's private idle: INFERENCE S-4850,
+	// the port's aiIdle(CMD_FROM_AI)); default nothing
+	virtual void idleFromAI() {}
 };
 
 enum AIGoalType

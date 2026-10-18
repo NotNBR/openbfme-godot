@@ -518,12 +518,14 @@ void AIUpdateInterface::aiMoveAwayFromUnit(Object *unit, const Coord3D &requeste
 	Pathfinder &pf = m_world->pathfinder();
 	const PathfindObject *unitPf = &m_world->adapterFor(*unit);
 	const PathfindObject *prevPf = prev ? &m_world->adapterFor(*prev) : nullptr;
+	m_movingAwaySearch = true; // lane WALL-2, RW 0x66DBFB: AI + 0x3CF while the move-away searches run (a type 7 portal refuses the unit then, RW 0x68230B)
 	Path *path = pf.getMoveAwayFromPath(&adapter(), locomotorInfo(), unitPf, unitPath, prevPf, prevPath);
 	if (path == nullptr && !canPathThroughUnits())
 	{
 		setCanPathThroughUnits(true);
 		path = pf.getMoveAwayFromPath(&adapter(), locomotorInfo(), unitPf, unitPath, prevPf, prevPath);
 	}
+	m_movingAwaySearch = false; // RW 0x66DC4B
 	// RW 0x66DC43 .. 0x66DC57 (lane BACKLOG-1): with or without a path, the current locomotor's preferred point becomes the object's position (RW 0x5E39CE)
 	if (m_curLocomotor)
 	{

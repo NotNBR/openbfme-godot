@@ -388,7 +388,7 @@ TEST_CASE("pathfind stops: what a build and a search report is registered, every
 	delete w.pf->findPath(nullptr, groundLoco(), &from, &inside, &partial);
 	delete w.pf->findPath(nullptr, groundLoco(), &from, &far, &partial);
 	const std::vector<std::string> all = Pathfinder::allStops();
-	REQUIRE(all.size() == 23);
+	REQUIRE(all.size() == 22);
 	std::set<std::string> registered(all.begin(), all.end());
 	CHECK(registered.size() == all.size());
 	std::set<int> rows;
@@ -409,7 +409,7 @@ TEST_CASE("pathfind stops: what a build and a search report is registered, every
 		rows.insert(s[4] - '0');
 	}
 	CHECK(wallRows == 2);
-	CHECK(portalRows == 5);
+	CHECK(portalRows == 4);
 	// the rows the pathfinder core raises: S-160 classification, S-161 layers, S-162 zones, S-163 search, S-164 footprints, S-165 path,
 	// S-167 numerics (S-166, the AI move path, has its own list: AIMover::allStops)
 	CHECK(rows == std::set<int>{ 0, 1, 2, 3, 4, 5, 7 });

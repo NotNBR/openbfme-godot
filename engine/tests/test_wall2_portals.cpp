@@ -309,6 +309,21 @@ TEST_CASE("wall2 portals: Waypoint::isValidUnitType: an enemy of the owner may n
 		w.unit->team = 1;
 		CHECK(w.pf->waypointAllows(*a, *w.unit));
 	}
+	{
+		// a type 7 waypoint with an owner (FakePathfindPortalBehaviour's gate pair) refuses a unit without an AI and one inside a move-away search (RW 0x68230B:
+		// AI + 0x3CF, set around getMoveAwayFromPath RW 0x66DBFB / 0x66DC4B)
+		PortalWorld w;
+		PathfindWaypoint *a = w.pf->findWaypoint(w.a);
+		a->type = PWAYPOINT_TYPE7;
+		CHECK(w.pf->waypointAllows(*a, *w.unit));
+		w.unit->moveAwaySearch = true;
+		CHECK_FALSE(w.pf->waypointAllows(*a, *w.unit));
+		w.unit->moveAwaySearch = false;
+		w.unit->mobile = false; // no AI
+		CHECK_FALSE(w.pf->waypointAllows(*a, *w.unit));
+		a->owner = PATHFIND_INVALID_ID; // RW tests the type only with an owner
+		CHECK(w.pf->waypointAllows(*a, *w.unit));
+	}
 	// the portal types (RW 0x6E82FD)
 	PathfindWaypoint t;
 	for (int type = 0; type < 10; ++type)

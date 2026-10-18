@@ -271,9 +271,11 @@ bool Pathfinder::waypointAllows(const PathfindWaypoint &w, const PathfindObject 
 		}
 		if (w.type == PWAYPOINT_TYPE7)
 		{
-			// RW 0x68230B: refused without an AI or with the AI's byte + 0x3CF; no RotWK producer of a type 7 waypoint is known: reported, refused
-			const_cast<Pathfinder *>(this)->note(pathstops::kPortalType7);
-			return false;
+			// RW 0x68230B: refused without an AI or with the AI's byte + 0x3CF (set around the move-away searches)
+			if (!obj.hasAI() || obj.inMoveAwaySearch())
+			{
+				return false;
+			}
 		}
 	}
 	if (w.filter && !w.filter(obj))

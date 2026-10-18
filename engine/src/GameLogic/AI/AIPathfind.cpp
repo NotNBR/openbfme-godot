@@ -474,7 +474,7 @@ std::vector<std::string> Pathfinder::allStops()
 		pathstops::kLargeRectGoal, pathstops::kPartialRebuild, pathstops::kGroupDestination, pathstops::kBaseSiteWindow, pathstops::kWallLayer,
 		pathstops::kWallLayerCount, pathstops::kLargeRectFootprint,
 		pathstops::kLargeRectReservation, pathstops::kQueueFull, pathstops::kQueueTime, pathstops::kPath, pathstops::kNumerics, pathstops::kPortals,
-		pathstops::kPortalTable, pathstops::kPortalType7, pathstops::kPortalLayerQuirk, pathstops::kPortalLostHorde };
+		pathstops::kPortalTable, pathstops::kPortalLayerQuirk, pathstops::kPortalLostHorde };
 }
 
 // ---- the state hash (MOVE-1) ----

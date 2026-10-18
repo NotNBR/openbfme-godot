@@ -1552,6 +1552,13 @@ void AIUpdateInterface::revealDisguiseOnClimb()
 	}
 }
 
+// lane WALL-2, RW 0x662A0E: AI vslot 0x60 (RW 0x66D8F5) with CMD_FROM_AI; RW 0x66D8F5 is read as the AI's private idle (the riders of its contain idle too, the
+// machine goes to AI_IDLE): INFERENCE S-4850, the port's aiIdle(CMD_FROM_AI)
+void AIUpdateInterface::idleFromAI()
+{
+	aiIdle(CMD_FROM_AI);
+}
+
 bool AIUpdateInterface::setModelCondition(const char *name, bool on)
 {
 	if (m_destroying)

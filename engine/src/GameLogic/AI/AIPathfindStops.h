@@ -57,8 +57,6 @@ const char *const kPortals =
 	"waypoint of a portal type is not registered, the portal search's movement is the caller's locomotor set, and RW 0x68C053's object flag (Object + 0x4AC) is "
 	"never set (S-4851)";
 const char *const kPortalTable = "S-4850 more than 65534 portal waypoints: the waypoint is not created";
-const char *const kPortalType7 =
-	"S-4850 a type 7 waypoint with an owner was asked (RW 0x68230B tests the unit's AI byte + 0x3CF, not identified): it is refused";
 const char *const kPortalLostHorde =
 	"S-4852 a horde was crossing a portal that was removed: RW classifies its members before / on / after it (HordeContain slot 0x21C) and kills the ones on it; "
 	"the port only drops the horde's and its members' paths";

@@ -579,6 +579,13 @@ bool ObjectPathfindAdapter::isParked() const
 
 bool ObjectPathfindAdapter::hasAI() const { return m_object->getAIUpdateInterface() != nullptr; }
 
+bool ObjectPathfindAdapter::inMoveAwaySearch() const
+{
+	// lane WALL-2: RW AI + 0x3CF, set only around the two getMoveAwayFromPath calls (RW 0x66DBFB / 0x66DC4B)
+	const AIUpdateInterface *ai = m_object->getAIUpdateInterface();
+	return ai && ai->movingAwaySearch();
+}
+
 PathfindObjectID ObjectPathfindAdapter::getIgnoredObstacleID() const
 {
 	AIUpdateInterface *a = ai();

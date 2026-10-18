@@ -219,7 +219,7 @@ enum PathfindWaypointType
 	PWAYPOINT_WALK = 2,     // DynamicPortalBehaviour WayPoint Type:Walk (RW 0x86441E)
 	PWAYPOINT_CLIMB = 3,    // Type:Climb
 	PWAYPOINT_PRECLIMB = 4, // Type:PreClimb
-	PWAYPOINT_TYPE7 = 7,    // RW 0x6822FE: refused to a unit whose AI byte + 0x3CF is set; no RotWK producer known
+	PWAYPOINT_TYPE7 = 7,    // RW 0x6822FE: refused to a unit whose AI byte + 0x3CF is set; FakePathfindPortalBehaviour's gate pair (RW 0x864D02)
 	PWAYPOINT_MINESHAFT = 8 // MineshaftPortalBehaviour's network waypoints
 };
 

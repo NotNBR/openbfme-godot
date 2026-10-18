@@ -15,11 +15,10 @@ namespace
 {
 // the stops this component can raise (docs/STOPS.md S-166); tests pin the exact text
 const char *const kStopSpecialLayer =
-	"S-166 doLocomotor's portal branch (RW 0x669E8F-0x66A27E, lane WALL-2) met a waypoint of type 0, 7 or 8: type 0 moves nothing (RW's debug line), type 7 drops "
-	"the path without the AI's vslot 0x60(2) call (RW 0x662A0E), the mineshaft network (type 8) is not ported";
-// lane WALL-2: the three cases of kStopSpecialLayer (one stop line)
+	"S-166 doLocomotor's portal branch (RW 0x669E8F-0x66A27E, lane WALL-2) met a waypoint of type 0 or 8: type 0 moves nothing (RW's debug line), the mineshaft "
+	"network (type 8) is not ported";
+// lane WALL-2: the two cases of kStopSpecialLayer (one stop line)
 const char *const kStopPortalNormal = kStopSpecialLayer;
-const char *const kStopPortalType7 = kStopSpecialLayer;
 const char *const kStopPortalMineshaft = kStopSpecialLayer;
 const char *const kStopUpdate =
 	"S-166 the movement-complete block of AIUpdateInterface::update (RW 0x6695EF) skips the object goal refresh (0x68B411, 0x6EF225, 0x68B3BD), the status bit clears and the turret update; the state machine's sleep comes from the host";
@@ -787,7 +786,8 @@ void AIMover::refreshLayer()
 //      toward the point mirrored through itself (2 * pos - point, the first point ahead's z: it climbs down backwards), BACKING_UP and CLIMBING come and a disguised
 //      unit is revealed; steeply up (dz > |d| * 0.5) CLIMBING comes (and the reveal) and it turns toward the point; else it turns toward the point; then it is
 //      put on the point;
-//   7: ACCELERATE, DECELERATE go, the path is dropped and the AI's vslot 0x60(2) runs (RW 0x662A0E; no RotWK producer: reported), nothing else;
+//   7 (FakePathfindPortalBehaviour's gate pair): ACCELERATE, DECELERATE go, the path is dropped and the AI idles (RW 0x662A0E: destroyPath, vslot 0x60(2)),
+//      nothing else;
 //   8 (mineshaft): not ported (reported);
 // then (every type but 7 and 8) the unit takes the point's layer (RW 0x5E2D5D -> Object::setLayer RW 0x68BBF4) and the path's closest segment (RW 0x765598,
 // opt 1) follows its position.
@@ -851,7 +851,7 @@ void AIMover::moveThroughPortal(Locomotor &loco, const PathfindWaypoint &portal,
 		m_host.setModelCondition("ACCELERATE", false);
 		m_host.setModelCondition("DECELERATE", false);
 		destroyPath();
-		note(kStopPortalType7);
+		m_host.idleFromAI();
 		return;
 	case PWAYPOINT_MINESHAFT:
 		note(kStopPortalMineshaft);

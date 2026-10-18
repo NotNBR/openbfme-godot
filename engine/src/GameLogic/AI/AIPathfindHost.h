@@ -258,6 +258,9 @@ public:
 	virtual bool isSkirmishAIControlled() const { return false; }
 	// lane WALL-2: RW 0x68C053, the first test of the portal search RW 0x6F5547 (a unit it answers true for crosses no portal; name INFERRED: S-4851)
 	virtual bool refusesPortals() const { return false; }
+	// lane WALL-2: RW AI + 0x3CF, the unit's AI is inside a move-away search (RW 0x66DBFB / 0x66DC4B set it around getMoveAwayFromPath); a type 7 waypoint
+	// refuses such a unit (RW 0x68230B)
+	virtual bool inMoveAwaySearch() const { return false; }
 };
 
 // TheGameLogic->findObjectByID
