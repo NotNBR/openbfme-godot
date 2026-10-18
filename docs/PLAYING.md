@@ -246,9 +246,17 @@ original height; the mouse wheel takes you higher. Past the map's edge the
 ground fades to black, as the original game draws it.
 
 The optional **free camera** goes further: it lets you zoom out to the whole
-map. Both are OpenBFME additions, not part of the original game; the free
-camera is off by default. They change only the camera; the game itself plays
-the same.
+map, and steer the camera freely:
+
+- the mouse wheel zooms in bigger steps, from 40 above the ground (closer than
+  the original game) to the whole map;
+- holding the middle button and dragging up or down tilts the view, from near
+  the horizon to looking straight down; sideways still turns it;
+- a middle click puts the camera back to the game's default view;
+- tilted low, the camera stays above the hills behind it.
+
+Both are OpenBFME additions, not part of the original game; the free camera is
+off by default. They change only the camera; the game itself plays the same.
 
 - In the launcher: Settings > General, turn on **Free camera**. It
   applies the next time the game starts.
