@@ -119,6 +119,22 @@ struct TestPortal : public SiegePortalInterface
 	}
 	void createPortalWaypoints() override { ++created; }
 	void clearPortalWaypoints() override { ++cleared; }
+	// RW 0x863D77 as read in RotWK: TopAttackPos's X and Y scaled by the length of the object's X axis normalised by its larger planar component, through the
+	// object's transform. The ladder's TopAttackPos X:30 Y:0 Z:52 (radius 30), the tower's X:34 Y:0 Z:52 (radius 25)
+	Coord3D topAttackPosition() override
+	{
+		const bool tower = obj->getTemplate()->getName() == "MordorSiegeTower";
+		const float tx = tower ? 34.0f : 30.0f, ty = 0.0f, tz = 52.0f;
+		const float *b = obj->getBasis();
+		const float ax = std::fabs(b[0]), ay = std::fabs(b[3]);
+		const float m = ax >= ay ? ax : ay;
+		const float x = b[0] / m, y = b[3] / m;
+		const float len = std::sqrt(x * x + y * y);
+		const float lx = tx * len, ly = ty * len;
+		const Coord3D &p = *obj->getPosition();
+		return Coord3D{ b[0] * lx + b[1] * ly + b[2] * tz + p.x, b[3] * lx + b[4] * ly + b[5] * tz + p.y, b[6] * lx + b[7] * ly + b[8] * tz + p.z };
+	}
+	float topAttackRadius() const override { return obj->getTemplate()->getName() == "MordorSiegeTower" ? 25.0f : 30.0f; }
 };
 std::map<ObjectID, TestPortal> g_portals;
 SiegePortalInterface *testPortalOf(Object &obj)
@@ -578,6 +594,54 @@ TEST_CASE("siege1 retail: an Uruk horde's SiegeDeployHordeSpecialPower (HordeDep
 	// its update: no target, the AI's last command not the player's -> idle, then asleep
 	CHECK(horde->getAIUpdateInterface()->isIdle());
 	CHECK(hp->friend_getNextCallFrame() == (UnsignedInt)UPDATE_SLEEP_FOREVER);
+}
+
+TEST_CASE("siege1 retail: a unit on the wall reaches a deployed ladder at its top (the melee reach's SIEGE_TOWER branch, RW 0x6EDB6F; TopAttackPos / TopAttackRadius)")
+{
+	if (!haveWorld("siege1 ladder top reach"))
+	{
+		return;
+	}
+	PortalScope portals;
+	Rig r(shared(), "map wor helms deep", "FactionIsengard");
+	r.frame(3);
+	r.game->shroud().revealMapForPlayerPermanently(r.index());
+	LadderScene sc(r);
+	TestPortal &portal = *static_cast<TestPortal *>(testPortalOf(*sc.ladder));
+	const Coord3D topBefore = portal.topAttackPosition();
+	CHECK_FALSE(siegeTowerTopReach(*sc.ladder, topBefore, 10.0f)); // not deployed: no reach
+	orderPowerAt(r, *sc.ladder, "SpecialAbilitySiegeDeploy", sc.wall);
+	for (int f = 0; f < 120 && !sc.deploy->isDeployed(); ++f)
+	{
+		r.frame(1);
+	}
+	REQUIRE(sc.deploy->isDeployed());
+	const Coord3D top = portal.topAttackPosition();
+	CHECK(siegeTowerTopReach(*sc.ladder, top, 10.0f));
+	CHECK(siegeTowerTopReach(*sc.ladder, Coord3D{ top.x + 39.0f, top.y, top.z }, 10.0f));  // within TopAttackRadius 30 + the radius 10 in x
+	CHECK_FALSE(siegeTowerTopReach(*sc.ladder, Coord3D{ top.x + 40.0f, top.y, top.z }, 10.0f));
+	CHECK_FALSE(siegeTowerTopReach(*sc.ladder, Coord3D{ top.x, top.y, top.z + 20.0f }, 10.0f)); // 20 in height is too far (RW: below 20)
+	// an enemy on the wall top beside it attacks the ladder and hits it
+	Player *enemy = r.game->players().findPlayerWithName("Player_2");
+	REQUIRE(enemy);
+	Object *hero = r.make("GondorBoromir", top.x, top.y, enemy);
+	r.frame(1);
+	AIUpdateInterface *hai = hero->getAIUpdateInterface();
+	REQUIRE(hai);
+	hai->settleOnLayer();
+	INFO("the hero at " << hero->getPosition()->x << ", " << hero->getPosition()->y << ", " << hero->getPosition()->z << " layer " << (int)hai->adapter().getLayer()
+						<< "; the ladder's top at " << top.x << ", " << top.y << ", " << top.z);
+	REQUIRE(isWallLayer(hai->adapter().getLayer()));
+	const float h0 = sc.ladder->getBodyModule()->getHealth();
+	REQUIRE(hai->aiAttackObject(sc.ladder, CMD_FROM_PLAYER));
+	int hit = -1;
+	for (int f = 1; f <= 100 && hit < 0; ++f)
+	{
+		r.frame(1);
+		hit = sc.ladder->getBodyModule()->getHealth() < h0 ? f : -1;
+	}
+	// (the hero stands over the ladder's top: the footprint test of the melee reach already passes; the top branch alone is pinned above)
+	CHECK(hit == 7);
 }
 
 TEST_CASE("siege1: the stop lines of the siege deploy are S-4870 .. S-4873 and the siege modules have their runtime classes")

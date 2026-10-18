@@ -99,7 +99,10 @@ class SpecialPowerTemplate;
 //     space) is on a wall (Pathfinder::IsPointOnWall(point, false)); `out` (may be null) receives the point; an AboveWall out of the waypoint list answers true
 //     with the object's position;
 //   * RW 0x86404D (BFME2 0x460F90): the deployed ladder's / tower's waypoints and portal links are made (the climb joins the pathfinder);
-//   * RW 0x8639EF (BFME2 0x46094C): the waypoints made are removed again (on leaving the deployed phase and when the object dies).
+//   * RW 0x8639EF (BFME2 0x46094C): the waypoints made are removed again (on leaving the deployed phase and when the object dies);
+//   * RW 0x863D77: the world point of TopAttackPos (module data + 0x164 / + 0x168 / + 0x16C: X, Y scaled by the length of the object's planar X axis
+//     normalised by its larger component, Z as is, through the object's transform RW 0x70BFD1) and RW 0x863D30: TopAttackRadius (data + 0x170). The melee
+//     reach of a unit against a deployed SIEGE_TOWER (RW 0x6EDB6F .. 0x6EDC74, ObjectWeapons) reads them.
 class SiegePortalInterface
 {
 public:
@@ -107,7 +110,14 @@ public:
 	virtual bool isEndPortalAboveWall(Coord3D *out) = 0; // RW 0x863EB3
 	virtual void createPortalWaypoints() = 0;            // RW 0x86404D
 	virtual void clearPortalWaypoints() = 0;             // RW 0x8639EF
+	virtual Coord3D topAttackPosition() = 0;             // RW 0x863D77
+	virtual float topAttackRadius() const = 0;           // RW 0x863D30
 };
+
+// lane SIEGE-1: RW 0x6EDB6F .. 0x6EDC74 (the melee reach's SIEGE_TOWER branch): a unit at `sourcePos` with the bounding radius `sourceRadius` reaches the
+// deployed ladder / tower `tower` when the tower's portal answers its top attack point within 20 in height (RW 0xBDBC6C, a double compare of the fabs) and
+// within sourceRadius + TopAttackRadius in x and in y. False when the tower is not deployed or has no portal runtime (S-4870)
+bool siegeTowerTopReach(Object &tower, const Coord3D &sourcePos, float sourceRadius);
 
 // RW 0x863983 for the siege modules: the object's DynamicPortalBehaviour as the interface above. A DynamicPortalBehaviour module that does not implement it (not
 // ported: S-4870) answers null and notes the stop

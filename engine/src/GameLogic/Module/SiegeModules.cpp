@@ -255,6 +255,27 @@ const char *SiegeModules::portalStopLine()
 	return kStopPortal;
 }
 
+bool siegeTowerTopReach(Object &tower, const Coord3D &sourcePos, float sourceRadius)
+{
+	// RW 0x6EDB6F .. 0x6EDC74
+	SiegePortalInterface *portal = findSiegePortal(tower); // RW 0x863983
+	const SiegeDeploySpecialPower *deploy = SiegeDeploySpecialPower::of(tower);
+	if (!portal || !deploy || !deploy->isDeployed()) // RW 0x8C9C01
+	{
+		return false;
+	}
+	const Coord3D top = portal->topAttackPosition(); // RW 0x863D77
+	const float dz = SimMath::subf32(top.z, sourcePos.z);
+	const float dx = SimMath::subf32(top.x, sourcePos.x);
+	const float dy = SimMath::subf32(top.y, sourcePos.y);
+	if (!(SimMath::absD((double)dz) < (double)20.0f)) // RW 0xBDBC6C
+	{
+		return false;
+	}
+	const float reach = SimMath::addf32(portal->topAttackRadius(), sourceRadius); // RW 0x863D30 + the attacker's Object + 0xB8 (x87, stored as a float)
+	return SimMath::absD((double)dx) < (double)reach && SimMath::absD((double)dy) < (double)reach;
+}
+
 std::vector<std::string> SiegeModules::stopLines()
 {
 	return { kStopPortal, kStopAdjust, kStopSiege };
