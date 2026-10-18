@@ -257,6 +257,8 @@ void Pathfinder::reset()
 	m_unitIndex.clear();
 	m_wallHeights.clear();
 	m_wallPieces.clear();
+	m_raised = {};           // lane WALL-2
+	m_anyRaised = false;
 	m_waypointSlots.clear(); // lane WALL-2
 	m_waypointIds.clear();
 	m_waypointCounter = 0x40000000;
@@ -341,6 +343,8 @@ void Pathfinder::newMap(const PathfindTerrain &terrain, const std::vector<Pathfi
 	m_stops.clear();
 	m_wallHeights.clear();
 	m_wallPieces.clear();
+	m_raised = {}; // lane WALL-2: the raised layers come back with their wall pieces
+	m_anyRaised = false;
 	m_waypointSlots.clear(); // lane WALL-2: the objects' portals are registered again as they enter the new map
 	m_waypointIds.clear();
 	m_waypointCounter = 0x40000000;
@@ -474,7 +478,7 @@ std::vector<std::string> Pathfinder::allStops()
 		pathstops::kLargeRectGoal, pathstops::kPartialRebuild, pathstops::kGroupDestination, pathstops::kBaseSiteWindow, pathstops::kWallLayer,
 		pathstops::kWallLayerCount, pathstops::kLargeRectFootprint,
 		pathstops::kLargeRectReservation, pathstops::kQueueFull, pathstops::kQueueTime, pathstops::kPath, pathstops::kNumerics, pathstops::kPortals,
-		pathstops::kPortalTable, pathstops::kPortalLayerQuirk, pathstops::kPortalLostHorde };
+		pathstops::kPortalTable, pathstops::kRaisedLayers, pathstops::kRaisedLayerCount, pathstops::kPortalLayerQuirk, pathstops::kPortalLostHorde };
 }
 
 // ---- the state hash (MOVE-1) ----
@@ -570,6 +574,7 @@ void Pathfinder::crc(StateHasher &h) const
 	}
 	m_zoneManager.crc(h);
 	crcPortals(h); // lane WALL-2: nothing unless portals exist
+	crcRaised(h);  // lane WALL-2: nothing unless a raised layer is in use
 	if (m_uberLimits)
 	{
 		h.addU32(m_uberBurst ? 1u : 0u); // lane PATHPERF-4: Uber only, a Faithful game hashes as before

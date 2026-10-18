@@ -262,8 +262,9 @@ void Pathfinder::clip(Coord3D *from, Coord3D *to)
 
 bool Pathfinder::clientSafeQuickDoesPathExist(const PathfindLocomotorInfo &loco, const Coord3D *from, const Coord3D *to, const PathfindObject *obj)
 {
-	// ZH clientSafeQuickDoesPathExist on the ground layer, with the RW zone model (the terrain variant when an end is a building)
-	const PathfindMovement mv = makeMovement(nullptr, loco);
+	// ZH clientSafeQuickDoesPathExist on the ground layer, with the RW zone model (the terrain variant when an end is a building). Lane WALL-2: with the unit
+	// the movement is the unit's (RW 0x6F5D65 .. 0x6F5D91: its SlopeLimitIndex and CanPathThroughGates, RW 0x6EA04D), without one ZH's anonymous movement
+	const PathfindMovement mv = makeMovement(obj, loco);
 	PathfindCell *goalCell = getClippedCell(LAYER_GROUND, to);
 	PathfindCell *parentCell = getClippedCell(LAYER_GROUND, from);
 	if (parentCell == nullptr || goalCell == nullptr)
@@ -1486,7 +1487,7 @@ void Pathfinder::prependCells(Path *path, const Coord3D *fromPos, PathfindCell *
 				mark(wp->id);
 			}
 		}
-		path->prependNode(&pos, m_wallPieces.empty() ? cell->getLayer() : getLayerAt(pos.x, pos.y)); // RW 0x6EF721 .. 0x6EF741 (see above)
+		path->prependNode(&pos, m_wallPieces.empty() ? cell->getLayer() : getLayerAt(pos.x, pos.y, pos.z)); // RW 0x6EF721 .. 0x6EF741 (see above)
 		path->getFirstNode()->setCanOptimize(canOptimize);
 		if (cell->isBlockedByAlly())
 		{

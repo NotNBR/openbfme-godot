@@ -40,7 +40,7 @@ public:
 	struct ModelSurfaces
 	{
 		std::string modelName;
-		std::vector<std::vector<PathfindWallTriangle>> walls, ramps;
+		std::vector<std::vector<PathfindWallTriangle>> walls, ramps, raised; // raised: lane WALL-2, RaisedWallMesh
 	};
 	const ModelSurfaces *surfacesOf(const ThingTemplate &tt);
 	// `model` turned by `angle`, scaled by `scale` and moved to `pos`

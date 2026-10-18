@@ -70,7 +70,7 @@ struct ObjectMovementInfo
 	float fenceWidth = 0.0f, fenceXOffset = 0.0f;
 	float pathfindDiameter = -1.0f;  // RW +0x53C: <= 0 when unset
 	int slopeLimitIndex = 0;         // RW +0x57C
-	bool canPathThroughGates = false; // RW +0x644
+	bool canPathThroughGates = true; // RW +0x644 (lane WALL-2: the template constructor's default is 1, RW 0x74004B; 2.01's INI only ever writes No)
 	unsigned crusherLevel = 0, crushableLevel = 0;
 	LocomotorSetTemplate locomotorSets; // the object's `LocomotorSet` blocks (RW 0x73BF6B), one entry per SET_* condition
 	bool hasAIModule = false;

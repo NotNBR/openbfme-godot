@@ -438,3 +438,154 @@ TEST_CASE("wall2 modules retail: FakePathfindPortalBehaviour: a skirmish AI's cl
 		CHECK((made > 0) == aiFortress);
 	}
 }
+
+TEST_CASE("wall2 raised retail: Helm's Deep's gatehouse walkway (HelmsDeepGatehouseCenter's RaisedWallMesh P1) is raised layer 2 over the gate's passage")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *centre = g.first("HelmsDeepGatehouseCenter");
+	REQUIRE(centre);
+	MESSAGE("centre at " << centre->getPosition()->x << ", " << centre->getPosition()->y << ", " << centre->getPosition()->z << "; raised layers " << pf.raisedLayerCount()
+	                     << ", layer 2 height " << pf.raisedLayerHeight(LAYER_TOP));
+	const Coord3D c = *centre->getPosition();
+	const int ccx = SimMath::floorToInt(SimMath::mulf32(c.x, 0.1f)), ccy = SimMath::floorToInt(SimMath::mulf32(c.y, 0.1f));
+	PathfindLayerEnum walkway = LAYER_INVALID;
+	for (int l = (int)LAYER_TOP; l <= (int)LAYER_RAISED_LAST; ++l)
+	{
+		if (pf.raisedLayerInUse((PathfindLayerEnum)l))
+		{
+			const PathfindCell *rc = pf.raisedCellAt((PathfindLayerEnum)l, ccx, ccy);
+			MESSAGE("raised layer " << l << " height " << pf.raisedLayerHeight((PathfindLayerEnum)l) << (rc ? " has a cell at the centre" : ""));
+			if (rc && rc->getType() == PathfindCell::CELL_CLEAR)
+			{
+				walkway = (PathfindLayerEnum)l;
+			}
+		}
+	}
+	REQUIRE(walkway != LAYER_INVALID);
+	int clear = 0, joints = 0, rampJoints = 0;
+	const ICoord2D *ext = pf.getExtent();
+	for (int x = 0; x <= ext->x; ++x)
+	{
+		for (int y = 0; y <= ext->y; ++y)
+		{
+			const PathfindCell *rc = pf.raisedCellAt(walkway, x, y);
+			if (rc && rc->getType() == PathfindCell::CELL_CLEAR)
+			{
+				++clear;
+				joints += rc->getConnectLayer() == LAYER_RAMP ? 1 : 0;
+			}
+			rampJoints += pf.cellAt(x, y)->getConnectLayer() == walkway ? 1 : 0;
+		}
+	}
+	MESSAGE("walkway cells " << clear << ", walkway joints " << joints << ", ramp cells joining it " << rampJoints);
+	CHECK(clear > 0); // tolerance: the walkway has cells (counted above)
+	// the passage under the walkway is the ground
+	const PathfindCell *under = pf.getCell(LAYER_GROUND, &c);
+	REQUIRE(under);
+	MESSAGE("the cell under the centre: layer " << (int)under->getLayer() << " type " << (int)under->getType());
+}
+
+namespace
+{
+// the CLEAR wall-top cell (all eight neighbours on its layer) nearest `pos`, its centre in `out`
+bool nearestWallTop(Pathfinder &pf, const Coord3D &pos, Coord3D &out)
+{
+	const int cx = SimMath::floorToInt(SimMath::mulf32(pos.x, 0.1f)), cy = SimMath::floorToInt(SimMath::mulf32(pos.y, 0.1f));
+	int best = -1;
+	for (int x = cx - 20; x <= cx + 20; ++x)
+	{
+		for (int y = cy - 20; y <= cy + 20; ++y)
+		{
+			const PathfindCell *c = pf.cellAt(x, y);
+			if (!c || !isWallLayer(c->getLayer()) || c->getType() != PathfindCell::CELL_CLEAR || c->getConnectLayer() != LAYER_INVALID)
+			{
+				continue;
+			}
+			bool inner = true;
+			for (int dx = -1; dx <= 1 && inner; ++dx)
+			{
+				for (int dy = -1; dy <= 1; ++dy)
+				{
+					const PathfindCell *n = pf.cellAt(x + dx, y + dy);
+					inner = inner && n && n->getLayer() == c->getLayer();
+				}
+			}
+			const int d = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+			if (inner && (best < 0 || d < best))
+			{
+				best = d;
+				out = Coord3D{ (float)(x * 10 + 5), (float)(y * 10 + 5), pf.getLayerHeight((float)(x * 10 + 5), (float)(y * 10 + 5), c->getLayer()) };
+			}
+		}
+	}
+	return best >= 0;
+}
+} // namespace
+
+TEST_CASE("wall2 raised retail: a hero on Helm's Deep's left gatehouse walks to the right one over the walkway above the gate (wall, ramp, layer 2, ramp, wall)")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *left = g.first("HelmsDeepGatehouseLeft");
+	Object *right = g.first("HelmsDeepGatehouseRight");
+	REQUIRE(left);
+	REQUIRE(right);
+	Coord3D a, b;
+	REQUIRE(nearestWallTop(pf, *left->getPosition(), a));
+	REQUIRE(nearestWallTop(pf, *right->getPosition(), b));
+	MESSAGE("left top " << a.x << ", " << a.y << ", " << a.z << "; right top " << b.x << ", " << b.y << ", " << b.z);
+	Player *owner = left->getControllingPlayer();
+	REQUIRE(owner);
+	std::string error;
+	Object *hero = g.game->createObject("GondorBoromir", owner->getPlayerIndex(), a, 0.0f, &error);
+	REQUIRE_MESSAGE(hero, error);
+	hero->setPosition(&a);
+	g.frames(2);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	MESSAGE("the hero starts at " << hero->getPosition()->x << ", " << hero->getPosition()->y << ", " << hero->getPosition()->z << " on layer " << (int)ai->adapter().getLayer());
+	REQUIRE(isWallLayer(ai->adapter().getLayer()));
+	Coord3D from = *hero->getPosition(), to = b;
+	bool partial = true;
+	Path *p = pf.findPath(&ai->adapter(), ai->locomotorInfo(), &from, &to, &partial);
+	REQUIRE(p);
+	bool pathRaised = false, pathGround = false;
+	for (const PathNode *n = p->getFirstNode(); n; n = n->getNext())
+	{
+		pathRaised = pathRaised || isRaisedLayer(n->getLayer());
+		pathGround = pathGround || n->getLayer() == LAYER_GROUND;
+	}
+	MESSAGE(p->nodeCount() << " nodes, partial " << partial << ", over the walkway " << pathRaised << ", on the ground " << pathGround);
+	CHECK_FALSE(partial);
+	CHECK(pathRaised);
+	CHECK_FALSE(pathGround);
+	delete p;
+	ai->aiMoveToPosition(b, CMD_FROM_PLAYER);
+	bool sawRaised = false;
+	float raisedZ = 0.0f;
+	for (int f = 0; f < 900; ++f)
+	{
+		g.frames(1);
+		if (isRaisedLayer(ai->adapter().getLayer()))
+		{
+			sawRaised = true;
+			raisedZ = hero->getPosition()->z;
+		}
+		const Coord3D q = *hero->getPosition();
+		if ((q.x - b.x) * (q.x - b.x) + (q.y - b.y) * (q.y - b.y) < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	const Coord3D at = *hero->getPosition();
+	INFO("the hero stands at " << at.x << ", " << at.y << ", " << at.z << " on layer " << (int)ai->adapter().getLayer());
+	CHECK(sawRaised);
+	CHECK(raisedZ == 225.0f); // the walkway's height (its layer's int height)
+	CHECK(isWallLayer(ai->adapter().getLayer()));
+	CHECK((at.x - b.x) * (at.x - b.x) + (at.y - b.y) * (at.y - b.y) < 900.0f); // tolerance: within the locomotor's close-enough distance of the goal cell
+}

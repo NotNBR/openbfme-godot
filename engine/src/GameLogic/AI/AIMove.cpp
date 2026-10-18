@@ -538,7 +538,7 @@ bool AIMover::computeQuickPath(const Coord3D &dest)
 	Path *p = new Path();
 	Coord3D from = obj.getPosition();
 	from.z = dest.z;
-	p->prependNode(&dest, m_pf.getLayerAt(dest.x, dest.y)); // lane WALL-1: the destination's layer (the ground on a map without walls)
+	p->prependNode(&dest, m_pf.getLayerAt(dest.x, dest.y, dest.z)); // lane WALL-1: the destination's layer (the ground on a map without walls)
 	p->prependNode(&from, obj.getLayer());
 	p->optimize(m_pf, &obj, m_host.locomotorInfo().validSurfaces, false, nullptr);
 	m_path = p;
@@ -594,7 +594,7 @@ bool AIMover::computePath(const Coord3D &destIn)
 		}
 	}
 	Path *np = nullptr;
-	if (m_pf.validMovementPosition(&obj, info, m_pf.getLayerAt(dest.x, dest.y), &dest)) // the destination's layer (RW 0x680A75; lane WALL-1: a wall top's)
+	if (m_pf.validMovementPosition(&obj, info, m_pf.getLayerAt(dest.x, dest.y, dest.z), &dest)) // the destination's layer (RW 0x680A75; lane WALL-1: a wall top's)
 	{
 		const Coord3D pos = obj.getPosition();
 		bool partial = false;
@@ -1479,7 +1479,7 @@ StateReturnType AIMoveToState::onEnter()
 		{
 			m_ai.m_pf.snapClosestGoalPosition(obj, &m_goal);
 		}
-		m_ai.m_pf.updateGoal(obj, &m_goal, m_ai.m_pf.getLayerAt(m_goal.x, m_goal.y)); // lane WALL-1: the goal's layer (RW 0x680A75)
+		m_ai.m_pf.updateGoal(obj, &m_goal, m_ai.m_pf.getLayerAt(m_goal.x, m_goal.y, m_goal.z)); // lane WALL-1: the goal's layer (RW 0x680A75)
 		m_ai.m_pf.setIgnoreObstacleID(PATHFIND_INVALID_ID);
 	}
 	const Coord3D pos = obj.getPosition();

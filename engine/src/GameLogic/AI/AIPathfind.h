@@ -18,6 +18,7 @@
 #include "GameLogic/AI/AIPathfindHost.h"
 #include "GameLogic/Locomotor.h"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -468,11 +469,21 @@ private:
 // ---------------------------------------------------------------------------------------------------------
 // Zones (RotWK: RW PathfindZoneManager 0x93930C / 0x93894B / 0x938E42; block size 16: RW 0x939226)
 // ---------------------------------------------------------------------------------------------------------
+// lane WALL-2: the cells of one raised layer (PathfindLayer, RW pathfinder + 0x60 + layer * 0x40) the zone code gives the layer's one zone (RW 0x93A584 ..
+// 0x93A5BE, PathfindLayer::setZone RW 0x768336)
+struct PathfindRaisedView
+{
+	int layer = 0;
+	PathfindCell *cells = nullptr;
+	size_t count = 0;
+};
+
 // A view of the grid the zone code reads: cell (x, y) is cells[x * stride + y].
 struct PathfindGridView
 {
 	PathfindCell *cells = nullptr;
 	int stride = 0;
+	std::vector<PathfindRaisedView> raised; // lane WALL-2: the raised layers in use, in layer order (empty on a map without RaisedWallMesh)
 	PathfindCell &at(int x, int y) const { return cells[(size_t)x * (size_t)stride + (size_t)y]; }
 };
 
@@ -728,13 +739,20 @@ public:
 
 	// ---- grid access ----
 	const ICoord2D *getExtent() const { return &m_extent.hi; }
-	// inline (lane PATHPERF-1: the search asks for every cell of every footprint it tests). Bridge / wall layers are not ported (S-161): every query reads
-	// the ground layer
+	// inline (lane PATHPERF-1: the search asks for every cell of every footprint it tests). Pathfinder::getCell (BFME2 WB 0xd35570, RW 0x5E2E9C): off the
+	// grid null; a raised layer (2 .. 15, lane WALL-2) answers its own cell when it has a passable one there (PathfindLayer::GetCell RW 0x7682E1: none outside
+	// its cells or of type 5), else the GROUND grid's cell; every other layer reads the ground grid (the wall tops and ramps live in it)
 	PathfindCell *getCell(PathfindLayerEnum layer, int x, int y)
 	{
-		(void)layer;
 		if (x >= m_extent.lo.x && x <= m_extent.hi.x && y >= m_extent.lo.y && y <= m_extent.hi.y)
 		{
+			if (m_anyRaised && isRaisedLayer(layer))
+			{
+				if (PathfindCell *c = raisedCell(layer, x, y))
+				{
+					return c;
+				}
+			}
 			return &m_blockOfMapCells[(size_t)x * (size_t)m_stride + (size_t)y];
 		}
 		return nullptr;
@@ -763,7 +781,7 @@ public:
 	const PathfindConfig &config() const { return m_config; }
 	PathfindZoneManager &zoneManager() { return m_zoneManager; }
 	const PathfindZoneManager &zoneManager() const { return m_zoneManager; }
-	PathfindGridView gridView() { PathfindGridView v; v.cells = m_blockOfMapCells.data(); v.stride = m_stride; return v; }
+	PathfindGridView gridView();
 	void setLogicalExtentFromTerrain();
 	void getLogicalExtent(ICoord2D &lo, ICoord2D &hi) const { lo = m_logicalExtent.lo; hi = m_logicalExtent.hi; }
 
@@ -915,8 +933,11 @@ public:
 	float getLayerHeight(float x, float y, PathfindLayerEnum layer) const;
 	// ZH TerrainLogic::getHighestLayerForDestination + getLayerHeight: the highest walkable surface at (x, y) (a wall top or a ramp over the terrain)
 	float getHighestLayerHeight(float x, float y) const;
-	// the layer of the walkable surface a point stands on (BFME2 0x6ED236 / TerrainLogic::getLayerForDestination 0x6802FE for the ground grid's layers)
+	// the layer of the walkable surface a point stands on (TerrainLogic::getLayerForDestination RW 0x680A75 / BFME2 0x6802FE: a ramp under it first, then a
+	// raised layer whose passable cell is there and whose height is less than 25 above `z` (RW 0x6EE600), else the ground grid cell's layer). The form
+	// without `z` takes the terrain's height there
 	PathfindLayerEnum getLayerAt(float x, float y) const;
+	PathfindLayerEnum getLayerAt(float x, float y, float z) const;
 	// Pathfinder::IsPointOnRamp: (x, y) is on a ramp's surface; `z` its height there
 	bool isPointOnRamp(float x, float y, float *z = nullptr) const;
 	// Pathfinder::IsPointOnWall (BFME2 0x6E940F): the ground cell under `pos` has a wall layer (and is CLEAR when `requireClear`)
@@ -930,6 +951,13 @@ public:
 	const std::vector<float> &wallHeights() const { return m_wallHeights; }
 	size_t wallPieceCount() const { return m_wallPieces.size(); }
 	size_t rampCount() const;
+	// ---- lane WALL-2: the raised layers (RaisedWallMesh walkways, AIPathfindRaised.cpp) ----
+	// the raised layer's cell at (x, y) (null outside its cells; type 5 cells included), and the layer's data for tests and reports
+	const PathfindCell *raisedCellAt(PathfindLayerEnum layer, int x, int y) const;
+	bool raisedLayerInUse(PathfindLayerEnum layer) const;
+	// PathfindLayer + 0x3C (Pathfinder::GetWallLayerHeight BFME2 WB 0xd3ec10: the int height as a float); 0 for a layer not in use
+	float raisedLayerHeight(PathfindLayerEnum layer) const;
+	size_t raisedLayerCount() const;
 
 	// ---- lane WALL-2: portal waypoints (AIPathfindPortals.cpp) ----
 	// THE PORTAL API (for DynamicPortalBehaviour, FakePathfindPortalBehaviour and the siege lane's ladders and towers, which plug in through the first of them):
@@ -1053,8 +1081,36 @@ private:
 		std::vector<PathfindWallSurface> walls;
 		std::vector<PathfindLayerEnum> wallLayers; // the layer of each wall surface
 		std::vector<PathfindWallSurface> ramps;
+		std::vector<PathfindWallSurface> raised;   // lane WALL-2: RaisedWallMesh
+		std::vector<PathfindLayerEnum> raisedLayers; // the raised layer of each (2 .. 15)
 		PathfindRegion cells;                      // every cell its surfaces touch, grown by 2 (RW: floor(lo / 10) - 2 .. ceil(hi / 10) + 2)
 	};
+	// lane WALL-2: a raised layer (RW PathfindLayer, 0x40 bytes at pathfinder + 0x60 + layer * 0x40, the wall kind: its area list + 0x38 set). The port keeps
+	// the areas' surfaces with the pieces they came from
+	struct RaisedLayer
+	{
+		std::vector<std::pair<PathfindObjectID, PathfindWallSurface>> areas; // + 0x38 (newest first in RW; insertion order here: the union is the same)
+		int height = 0;                 // + 0x3C
+		ICoord2D origin{ 0, 0 };        // + 0x10 / + 0x14
+		int width = 0, depth = 0;       // + 8 / + 0xC (cells)
+		std::vector<PathfindCell> cells; // + 0 / + 4, column-major: cells[x * depth + y]
+		bool used() const { return !areas.empty(); }
+	};
+	PathfindCell *raisedCell(PathfindLayerEnum layer, int x, int y)
+	{
+		RaisedLayer &l = m_raised[(size_t)layer];
+		const int dx = x - l.origin.x, dy = y - l.origin.y;
+		if (l.cells.empty() || dx < 0 || dy < 0 || dx >= l.width || dy >= l.depth)
+		{
+			return nullptr;
+		}
+		PathfindCell *c = &l.cells[(size_t)dx * (size_t)l.depth + (size_t)dy];
+		return c->getType() == PathfindCell::CELL_BRIDGE_IMPASSABLE ? nullptr : c;
+	}
+	PathfindLayerEnum raisedLayerFor(const PathfindWallSurface &s, PathfindObjectID owner);
+	void rebuildRaisedLayer(PathfindLayerEnum layer);
+	void connectRampToRaised(int i, int j, PathfindCell *c, float rampHeight, int corners);
+	void crcRaised(StateHasher &h) const;
 	PathfindLayerEnum wallLayerFor(float height);
 	void stampWallSurface(const PathfindWallSurface &s, PathfindLayerEnum layer);
 	void stampRampSurface(const PathfindWallSurface &s);
@@ -1176,6 +1232,9 @@ private:
 	// ids in a set at + 0x1C1C0; the port keeps each piece's surfaces so overlapping pieces can be classified again)
 	std::vector<float> m_wallHeights;
 	std::vector<WallPiece> m_wallPieces;
+	// lane WALL-2: the raised layers by id (0, 1 unused), and whether any is in use (getCell's fast path)
+	std::array<RaisedLayer, 16> m_raised;
+	bool m_anyRaised = false;
 	// lane WALL-2: the dynamic waypoints (slot = index; a destroyed one leaves its slot empty until reused), their ids in creation order, the id counter
 	// (RW 0xDA0748), and the corridor's portal hops (RW + 0x1C1CC)
 	struct WaypointSlot

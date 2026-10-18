@@ -48,7 +48,7 @@ bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
 	for (const ThingTemplate::Nugget &n : tt.drawModules().nuggets())
 	{
 		const W3DModelDrawModuleData *data = dynamic_cast<const W3DModelDrawModuleData *>(n.data.get());
-		if (!data || (data->m_wallBoundsMesh.empty() && data->m_rampMesh1.empty() && data->m_rampMesh2.empty()))
+		if (!data || (data->m_wallBoundsMesh.empty() && data->m_rampMesh1.empty() && data->m_rampMesh2.empty() && data->m_raisedWallMesh.empty()))
 		{
 			continue;
 		}
@@ -120,7 +120,8 @@ bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
 		meshTriangles(data->m_wallBoundsMesh, out.walls);
 		meshTriangles(data->m_rampMesh1, out.ramps);
 		meshTriangles(data->m_rampMesh2, out.ramps);
-		return !out.walls.empty() || !out.ramps.empty();
+		meshTriangles(data->m_raisedWallMesh, out.raised); // lane WALL-2: W3DModelDraw data + 0x110 (RW 0xBE1520), the drawable's vslot 0x9C (RW 0x67290D)
+		return !out.walls.empty() || !out.ramps.empty() || !out.raised.empty();
 	}
 	return false;
 }
@@ -180,6 +181,10 @@ void DrawableWallMeshes::place(const ModelSurfaces &model, const Coord3D &pos, f
 	for (const auto &r : model.ramps)
 	{
 		convert(r, out.ramps);
+	}
+	for (const auto &r : model.raised)
+	{
+		convert(r, out.raised);
 	}
 }
 

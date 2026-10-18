@@ -20,12 +20,13 @@ const char *const kShoreScanStaleEdge =
 	"for the first row, the port starts it at 0 (INFERENCE)";
 // S-161 layers
 const char *const kLayers =
-	"S-161 the raised layers 2 .. 15 (bridges, RaisedWallMesh walkways: cells of their own) are not modelled, nor the bridge-layer classifiers' writes of cell "
-	"types 5 / 6 (RW 0x7688ED, 0x768ACC, 0x93503A: the port never makes a CELL_IMPASSABLE cell); the ground grid's wall tops (0x11 .. 0x40) and ramps (0x10) are "
-	"(lane WALL-1, S-4840), and so are the portals (lane WALL-2, S-4850)";
+	"S-161 the raised layers 2 .. 15 of the bridge kind (BridgeBehavior: cells of their own, ClassifyBridgeCells RW 0x768AE9 and its cell types 5 / 6, the "
+	"bridge part of getLayerForDestination RW 0x680A75) are not modelled: the port never makes a CELL_IMPASSABLE cell; the RaisedWallMesh walkways are (lane "
+	"WALL-2, S-4856), the ground grid's wall tops (0x11 .. 0x40) and ramps (0x10) are (lane WALL-1, S-4840), and so are the portals (lane WALL-2, S-4850)";
 // lane MOVE-3: the blocked unit's path patch (S-1830)
 const char *const kPatchLayers =
-	"S-1830 patchPath (RW 0x6F7938) expands the layer links and portals of RW 0x6F6286 (lane WALL-2), but no raised layer 2 .. 15 exists (S-161)";
+	"S-1830 patchPath (RW 0x6F7938) expands the layer links and portals of RW 0x6F6286 (lane WALL-2) over the ground grid and the raised walkways (S-4856); "
+	"the bridge layers do not exist (S-161)";
 // S-162 zones and the hierarchical search
 const char *const kZoneProfiles =
 	"S-162 the zone tables are built lazily per locomotor profile with the terrain variant read as obstacles-count-as-ground (INFERRED from the RW call sites); RW updates them incrementally and in a budgeted order";
@@ -63,6 +64,12 @@ const char *const kPortalLostHorde =
 const char *const kPortalLayerQuirk =
 	"S-4850 the hierarchical portal branch met a portal whose start cell is outside the block that lists it: RW then reads the raised layer of the portal's index "
 	"(RW 0x6F9156), not ported";
+// S-4856 the raised layers (lane WALL-2, AIPathfindRaised.cpp)
+const char *const kRaisedLayers =
+	"S-4856 raised layers (RaisedWallMesh walkways): the walkway is the mesh's triangles at its highest z truncated (RW: the outline polygon and its int height), a "
+	"ramp's edge cell joins a walkway by BFME2's rule (RotWK's not compared), the walkway zones are numbered after the ground zones, a unit's layer on a walkway "
+	"follows the walkway's cells (UpdateLayer / AdjustLayer inferred) and the hierarchical search's raised branch (RW 0x9389CE) is not ported";
+const char *const kRaisedLayerCount = "S-4856 more than 14 raised walkway heights: the walkway is left out (RW: layers 2 .. 15)";
 const char *const kLargeRectFootprint =
 	"S-164 LARGE_RECTANGLE_PATHFIND footprints are axis-aligned boxes: the rotated polygon fill (RW 0x6ECC06 / 0x8E1E64) is not decoded";
 const char *const kLargeRectReservation =

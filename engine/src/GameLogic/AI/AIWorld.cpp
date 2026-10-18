@@ -253,7 +253,7 @@ void buildInfo(const ThingTemplate &tt, INIEnvironment &env, ObjectMovementInfo 
 	{
 		out.slopeLimitIndex = (int)v;
 	}
-	bool gates = false;
+	bool gates = true;
 	if (boolField(tt, "CanPathThroughGates", gates))
 	{
 		out.canPathThroughGates = gates;

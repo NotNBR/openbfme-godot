@@ -27,14 +27,15 @@ typedef std::uint32_t PathfindObjectID;
 static const PathfindObjectID PATHFIND_INVALID_ID = 0;
 
 // The RotWK layer ids (the 6 layer bits 4 .. 9 of the cell dword; BFME2 WorldBuilder decomp Pathfinder::GetWallHeight 0xd3ed70 / IsPointOnWall 0xd3f890,
-// BFME1 Pathfinder::getLayerHeight RVA 0x3D8940): 0 invalid, 1 ground, 2 .. 15 the raised (bridge) layers with cells of their own (not ported, S-161),
-// 0x10 every ramp, 0x11 .. 0x40 one id per wall-top height. Ramps and wall tops are written into the GROUND grid's cells (RW getCell answers the ground
+// BFME1 Pathfinder::getLayerHeight RVA 0x3D8940): 0 invalid, 1 ground, 2 .. 15 the raised layers with cells of their own (lane WALL-2: the RaisedWallMesh
+// walkways, AIPathfindRaised.cpp; the bridge layers are S-161), 0x10 every ramp, 0x11 .. 0x40 one id per wall-top height. Ramps and wall tops are written into the GROUND grid's cells (RW getCell answers the ground
 // grid for layer 1 and every layer from 0x10: RW 0x76550F). ZH's single LAYER_WALL = 15 is not RotWK's.
 enum PathfindLayerEnum
 {
 	LAYER_INVALID = 0,
 	LAYER_GROUND = 1,
-	LAYER_TOP = 2,
+	LAYER_TOP = 2,          // the first raised layer
+	LAYER_RAISED_LAST = 0xF, // the last raised layer
 	LAYER_RAMP = 0x10,
 	LAYER_WALL_FIRST = 0x11,
 	LAYER_WALL_LAST = 0x40,
@@ -42,6 +43,8 @@ enum PathfindLayerEnum
 };
 
 inline bool isWallLayer(PathfindLayerEnum l) { return (int)l >= (int)LAYER_WALL_FIRST && (int)l <= (int)LAYER_WALL_LAST; }
+// RW 0x5E2F24 (IS_BRIDGE_LAYER): 2 .. 15
+inline bool isRaisedLayer(PathfindLayerEnum l) { return (int)l >= (int)LAYER_TOP && (int)l <= (int)LAYER_RAISED_LAST; }
 
 // lane WALL-1: the walkable surfaces of a wall piece in world space, the triangles of its draw module's WallBoundsMesh (a flat wall top, `height` its z)
 // and RampMesh1 / RampMesh2 (a sloped way up, the triangles give the height). See GameClient/DrawableWallMeshes.h for where they come from.
@@ -63,7 +66,8 @@ struct PathfindWallGeometry
 {
 	std::vector<PathfindWallSurface> walls; // WallBoundsMesh
 	std::vector<PathfindWallSurface> ramps; // RampMesh1, RampMesh2
-	bool empty() const { return walls.empty() && ramps.empty(); }
+	std::vector<PathfindWallSurface> raised; // lane WALL-2: RaisedWallMesh (a walkway on a raised layer, `height` its highest point)
+	bool empty() const { return walls.empty() && ramps.empty() && raised.empty(); }
 };
 
 // ZH Geometry.h GeometryType

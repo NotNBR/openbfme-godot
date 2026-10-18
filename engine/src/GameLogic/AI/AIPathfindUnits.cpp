@@ -1091,7 +1091,7 @@ bool Pathfinder::adjustHordeMemberDestination(const PathfindObject &member, cons
 		{
 			dest->x = x;
 			dest->y = y;
-			dest->z = m_terrain ? getLayerHeight(x, y, getLayerAt(x, y)) : dest->z; // RW 0x680A75 (the destination's layer) then the layer height
+			dest->z = m_terrain ? getLayerHeight(x, y, getLayerAt(x, y, dest->z)) : dest->z; // RW 0x680A75 (the destination's layer) then the layer height
 			return true;
 		}
 	}
@@ -1277,7 +1277,7 @@ bool Pathfinder::adjustDestination(PathfindObject &obj, const PathfindLocomotorI
 	ICoord2D cell;
 	worldToCell(dest, center, &cell);
 	// RW 0x680A75 (TerrainLogic::getLayerForDestination): the destination's own layer (lane WALL-1: a wall top's or a ramp's; the ground elsewhere)
-	const PathfindLayerEnum layer = getLayerAt(dest->x, dest->y);
+	const PathfindLayerEnum layer = getLayerAt(dest->x, dest->y, dest->z);
 	bool candidate = false;
 	Coord3D found = *dest;
 	if (checkForAdjust(obj, loco, isHuman, cell.x, cell.y, layer, &found, candidate))
