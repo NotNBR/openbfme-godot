@@ -89,6 +89,7 @@ public:
 	float groundHeight(float x, float y) override;
 	bool isWater(float, float) override { return false; }
 	int shroudStatusAt(const Coord3D &) override { return 0; }
+	int mapWeather() const override { return m_mapWeather; } // lane WEATHER-1
 	bool objectShroudedForLocalPlayer(const FXObject &) override { return false; }
 	FXParticleSystem::ParticleAttachInfo attachedDrawable(std::uint32_t drawableId, const std::string &boneName) override;
 	FXParticleSystem::ParticleAttachInfo attachedObject(std::uint32_t objectId, const std::string &boneName, int localPlayerIndex) override;
@@ -157,6 +158,7 @@ private:
 	void fireFrameEvent(Drawable &d, const FXEventInfo &ev, const RenderObjPrototype *model);
 
 	LiveGame &m_game;
+	int m_mapWeather = 0; ///< lane WEATHER-1: the map's WorldInfo weather (GameLogicSettings::snowy), read at construction (the logic is idle then)
 	FXPlayback &m_playback;
 	ClientBuffs m_buffs;                 // lane SPELL-4
 	std::set<std::string> m_buffErrors;  // lane SPELL-4
