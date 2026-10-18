@@ -30,6 +30,7 @@
 #include "GameClient/MusicScripts.h"
 #include "GameClient/LiveFX.h"
 #include "GodotDevice/GodotFXPlayer.h"
+#include "GodotDevice/GodotWeather.h" // lane WEATHER-1
 #include "Common/Audio/AudioRequests.h"
 #include "Common/JobSystem.h"
 #include "Common/Upgrade.h"
@@ -359,6 +360,7 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("attach_audio"), &GameWorld::attach_audio);
 	ClassDB::bind_method(D_METHOD("get_audio_report"), &GameWorld::get_audio_report);
 	ClassDB::bind_method(D_METHOD("get_fx_report"), &GameWorld::get_fx_report);
+	ClassDB::bind_method(D_METHOD("get_weather_report"), &GameWorld::get_weather_report); // lane WEATHER-1
 	ClassDB::bind_method(D_METHOD("get_fx_player"), &GameWorld::get_fx_player);
 	ClassDB::bind_static_method("GameWorld", D_METHOD("set_texture_reduction", "reduction"), &GameWorld::set_texture_reduction); // lane OPTS-2
 	ClassDB::bind_static_method("GameWorld", D_METHOD("get_texture_reduction"), &GameWorld::get_texture_reduction);
@@ -467,6 +469,7 @@ GameWorld::~GameWorld()
 	releaseLocalDrivers(); // lane MP-2: the recording / replay driver too
 	m_audio.reset(); // AUDIO-2: the audio side reads the game
 	// the game before the world and the assets it points into; the effect player before the game
+	m_weather.reset(); // lane WEATHER-1: before the effect player and the game
 	m_liveFX.reset();
 	m_spellStore.reset(); // lane SPELL-2 (review r1): the spell book screens hold the game's player and templates: they go before it
 	m_spellBar.reset();
@@ -609,6 +612,7 @@ Dictionary GameWorld::setup(const Ref<RetailFileSystem> &fs)
 			m_source.reset(new ArchiveW3DFileSource(*fs->archive_fs()));
 			m_assets.reset(new WW3DAssetManager(*m_source));
 			// lane FX-2: the effect player of the live games (FXParticleSystem.ini / FXList.ini through FX-1's FXPlayer), a child kept across loads
+			m_weather.reset(); // lane WEATHER-1
 			m_liveFX.reset();
 			if (!m_fxPlayer)
 			{
@@ -645,6 +649,7 @@ void GameWorld::clear_scene()
 	m_netSession.reset(); // MP-1: the session points at the game
 	releaseLocalDrivers(); // lane MP-2: the recording / replay driver too
 	m_audio.reset(); // AUDIO-2: the audio side reads the game
+	m_weather.reset(); // lane WEATHER-1: the weather (its sound, its terrain uniforms) before the effect player and the game
 	m_liveFX.reset(); // lane FX-2: the effect player leaves the logic and the drawables before they go
 	if (m_fxPlayer)
 	{
@@ -1078,7 +1083,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 		}
 		if (!terrainOptions.has("fog"))
 		{
-			terrainOptions["fog"] = false;
+			terrainOptions["fog"] = true; // lane WEATHER-1: the map's hardware fog as retail draws it (the free camera's extra distance is w3d_fog_shift, PLAY-1); {"fog": false} turns it off
 		}
 		Node3D *terrain = terrainBuilder->build_map(m_fs, map_name, terrainOptions);
 		const Dictionary trep = terrainBuilder->get_report();
@@ -1095,6 +1100,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 		timings["terrain_ms"] = timing::elapsedMs(t0);
 	}
 	emit(97);
+	loadWeather(map_name, report, errors); // lane WEATHER-1
 
 	t0 = nowMs();
 	build_static_layer(m_fs, report, errors, stops);
@@ -1833,6 +1839,12 @@ void GameWorld::advance(double delta)
 	const double tv = nowMs();
 	m_lastShroudMs = timing::spanMs(tv, t1);
 	refresh_views(dt * 1000.0);
+	if (m_weather)
+	{
+		// lane WEATHER-1: the weather follows the presented frame's TheGlobalWeatherSystem (never the live logic)
+		const std::shared_ptr<const LogicSnapshot> shown = m_game->presentedSnapshot();
+		m_weather->advance(dt, shown ? shown->globalWeather : 0);
+	}
 	const double tf = nowMs();
 	m_lastViewsMs = timing::spanMs(tf, tv);
 	updateTreeTopple(dt); // lane SPELL-3
@@ -5062,6 +5074,40 @@ int64_t GameWorld::get_texture_reduction()
 Node3D *GameWorld::get_fx_player() const
 {
 	return m_fxPlayer;
+}
+
+// lane WEATHER-1: the map's weather (GodotWeather) once the terrain and the effect player are in place; a failure is an error of the load's report and
+// leaves the game without weather (never a silent default)
+void GameWorld::loadWeather(const String &map_name, Dictionary &report, Array &errors)
+{
+	m_weather.reset();
+	if (!m_game || !m_fs.is_valid() || !m_fs->archive_fs())
+	{
+		return;
+	}
+	const LoadedMap &map = m_game->map();
+	if (!map.hasHeightMap)
+	{
+		errors.push_back("weather: the map has no height map");
+		return;
+	}
+	Node3D *terrainRoot = Object::cast_to<Node3D>(find_child("Terrain", false, false));
+	std::unique_ptr<GodotWeather> w(new GodotWeather());
+	std::string error;
+	if (!w->load(this, *m_fs->archive_fs(), toNative(map_name), map.heightMap, map.chunks.hasGlobalLighting ? &map.chunks.lighting : nullptr,
+			m_fxPlayer, terrainRoot, RandomAlgorithm::RotWK_GameDat_LCG,
+			[world = m_world.get()](const std::string &n) { return world && world->audioEventExists(n); }, &error))
+	{
+		errors.push_back(toGodot("weather: " + error));
+		return;
+	}
+	m_weather = std::move(w);
+	report["weather"] = m_weather->report();
+}
+
+Dictionary GameWorld::get_weather_report() const
+{
+	return m_weather ? m_weather->report() : Dictionary();
 }
 
 Dictionary GameWorld::get_fx_report() const

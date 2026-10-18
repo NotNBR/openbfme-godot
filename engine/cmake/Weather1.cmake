@@ -10,7 +10,7 @@ set(OPENBFME_WEATHER1_CLIENT_SOURCES
 )
 # the Godot device part (the snow mesh, the lightning and darkening of the terrain and the models)
 set(OPENBFME_WEATHER1_GODOT_SOURCES
-    # (GodotWeather.cpp: the next commit)
+    src/GodotDevice/GodotWeather.cpp
 )
 set(OPENBFME_WEATHER1_TESTS
     tests/test_weather1.cpp
