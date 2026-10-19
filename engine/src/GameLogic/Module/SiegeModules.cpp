@@ -491,6 +491,7 @@ void SiegeDockingBehavior::xfer(Xfer &x)
 	x.xferBool(&m_initialized);
 	SnapshotXfer::each(x, m_entries, 36, [&](Entry &e) { // index, type, two coordinates, the reserving id
 		x.xferInt(&e.index);
+		SnapshotXfer::checkRange(e.index, 0, 19, "a siege dock's index"); // initializeBones: up to ten SIEGETOWER then ten SIEGELADDER bones, numbered in order
 		SnapshotXfer::enumIn(x, e.type, 0, 1, "a siege dock's bone type"); // 0 a SIEGETOWER bone, 1 a SIEGELADDER bone
 		SnapshotXfer::coord3D(x, e.position);
 		SnapshotXfer::coord3D(x, e.direction);

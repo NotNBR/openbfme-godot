@@ -659,8 +659,11 @@ void DeployStyleAIUpdate::xferAIStateBody(Xfer &x)
 	x.xferBool(&m_ran);
 	x.xferBool(&m_pending);
 	x.xferInt(&m_classAtCommand);
+	SnapshotXfer::checkRange(m_classAtCommand, 0, 3, "a deploy AI's class at its command"); // update(): 0 idle, 1 moving, 2 in range, 3 out of range
 	x.xferInt(&m_class);
+	SnapshotXfer::checkRange(m_class, 0, 3, "a deploy AI's class");
 	x.xferInt(&m_state);
+	SnapshotXfer::checkRange(m_state, READY_TO_MOVE, ALIGNING_TURRETS, "a deploy AI's state");
 	x.xferUnsignedInt(&m_frame);
 	x.xferObjectID(&m_victim);
 	x.xferObjectID(&m_attackObject);
