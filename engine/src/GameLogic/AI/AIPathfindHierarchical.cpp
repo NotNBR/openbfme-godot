@@ -18,7 +18,7 @@
 //       - the goal record is reset (RW 0x934400); the start's total cost is RW 0x6F1F0D (start, goal); the goal's zone is the effective zone (RW 0x9389A6, the
 //         non-terrain variant) on the ground and wall layers (RW 0x76550F), with the goal's block;
 //       - the loop pops the open heap (RW 0x6F4AF2), closes the cell (RW 0x934594) and is done when the cell's effective zone and block are the goal's; else
-//         the bridge links (RW 0x9389CE) and the block portals (RW 0x937F2D / 0x937F7F) of the block (none exist here: S-161), the closest cell by
+//         the bridge links (RW 0x9389CE) and the block portals (RW 0x937F2D / 0x937F7F) of the block (the bridge links: not ported, S-161 / S-4856; the portals: lane WALL-2), the closest cell by
 //         dy*dy + dx*dx (float, below 999999995904.0f, RW 0xC1C4AC), then the four edges of the block: x = bx*16 (left, step -1), bx*16 + 15 (right, +1), y = by*16
 //         (bottom), by*16 + 15 (top), each edge's 16 cells from its middle outward (8, 9, 7, 10, 6, ... , 15, 1, 16 from the block's corner), a cell
 //         that exists, is neither open nor closed and (a human's search) lies in the logical extent goes to RW 0x6F6454 with a zone list cleared per edge;
@@ -263,7 +263,7 @@ bool Pathfinder::findClosestHierarchicalPath(PathfindObject *obj, const Pathfind
 	{
 		return false;
 	}
-	PathfindCell *start = getClippedCell(LAYER_GROUND, &fromPos); // the start's layer: only the ground exists (S-161)
+	PathfindCell *start = getClippedCell(LAYER_GROUND, &fromPos); // the start's ground grid cell (the corridor's raised branch RW 0x9389CE is not ported: S-4856)
 	if (!start)
 	{
 		return false;
@@ -333,7 +333,7 @@ bool Pathfinder::findClosestHierarchicalPath(PathfindObject *obj, const Pathfind
 			*adjustedTo = goalPos;
 			return true;
 		}
-		// lane WALL-2: the portals of the cell's block (RW 0x6F9089 .. 0x6F9371; the bridge branch before it, RW 0x6F8CC7 .. 0x6F8F7B, is S-161)
+		// lane WALL-2: the portals of the cell's block (RW 0x6F9089 .. 0x6F9371; the bridge branch before it, RW 0x6F8CC7 .. 0x6F8F7B, is S-161 / S-4856)
 		int portalCells = 0;
 		hierarchicalPortals(c, goal, cz, goalZone, mv, obj, portalCells);
 		const float key = hierarchicalClosestKey((int)goal->getXIndex() - (int)c->getXIndex(), (int)goal->getYIndex() - (int)c->getYIndex());

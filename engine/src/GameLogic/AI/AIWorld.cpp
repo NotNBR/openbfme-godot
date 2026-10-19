@@ -453,13 +453,15 @@ const PathfindWallGeometry *ObjectPathfindAdapter::getWallGeometry() const
 	const Coord3D &p = *m_object->getPosition();
 	const float angle = m_object->getOrientation(), scale = m_object->getInstanceScale();
 	const ThingTemplate *tt = m_object->getTemplate();
-	if (!m_wallLooked || tt != m_wallTemplate || p.x != m_wallPos.x || p.y != m_wallPos.y || p.z != m_wallPos.z || angle != m_wallAngle || scale != m_wallScale)
+	if (!m_wallLooked || tt != m_wallTemplate || p.x != m_wallPos.x || p.y != m_wallPos.y || p.z != m_wallPos.z || angle != m_wallAngle || scale != m_wallScale ||
+		m_object->getModelConditionBits() != m_wallBits)
 	{
 		m_wallLooked = true;
 		m_wallTemplate = tt;
 		m_wallPos = p;
 		m_wallAngle = angle;
 		m_wallScale = scale;
+		m_wallBits = m_object->getModelConditionBits();
 		m_wallGeometry = PathfindWallGeometry();
 		m_hasWall = source->wallGeometry(*m_object, m_wallGeometry) && !m_wallGeometry.empty();
 	}

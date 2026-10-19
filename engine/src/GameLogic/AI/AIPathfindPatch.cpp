@@ -35,7 +35,7 @@
 //     dropped; else the nodes before that segment's start are deleted, the patch's last node is linked (next and next optimised) to the start's raw next,
 //     the start is deleted, the path begins with the patch, and the follower restarts at its head (+ 0x10 = head, + 0x14 = 0).
 // PORT NOTES: the occupant lists are the port's per-cell lists (OCC_GROUND_GOAL = + 0x14, OCC_POSITION = + 0x20, OCC_HORDE_POSITION = + 0x24); the raised
-// layers 2 .. 15 are not ported (S-161): RW 0x6F6286's layer half finds the ground grid's own cell there (closed: nothing).
+// raised walkways' layers 2 .. 15 are reached through RW 0x6F6286's layer half (lane WALL-2, S-4856).
 
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindStops.h"

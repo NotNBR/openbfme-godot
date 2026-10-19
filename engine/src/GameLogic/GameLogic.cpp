@@ -238,6 +238,17 @@ float GameLogic::getGroundHeight(float x, float y) const
 	return m_terrain ? m_terrain->getGroundHeight(x, y, nullptr) : 0.0f;
 }
 
+float GameLogic::getLayerHeightForDestination(float x, float y, float z) const
+{
+	// lane WALL-2: TheTerrainLogic vslot 0x1C (getLayerHeight) with the layer of RW 0x680A75 (getLayerForDestination) at (x, y, z)
+	if (m_aiWorld && m_aiWorld->mapReady())
+	{
+		const Pathfinder &pf = m_aiWorld->pathfinder();
+		return pf.getLayerHeight(x, y, pf.getLayerAt(x, y, z));
+	}
+	return getGroundHeight(x, y);
+}
+
 float GameLogic::getHighestLayerHeight(float x, float y) const
 {
 	if (m_aiWorld && m_aiWorld->mapReady())

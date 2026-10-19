@@ -690,7 +690,8 @@ bool AIMover::goalCellOnGridAndNotStart(const Coord3D &from)
 	{
 		return false;
 	}
-	return m_pf.getCell(LAYER_GROUND, goalCell.x, goalCell.y) != nullptr; // the layer of RW 0x680A75: only the ground is ported (S-161)
+	// the layer of RW 0x680A75 (lane WALL-2: getCell of any layer answers a cell wherever the ground grid has one: a raised layer falls back to it)
+	return m_pf.getCell(LAYER_GROUND, goalCell.x, goalCell.y) != nullptr;
 }
 
 // RW 0x6F1B3E (unit, from, to, goal = the locomotor goal): the straight step is valid. Shared by doLocomotor's type 4 goal and the horde member update RW 0x66C748

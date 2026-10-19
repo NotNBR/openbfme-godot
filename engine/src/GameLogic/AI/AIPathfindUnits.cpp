@@ -1016,7 +1016,7 @@ bool Pathfinder::memberFootprintFits(const PathfindMovement &mv, PathfindLayerEn
 			if (!c->allowsLayer(hordeLayer))
 			{
 				// RW: a cell of another layer than the horde's fails unless the horde is on a raised layer whose tests (RW 0x6E82B3 / 0x5E2F24) pass (the raised
-				// layers 2 .. 15 are not ported, S-161). Lane WALL-1 (INFERENCE, S-4840): a cell that connects to the horde's layer (a ramp's foot for a horde on
+				// layers' tests are not ported, S-4856). Lane WALL-1 (INFERENCE, S-4840): a cell that connects to the horde's layer (a ramp's foot for a horde on
 				// the ground, a joint for one on a wall) is the horde's layer too; the port's old exception for ZH's wall layer 15 is gone
 				return false;
 			}

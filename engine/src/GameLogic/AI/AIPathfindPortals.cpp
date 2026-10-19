@@ -494,7 +494,7 @@ bool Pathfinder::hierarchicalPortals(PathfindCell *c, PathfindCell *goal, zoneSt
 			ICoord2D f = from;
 			if (f.x / bs != bx || f.y / bs != by)
 			{
-				// the raised layer `i`'s end cells (see above); no raised layers are ported (S-161): no such layer, its cells are (-1, -1)
+				// the raised layer `i`'s end cells (see above); the wall connect cells (RW + 0x18 / + 0x20) are not kept by the port (S-4856): (-1, -1)
 				note(pathstops::kPortalLayerQuirk);
 				continue;
 			}

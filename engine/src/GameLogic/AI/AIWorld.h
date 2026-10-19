@@ -147,6 +147,7 @@ private:
 	mutable bool m_wallLooked = false, m_hasWall = false;
 	mutable Coord3D m_wallPos{ 0.0f, 0.0f, 0.0f };
 	mutable float m_wallAngle = 0.0f, m_wallScale = 0.0f;
+	mutable std::array<std::uint32_t, 19> m_wallBits{}; // lane WALL-2: the model condition the geometry was taken for (the model of the current state)
 	mutable const ThingTemplate *m_wallTemplate = nullptr;
 };
 

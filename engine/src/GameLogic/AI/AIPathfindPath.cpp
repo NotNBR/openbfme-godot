@@ -733,6 +733,23 @@ void Path::advancePastPortal(int portal)
 	m_t = 0.0f;
 }
 
+bool Path::hasWaypointNodes() const
+{
+	// RW 0x765522: a path with a current node (+ 0x10); the optimised chain (+ 8) from the head: a node whose + 0x20 is not 0x7FFFFFFF
+	if (!m_path || !m_closest)
+	{
+		return false;
+	}
+	for (const PathNode *n = m_path; n; n = n->m_nextOpti)
+	{
+		if (n->m_waypointID != PathNode::NO_WAYPOINT)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 bool Path::hasInvalidPortals() const
 {
 	// RW 0x76573F: no node with an id (RW 0x765522, cached at + 0x24) -> false; else from the current node (or the head) along the raw chain (+ 0): a node

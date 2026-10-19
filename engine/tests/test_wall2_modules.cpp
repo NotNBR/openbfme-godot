@@ -589,3 +589,48 @@ TEST_CASE("wall2 raised retail: a hero on Helm's Deep's left gatehouse walks to 
 	CHECK(isWallLayer(ai->adapter().getLayer()));
 	CHECK((at.x - b.x) * (at.x - b.x) + (at.y - b.y) * (at.y - b.y) < 900.0f); // tolerance: within the locomotor's close-enough distance of the goal cell
 }
+
+TEST_CASE("wall2 walls retail: a wall piece is classified with the model of its current state: Helm's Deep's culvert as rubble (RBHDDWCulv_D3)")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *culvert = g.first("HelmsDeepCulvert");
+	REQUIRE(culvert);
+	auto wallCellsNear = [&](const Object &o) {
+		const int cx = SimMath::floorToInt(SimMath::mulf32(o.getPosition()->x, 0.1f)), cy = SimMath::floorToInt(SimMath::mulf32(o.getPosition()->y, 0.1f));
+		int n = 0;
+		for (int x = cx - 25; x <= cx + 25; ++x)
+		{
+			for (int y = cy - 25; y <= cy + 25; ++y)
+			{
+				const PathfindCell *c = pf.cellAt(x, y);
+				n += c && isWallLayer(c->getLayer()) ? 1 : 0;
+			}
+		}
+		return n;
+	};
+	const int before = wallCellsNear(*culvert);
+	const size_t problemsBefore = g.game->report().wallMeshProblems.size();
+	culvert->setModelConditionState(AIUpdateInterface::modelConditionBit("RUBBLE"), true);
+	g.game->ai().removeObjectFromPathfindMap(*culvert);
+	g.game->ai().addObjectToPathfindMap(*culvert);
+	const int after = wallCellsNear(*culvert);
+	MESSAGE("wall cells near the culvert: " << before << " whole, " << after << " as rubble; wall mesh problems " << problemsBefore << " -> "
+	                                         << g.game->report().wallMeshProblems.size());
+	for (const std::string &p : g.game->report().wallMeshProblems)
+	{
+		MESSAGE("  " << p);
+	}
+	// the rubble model RBHDDWCulv_D3 has no P1: the culvert's wall top is gone (the cells left are the neighbouring sections'); a state's missing mesh is no
+	// data problem
+	CHECK(before == 512);
+	CHECK(after == 74);
+	CHECK(g.game->report().wallMeshProblems.size() == problemsBefore);
+	// whole again: the wall top comes back
+	culvert->setModelConditionState(AIUpdateInterface::modelConditionBit("RUBBLE"), false);
+	g.game->ai().removeObjectFromPathfindMap(*culvert);
+	g.game->ai().addObjectToPathfindMap(*culvert);
+	CHECK(wallCellsNear(*culvert) == 512);
+}

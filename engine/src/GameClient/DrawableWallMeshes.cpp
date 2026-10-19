@@ -2,6 +2,8 @@
 
 #include "GameClient/DrawableWallMeshes.h"
 
+#include "GameClient/DrawableLaunchBones.h"
+
 #include "Common/ModelState.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameEngineDevice/W3DDevice/GameClient/Drawable/Draw/W3DModelDraw.h"
@@ -43,7 +45,7 @@ void DrawableWallMeshes::problem(const std::string &p)
 	}
 }
 
-bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
+bool DrawableWallMeshes::build(const ThingTemplate &tt, const ModelConditionFlags &flags, ModelSurfaces &out)
 {
 	for (const ThingTemplate::Nugget &n : tt.drawModules().nuggets())
 	{
@@ -52,7 +54,9 @@ bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
 		{
 			continue;
 		}
-		const ModelConditionInfo *state = data->findBestInfo(ModelConditionFlags()); // RW 0x4B4379 with no flags: the default state
+		const ModelConditionInfo *state = data->findBestInfo(flags); // RW 0x4B4379 (lane WALL-2: the object's current flags; no flags: the default state)
+		// lane WALL-2: a mesh missing from another state's model (a damaged or rubble model without its wall top) is no data problem: that state has no surface
+		const bool reportMissing = state == data->findBestInfo(ModelConditionFlags());
 		if (!state || state->modelName().empty())
 		{
 			problem(tt.getName() + ": the draw module with the wall meshes has no default model");
@@ -86,7 +90,10 @@ bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
 			const RenderSubObject *sub = idx >= 0 ? &proto->SubObjects[(size_t)idx] : nullptr;
 			if (!sub || !sub->Mesh || sub->BoneIndex < 0 || sub->BoneIndex >= (int)pose.size())
 			{
-				problem(tt.getName() + ": mesh " + name + " is not a mesh of " + state->modelName());
+				if (reportMissing)
+				{
+					problem(tt.getName() + ": mesh " + name + " is not a mesh of " + state->modelName());
+				}
 				return;
 			}
 			const MeshModelClass &mesh = *sub->Mesh;
@@ -128,12 +135,29 @@ bool DrawableWallMeshes::build(const ThingTemplate &tt, ModelSurfaces &out)
 
 const DrawableWallMeshes::ModelSurfaces *DrawableWallMeshes::surfacesOf(const ThingTemplate &tt)
 {
-	auto it = m_cache.find(tt.getName());
+	return surfacesOf(tt, ModelConditionFlags());
+}
+
+const DrawableWallMeshes::ModelSurfaces *DrawableWallMeshes::surfacesOf(const ThingTemplate &tt, const ModelConditionFlags &flags)
+{
+	// the key: the template and the model the flags select (the first draw module naming a wall mesh)
+	std::string key = tt.getName();
+	for (const ThingTemplate::Nugget &n : tt.drawModules().nuggets())
+	{
+		const W3DModelDrawModuleData *data = dynamic_cast<const W3DModelDrawModuleData *>(n.data.get());
+		if (data && !(data->m_wallBoundsMesh.empty() && data->m_rampMesh1.empty() && data->m_rampMesh2.empty() && data->m_raisedWallMesh.empty()))
+		{
+			const ModelConditionInfo *state = data->findBestInfo(flags);
+			key += "|" + (state ? state->modelName() : std::string());
+			break;
+		}
+	}
+	auto it = m_cache.find(key);
 	if (it == m_cache.end())
 	{
 		Entry e;
-		e.has = build(tt, e.surfaces);
-		it = m_cache.emplace(tt.getName(), std::move(e)).first;
+		e.has = build(tt, flags, e.surfaces);
+		it = m_cache.emplace(key, std::move(e)).first;
 	}
 	return it->second.has ? &it->second.surfaces : nullptr;
 }
@@ -195,7 +219,7 @@ bool DrawableWallMeshes::wallGeometry(const Object &obj, PathfindWallGeometry &o
 	{
 		return false;
 	}
-	const ModelSurfaces *model = surfacesOf(*tt->getFinalOverride());
+	const ModelSurfaces *model = surfacesOf(*tt->getFinalOverride(), DrawableLaunchBones::launchFlags(obj)); // lane WALL-2: the object's current model
 	if (!model)
 	{
 		return false;

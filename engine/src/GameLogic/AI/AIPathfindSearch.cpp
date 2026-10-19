@@ -357,8 +357,8 @@ bool Pathfinder::canApproachToTarget(const PathfindObject &obj, const PathfindLo
 				worldToCell(&s0, true, &a); // RW 0x6FAA07 / 0x6FAA19: centring 1
 				worldToCell(&e0, true, &b);
 			}
-			// the layer of RW 0x680A75 (the target's): only the ground layer exists (S-161)
-			walkLine(*this, LAYER_GROUND, a, b, [&](PathfindCell *, PathfindCell *to, int x, int y) -> bool {
+			// the layer of RW 0x680A75 (the target's; lane WALL-2: a raised walkway's cells when the target stands on one)
+			walkLine(*this, getLayerAt(target.x, target.y, target.z), a, b, [&](PathfindCell *, PathfindCell *to, int x, int y) -> bool {
 				if ((to->getBit17() || raised(to)) && !melee && !noneYet && missed)
 				{
 					return true; // 1.

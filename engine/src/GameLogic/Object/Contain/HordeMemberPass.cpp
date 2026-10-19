@@ -762,7 +762,7 @@ void HordeContain::memberOrder(Object &member, const Coord3D &slotPos, float ori
 		}
 	}
 	// lane MOVE-2 r3, RW 0x877C37 .. 0x877C72 (H + 0x2A0, the melee target, set): no destination adjustment, no wait: unless the member follows a path whose current
-	// node is a waypoint (RW 0x5E2DF4, never in the port: S-161) the hub walks it to the destination it was given (its melee destination)
+	// node is a waypoint (RW 0x5E2DF4, a portal's: lane WALL-2) the hub walks it to the destination it was given (its melee destination)
 	if (m_meleeEngaged)
 	{
 		if (a->mover().goalType() == AIGOAL_EXPLICIT_WITH_PATH && a->mover().path() && a->mover().path()->hasExplicitZ())

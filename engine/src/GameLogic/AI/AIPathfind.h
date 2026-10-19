@@ -159,6 +159,8 @@ public:
 	void advancePastPortal(int portal);
 	// lane WALL-2: RW 0x765522 (Path::hasInvalidPortals, called through RW 0x76573F): a node's waypoint id names no waypoint any more
 	bool hasInvalidPortals() const;
+	// lane WALL-2: RW 0x765522 itself (cached by RW at + 0x24): a node of the optimised chain from the head carries a waypoint id
+	bool hasWaypointNodes() const;
 	void appendNode(const Coord3D *pos, PathfindLayerEnum layer);
 	void setBlockedByAlly(bool blocked) { m_blockedByAlly = blocked; }
 	bool getBlockedByAlly() const { return m_blockedByAlly; }
@@ -824,8 +826,8 @@ public:
 	// weaponRange) away (RW 0xC041F8; i, j in -1 .. 1, not both 0; both ends to cells with centring 1, RW 0x6FA9EF -> 0x6E8CE6), the cells (Bresenham RW 0x6F807D)
 	// go to the callback RW 0x6F61BD. Its record (RW 0x6EAF14): + 0x1C found, + 0x1D `meleeWeapon` (the weapon template's MeleeWeapon, + 0x125 via RW 0x441B59),
 	// + 0x1E "no usable cell yet on this line" (1 at the start of each line), + 0x1F "a usable cell failed the path test" (0 at the start), + 0x20 `stopAtFirstMiss`
-	// (the caller's 4th argument; RW 0x7463E8 passes 0). See the callback in AIPathfindSearch.cpp. Only the ground layer exists (S-161): its raised-layer
-	// tests are ported but cannot fire.
+	// (the caller's 4th argument; RW 0x7463E8 passes 0). See the callback in AIPathfindSearch.cpp. Its layer tests (a cell above the ground: the wall
+	// tops, ramps and walkways; bit 17) fire on maps with walls (lanes WALL-1 / WALL-2); the line walks the target's layer (RW 0x680A75).
 	bool canApproachToTarget(const PathfindObject &obj, const PathfindLocomotorInfo &loco, const Coord3D &target, float weaponRange, bool meleeWeapon,
 		bool stopAtFirstMiss = false);
 	// lane PLAY-4 r1: RW 0x6ED843's unit branch (the melee reach of RW 0x6CC07C for a victim that is not a STRUCTURE): the unit's footprint box at `from` (its cell,

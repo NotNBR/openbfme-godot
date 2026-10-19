@@ -347,7 +347,7 @@ void AIWorld::moveAlliesAwayFromDestination(Object &obj, const Coord3D &from, co
 	}
 	const float r = CombatQueries::boundingCircleRadius(obj);
 	auto visit = [&](int x, int y) -> bool {
-		const PathfindCell *cell = pf.getCell(LAYER_GROUND, x, y); // the requester's layer: only the ground layer exists (S-161)
+		const PathfindCell *cell = pf.getCell(self.getLayer(), x, y); // the requester's layer (lane WALL-2: a walkway's cells; the ground grid for the rest)
 		if (cell == nullptr)
 		{
 			return false; // RW 0x6F57C3: no cell ends the walk
