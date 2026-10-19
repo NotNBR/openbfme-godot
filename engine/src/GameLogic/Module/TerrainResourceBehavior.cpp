@@ -154,7 +154,9 @@ UpdateSleepTime TerrainResourceBehavior::update()
 			amount = 1;
 		}
 		owner->depositMoney((std::uint32_t)amount, true); // RW 0x8856B6: Money::deposit(amount, &owner + 0x3DC, 1)
-		economy.noteIncome(*obj, *owner, amount);          // the floating text and the debug overlay (RW 0x8856BD .. 0x885737)
+		// the floating text and the debug overlay (RW 0x8856BD .. 0x885737): above the geometry's top (BFME2 decomp TerrainResourceBehaviorUpdate.cpp:
+		// getMaxHeightAbovePosition, worked out by the client)
+		economy.noteIncome(*obj, *owner, amount, Economy::IncomeEvent::TEXT_GEOMETRY_TOP);
 	}
 	// RW 0x88573C .. 0x885765: the building's experience tracker gets `amount` points whether or not anything was paid (amount <= 0 here is the unscaled one)
 	economy.grantBuildingExperience(*obj, NumericState::sseFromInt32(amount));

@@ -514,3 +514,107 @@ TEST_CASE("ownerfix2 retail: a farm's placement shows its claimable share (RW 0x
 		MESSAGE("the enemy farm is in the local player's sight (status " << (int)sh.getStatusAt(me, efx, efy) << "): the fog clause is not reached here");
 	}
 }
+
+#include "GameClient/DrawableIconUI.h"
+#include "GameClient/FloatingText.h"
+
+TEST_CASE("floating text: GUI:AddCash records hold for FloatingTextTimeOut, rise at FloatingTextMoveUpSpeed and fade at FloatingTextVanishRate")
+{
+	FloatingTextSettings s;
+	s.timeOutMs = 1000; // RotWK InGameUI.ini
+	s.moveUpSpeed = 30.0f;
+	s.vanishRate = 3.0f;
+	FloatingTextList list;
+	list.setSettings(s);
+	list.update(100); // the HUD steps the list every frame from the game's start; the first call sets the clock
+	list.add("+10", Coord3D{ 100, 200, 30 }, 0xE6112233u, 100);
+	REQUIRE(list.records().size() == 1);
+	CHECK(list.records().front().frameTimeOut == 130); // 1000 ms * 0.03 client frames
+	auto project = [](const Coord3D &p, float &x, float &y) { x = p.x; y = p.y; return true; };
+	auto visible = [](const Coord3D &) { return true; };
+	for (unsigned f = 101; f <= 130; ++f)
+	{
+		list.update(f);
+		list.update(f); // a second call in the same client frame does nothing
+	}
+	REQUIRE(list.records().size() == 1);
+	CHECK(list.records().front().frameCount == 30);
+	CHECK(list.records().front().color == 0xE6112233u); // no fade until the time out
+	std::vector<IconUIOp> ops;
+	list.ops(project, visible, ops);
+	REQUIRE(ops.size() == 1);
+	CHECK(ops[0].kind == IconUIOp::TEXT);
+	CHECK(ops[0].text == "+10");
+	CHECK(ops[0].x == 100.0f);
+	CHECK(ops[0].y == 170.0f); // 200 - 30 frames * 30 / 30
+	CHECK(ops[0].dropColor == 0xE6000000u);
+	// past the time out the alpha drops by (int)(3 / 30 * frames past it), until the record goes
+	unsigned f = 131;
+	for (; f < 400 && !list.records().empty(); ++f)
+	{
+		list.update(f);
+	}
+	CHECK(list.records().empty());
+	CHECK(f == 203); // alpha 230 loses (int)(0.1 * frames past 130) a frame: 0 after the update of frame 202
+	ops.clear();
+	list.add("+5", Coord3D{}, 0xE6FFFFFFu, f);
+	list.ops(project, [](const Coord3D &) { return false; }, ops);
+	CHECK(ops.empty()); // a cell that is not CLEAR for the viewer shows nothing
+}
+
+TEST_CASE("floating text: a render frame spanning several client frames steps every one of them (rise and fade follow the client clock)")
+{
+	FloatingTextSettings s;
+	s.timeOutMs = 1000;
+	s.moveUpSpeed = 30.0f;
+	s.vanishRate = 3.0f;
+	FloatingTextList each, jumps;
+	each.setSettings(s);
+	jumps.setSettings(s);
+	each.update(100);
+	jumps.update(100);
+	each.add("+10", Coord3D{}, 0xE6112233u, 100);
+	jumps.add("+10", Coord3D{}, 0xE6112233u, 100);
+	// a second text added mid-way (frame 151) steps only on the frames after it, also inside a jump
+	for (unsigned f = 101; f <= 260; ++f)
+	{
+		each.update(f);
+		if (f == 151)
+		{
+			each.add("+5", Coord3D{}, 0xE6445566u, 151);
+		}
+		if (f % 3 == 0)
+		{
+			jumps.update(f); // a render frame every third client frame
+		}
+		if (f == 151)
+		{
+			jumps.update(151);
+			jumps.add("+5", Coord3D{}, 0xE6445566u, 151);
+		}
+		if (f % 3 == 0 || f == 151)
+		{
+			REQUIRE(each.records().size() == jumps.records().size());
+			auto a = each.records().begin();
+			auto b = jumps.records().begin();
+			for (; a != each.records().end(); ++a, ++b)
+			{
+				CHECK(a->frameCount == b->frameCount);
+				CHECK(a->color == b->color);
+			}
+		}
+	}
+	CHECK(each.records().empty()); // both texts faded: the first after frame 202, the second after frame 253
+	CHECK(jumps.records().empty());
+}
+
+TEST_CASE("floating text: the runtime stop names the port's inferences (docs/STOPS.md S-283)")
+{
+	const std::vector<std::string> stops = FloatingTextList::acceptanceStops();
+	REQUIRE(stops.size() == 1);
+	CHECK(stops[0].rfind("[S-283] floating text:", 0) == 0);
+	for (const char *inference : { "FloatingTextTimeOut is milliseconds", "30 client frames a second", "caption font" })
+	{
+		CHECK_MESSAGE(stops[0].find(inference) != std::string::npos, inference);
+	}
+}

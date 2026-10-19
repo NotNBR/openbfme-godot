@@ -313,7 +313,7 @@ std::vector<std::string> HudInput::acceptanceStops()
 		"bit (RW 0x5DA83D); the German Y / Z swap follows the keyboard layout (RW 0x63F024)",
 		"[S-282] tactical view: without HudInput::attachCamera the view is a PinholeView the device fills in (a stand-in with no limits); the retail camera, its translator and "
 		"its stops are lane CAM-1's (TacticalCamera::acceptanceStops(), S-450 .. S-459)",
-		"[S-283] InGameUI: only the state the translators and the control bar read is ported; radius decals, subtitles, floating text, superweapon timers, popups and the "
+		"[S-283] InGameUI: only the state the translators and the control bar read is ported; radius decals, subtitles, superweapon timers, popups and the "
 		"alternate-mouse bookkeeping are not (the building placement is BUILD-1's, S-306)",
 		"[S-284] picking: without a drawable ray test (HudContext::pickRay, installed by InGameHud: S-1200) an object is hit by a ray against its Geometry volume (cylinder of the bounding "
 		"radius, height at least the radius), the nearest first; ZH tests the model's polygons; a region holds the objects whose position projects into it",

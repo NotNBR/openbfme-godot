@@ -8,6 +8,11 @@
 
 #include "GameClient/GUI/GameTextSource.h"
 #include "GameClient/GUI/LoadScreenInfo.h"
+#include "GameLogic/Economy.h"
+#include "GameLogic/System/ShroudManager.h"
+#include "GameClient/UnitHelpSource.h"
+#include "Common/Thing/ThingTemplate.h"
+#include "GameLogic/Object/ObjectGeometry.h"
 
 #include "Common/Audio/AudioEntryPoints.h"
 
@@ -568,6 +573,7 @@ void InGameHud::update(double seconds)
 	m_iconSettings.snapshot = iconSnap.get();
 	m_iconSettings.shroudDrawn = iconSnap && iconSnap->shroud && iconSnap->shroud->displayed;
 	m_iconUI.build(m_config.game.logic(), m_config.game.drawables(), m_config.view, m_iconSettings, selectedSet, m_input->ui().mouseoverObject(), m_iconOps);
+	updateFloatingText(m_config.view, m_iconSettings.shroudDrawn);
 	m_iconSettings.snapshot = nullptr; // the frame's snapshot goes with this frame
 	part(m_updateParts.icons);
 	// lane UI-4: the selection markers (RW 0x67580E / 0x86F4EE / 0x4B2A9B, GameClient/SelectionDecals.h) on the client clock
@@ -690,6 +696,90 @@ void InGameHud::send(const std::vector<GameMessage> &msgs)
 // be cast at the terrain point under the pointer (InGameSpellBookModel::targetValid, RW 0x6A4260), else invalid (0xAF); then handleRadiusCursor /
 // RadiusDecal::update move it there and throb it on the client clock. Over a window no hint comes (the translators do not see the pointer): the decal
 // keeps its place and colour. The command's end clears the decal and gives the pointer back (setGUICommand RW 0x69B398: Arrow, then setRadiusCursorNone).
+// the money texts (GameClient/FloatingText.h): every income payment logged since the last frame becomes a GUI:AddCash text in its owner's colour (alpha 0xE6),
+// the list steps once per client frame, and its visible records join the icon ops (drawn with the drawables' decorations)
+void InGameHud::updateFloatingText(const TacticalView &view, bool shroudDrawn)
+{
+	GameLogic &logic = m_config.game.logic();
+	const Economy &economy = logic.economy();
+	if (m_incomeLogic != &logic)
+	{
+		// a new game (or a loaded one): what its log already holds is not shown
+		m_incomeLogic = &logic;
+		m_incomeSeen = economy.incomePayments();
+		m_floatingText.clear();
+	}
+	const unsigned long long paid = economy.incomePayments();
+	if (paid > m_incomeSeen)
+	{
+		const auto &log = economy.incomeLog();
+		const size_t fresh = (size_t)std::min<unsigned long long>(paid - m_incomeSeen, log.size());
+		const std::u16string format = fetchOrMissing(m_config.gameText, "GUI:AddCash");
+		for (size_t i = log.size() - fresh; i < log.size(); ++i)
+		{
+			const Economy::IncomeEvent &e = log[i];
+			const Player *owner = m_config.game.players().getNthPlayer(e.playerIndex);
+			if (!owner || e.amount <= 0)
+			{
+				continue;
+			}
+			Coord3D pos = e.textPos;
+			if (e.textAnchor == Economy::IncomeEvent::TEXT_GEOMETRY_TOP)
+			{
+				// TerrainResourceBehavior: the text sits on the geometry's top (getMaxHeightAbovePosition); a template whose geometry does not parse
+				// shows no text and is reported (no default height)
+				auto it = m_floatingTextHeights.find(e.templateName);
+				if (it == m_floatingTextHeights.end())
+				{
+					const ThingTemplate *tt = logic.things().findTemplate(e.templateName);
+					try
+					{
+						if (!tt)
+						{
+							throw std::logic_error("the template is not loaded");
+						}
+						it = m_floatingTextHeights.emplace(e.templateName, ObjectGeometry::maxHeightAbovePosition(ObjectGeometry::shapesOf(*tt))).first;
+					}
+					catch (const std::exception &ex)
+					{
+						const std::string error = e.templateName + " geometry: " + ex.what();
+						if (std::find(m_floatingTextErrors.begin(), m_floatingTextErrors.end(), error) == m_floatingTextErrors.end())
+						{
+							m_floatingTextErrors.push_back(error);
+						}
+						continue;
+					}
+				}
+				pos.z += it->second;
+			}
+			const std::string n = std::to_string(e.amount);
+			const std::string text = loadScreenU16ToUtf8(UnitHelpSource::format(format, { std::u16string(n.begin(), n.end()) }));
+			m_floatingText.add(text, pos, (owner->getPlayerColor() & 0xFFFFFFu) | 0xE6000000u, m_clientFrames);
+		}
+		m_incomeSeen = paid;
+	}
+	m_floatingText.update(m_clientFrames);
+	const int observed = m_config.game.observedPlayer();
+	const Player *viewer = observed >= 0 ? m_config.game.players().getNthPlayer(observed) : m_config.game.players().getLocalPlayer();
+	const ShroudManager *shroud = logic.shroud();
+	m_floatingText.ops(
+		[&view](const Coord3D &p, float &x, float &y) {
+			ICoord2D s;
+			if (!view.worldToScreen(p, s))
+			{
+				return false;
+			}
+			x = (float)s.x;
+			y = (float)s.y;
+			return true;
+		},
+		[&](const Coord3D &p) {
+			// drawn only on a cell CLEAR for the viewing player (InGameUI_drawFloatingText.cpp), while the shroud is drawn
+			return !shroudDrawn || !shroud || !viewer || shroud->getStatusAt(viewer->getPlayerIndex(), p.x, p.y) == CELLSHROUD_CLEAR;
+		},
+		m_iconOps);
+}
+
 void InGameHud::updateResourceFeedback()
 {
 	// lane OWNERFIX-2 (GameClient/TerrainResourceFeedback.h): the placement feedback while a building waits for its site (InGameUI::handleBuildPlacements),
