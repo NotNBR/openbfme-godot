@@ -51,10 +51,10 @@ int templateIndex(Shared &s, const std::string &name)
 }
 
 // slot 0 (start 0, Player_1_Start: the fortress) is the human, or the skirmish AI when `aiFortress`
-NewGameMessage helmsDeep(Shared &s, bool aiFortress = false)
+NewGameMessage helmsDeep(Shared &s, bool aiFortress = false, const char *mapName = "maps/map wor helms deep/map wor helms deep.map")
 {
 	NewGameMessage m;
-	m.game.mapName = "maps/map wor helms deep/map wor helms deep.map";
+	m.game.mapName = mapName;
 	m.game.seed = 11;
 	m.game.startingCash = 1000;
 	const char *factions[2] = { "FactionMen", "FactionMordor" };
@@ -80,7 +80,8 @@ struct PortalGame
 	ArchiveW3DFileSource source;
 	WW3DAssetManager assets;
 	std::unique_ptr<LiveGame> game;
-	explicit PortalGame(Shared &sh, bool aiFortress = false) : s(sh), source(*sh.mount->fs), assets(source)
+	explicit PortalGame(Shared &sh, bool aiFortress = false, const char *mapName = "maps/map wor helms deep/map wor helms deep.map")
+		: s(sh), source(*sh.mount->fs), assets(source)
 	{
 		std::string error;
 		static std::vector<MapCacheEntry> cache;
@@ -88,7 +89,7 @@ struct PortalGame
 		{
 			REQUIRE_MESSAGE(IniSkirmishSetupSource::loadMapCache(*s.mount->fs, cache, &error), error);
 		}
-		REQUIRE_MESSAGE(NewGame::prepareNewGame(helmsDeep(s, aiFortress),s.world->playerTemplates(), s.settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
+		REQUIRE_MESSAGE(NewGame::prepareNewGame(helmsDeep(s, aiFortress, mapName), s.world->playerTemplates(), s.settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
 		game = std::make_unique<LiveGame>(*s.world, *s.mount->fs, assets, s.options);
 		LiveGame::Options o;
 		o.start = &start;
@@ -525,6 +526,49 @@ bool nearestWallTop(Pathfinder &pf, const Coord3D &pos, Coord3D &out)
 	}
 	return best >= 0;
 }
+// the wall-top cell inside the top (all eight neighbours on its layer) nearest the cell (cx, cy), ring by ring, that `ai`'s unit has a full path to
+bool reachableWallTop(Pathfinder &pf, AIUpdateInterface &ai, int cx, int cy, Coord3D &top, int rings = 30)
+{
+	for (int r = 1; r <= rings; ++r)
+	{
+		for (int dx = -r; dx <= r; ++dx)
+		{
+			for (int dy = -r; dy <= r; ++dy)
+			{
+				const int x = cx + dx, y = cy + dy;
+				const PathfindCell *c = pf.cellAt(x, y);
+				if ((dx != -r && dx != r && dy != -r && dy != r) || !c || !isWallLayer(c->getLayer()) || c->getType() != PathfindCell::CELL_CLEAR)
+				{
+					continue;
+				}
+				bool inner = true;
+				for (int ex = -1; ex <= 1; ++ex)
+				{
+					for (int ey = -1; ey <= 1; ++ey)
+					{
+						const PathfindCell *n = pf.cellAt(x + ex, y + ey);
+						inner = inner && n && n->getLayer() == c->getLayer();
+					}
+				}
+				if (!inner)
+				{
+					continue;
+				}
+				Coord3D from = *ai.getObject()->getPosition(), to{ (float)x * 10.0f + 5.0f, (float)y * 10.0f + 5.0f, 0.0f };
+				bool partial = true;
+				Path *p = pf.findPath(&ai.adapter(), ai.locomotorInfo(), &from, &to, &partial);
+				const bool ok = p && !partial && isWallLayer(p->getLastNode()->getLayer());
+				delete p;
+				if (ok)
+				{
+					top = to;
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
 } // namespace
 
 TEST_CASE("wall2 raised retail: a hero on Helm's Deep's left gatehouse walks to the right one over the walkway above the gate (wall, ramp, layer 2, ramp, wall)")
@@ -663,41 +707,7 @@ TEST_CASE("wall2 modules retail: ActionManager RW 0x82C366: a hero on Helm's Dee
 	REQUIRE(ai);
 	// the nearest wall-top cell inside the top (all eight neighbours on its layer) the hero reaches from inside
 	Coord3D top{};
-	bool found = false;
-	for (int r = 1; r <= 30 && !found; ++r)
-	{
-		for (int dx = -r; dx <= r && !found; ++dx)
-		{
-			for (int dy = -r; dy <= r && !found; ++dy)
-			{
-				const int x = 173 + dx, y = 281 + dy;
-				const PathfindCell *c = pf.cellAt(x, y);
-				if ((dx != -r && dx != r && dy != -r && dy != r) || !c || !isWallLayer(c->getLayer()) || c->getType() != PathfindCell::CELL_CLEAR)
-				{
-					continue;
-				}
-				bool inner = true;
-				for (int ex = -1; ex <= 1; ++ex)
-				{
-					for (int ey = -1; ey <= 1; ++ey)
-					{
-						const PathfindCell *n = pf.cellAt(x + ex, y + ey);
-						inner = inner && n && n->getLayer() == c->getLayer();
-					}
-				}
-				if (!inner)
-				{
-					continue;
-				}
-				Coord3D from = *hero->getPosition(), to{ (float)x * 10.0f + 5.0f, (float)y * 10.0f + 5.0f, 0.0f };
-				bool partial = true;
-				Path *p = pf.findPath(&ai->adapter(), ai->locomotorInfo(), &from, &to, &partial);
-				found = p && !partial && isWallLayer(p->getLastNode()->getLayer());
-				top = to;
-				delete p;
-			}
-		}
-	}
+	const bool found = reachableWallTop(pf, *ai, 173, 281, top);
 	REQUIRE_MESSAGE(found, "no reachable wall-top cell near the culvert");
 	ai->aiMoveToPosition(top, CMD_FROM_PLAYER);
 	for (int f = 0; f < 900; ++f)
@@ -753,4 +763,95 @@ TEST_CASE("wall2 modules retail: ActionManager RW 0x82C366: a hero on Helm's Dee
 	CHECK(framesOnWallWithPortal > 0); // tolerance: some frames walk the wall before the ramp
 	CHECK(refusedOnWall == framesOnWallWithPortal);
 	CHECK(refusedOffWall == 0);
+}
+
+// Minas Tirith: MinisGate1 names RaisedWallMesh P1, RampMesh1 P2, RampMesh2 P3; the walls' tops and ramps are the ground grid's wall and ramp layers
+TEST_CASE("wall2 raised retail: Minas Tirith: MinisGate1's RaisedWallMesh P1 is no mesh of its model (no walkway); the walls have tops a hero walks onto")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s, false, "maps/map wor minas tirith/map wor minas tirith.map");
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	int wallCells = 0, rampCells = 0;
+	const ICoord2D *ext = pf.getExtent();
+	for (int x = 0; x <= ext->x; ++x)
+	{
+		for (int y = 0; y <= ext->y; ++y)
+		{
+			const PathfindCell *c = pf.cellAt(x, y);
+			wallCells += c && isWallLayer(c->getLayer()) ? 1 : 0;
+			rampCells += c && c->getLayer() == LAYER_RAMP ? 1 : 0;
+		}
+	}
+	int gates = 0, overPassage = 0;
+	for (Object *o = g.game->logic().getFirstObject(); o; o = o->getNextObject())
+	{
+		if (o->getTemplate()->getName() != "MinisGate1")
+		{
+			continue;
+		}
+		++gates;
+		const Coord3D c = *o->getPosition();
+		const int cx = SimMath::floorToInt(SimMath::mulf32(c.x, 0.1f)), cy = SimMath::floorToInt(SimMath::mulf32(c.y, 0.1f));
+		PathfindLayerEnum walkway = LAYER_INVALID;
+		for (int l = (int)LAYER_TOP; l <= (int)LAYER_RAISED_LAST; ++l)
+		{
+			const PathfindCell *rc = pf.raisedLayerInUse((PathfindLayerEnum)l) ? pf.raisedCellAt((PathfindLayerEnum)l, cx, cy) : nullptr;
+			if (rc && rc->getType() == PathfindCell::CELL_CLEAR)
+			{
+				walkway = (PathfindLayerEnum)l;
+			}
+		}
+		const PathfindCell *under = pf.cellAt(cx, cy);
+		MESSAGE("MinisGate1 at " << c.x << ", " << c.y << ", " << c.z << ": walkway layer " << (int)walkway << (walkway != LAYER_INVALID ? " height " + std::to_string(pf.raisedLayerHeight(walkway)) : std::string())
+		                         << "; the cell under it layer " << (under ? (int)under->getLayer() : -1) << " type " << (under ? (int)under->getType() : -1));
+		overPassage += walkway != LAYER_INVALID ? 1 : 0;
+	}
+	MESSAGE("wall-top cells " << wallCells << ", ramp cells " << rampCells << ", raised layers " << pf.raisedLayerCount() << ", gates " << gates << " (" << overPassage
+	                          << " with a walkway); wall mesh problems " << g.game->report().wallMeshProblems.size());
+	for (const std::string &p : g.game->report().wallMeshProblems)
+	{
+		MESSAGE("  " << p);
+	}
+	// the data: MinisGate1's model GBMinGate1 has the sub objects GBMGATE9 and GBMGATE1A only (no P1 .. P3): no walkway and no ramps, as retail's
+	// getPolygon / getRamp find none; the 13 problems name the meshes the Minas Tirith models lack
+	CHECK(gates == 1);
+	CHECK(overPassage == 0);
+	CHECK(pf.raisedLayerCount() == 0);
+	CHECK(g.game->report().wallMeshProblems.size() == 13);
+	CHECK(wallCells == 8291);
+	CHECK(rampCells == 1874);
+	// a hero beside the fortress's command centre walks onto the nearest wall top it reaches and stands at its height
+	Object *keep = nullptr;
+	for (Object *o = g.game->logic().getFirstObject(); o && !keep; o = o->getNextObject())
+	{
+		keep = o->getControllingPlayer() && o->isKindOfName("COMMANDCENTER") && o->getControllingPlayer()->getPlayerType() == PLAYER_HUMAN ? o : nullptr;
+	}
+	REQUIRE(keep);
+	std::string error;
+	Coord3D spawn = *keep->getPosition();
+	spawn.x += 100.0f;
+	Object *hero = g.game->createObject("GondorBoromir", keep->getControllingPlayer()->getPlayerIndex(), spawn, 0.0f, &error);
+	REQUIRE_MESSAGE(hero, error);
+	g.frames(2);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	Coord3D top{};
+	REQUIRE(reachableWallTop(pf, *ai, SimMath::floorToInt(SimMath::mulf32(hero->getPosition()->x, 0.1f)), SimMath::floorToInt(SimMath::mulf32(hero->getPosition()->y, 0.1f)), top, 60));
+	ai->aiMoveToPosition(top, CMD_FROM_PLAYER);
+	for (int f = 0; f < 1500; ++f)
+	{
+		g.frames(1);
+		const Coord3D q = *hero->getPosition();
+		if ((q.x - top.x) * (q.x - top.x) + (q.y - top.y) * (q.y - top.y) < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	const Coord3D at = *hero->getPosition();
+	MESSAGE("the hero from " << spawn.x << ", " << spawn.y << " to the wall top at " << top.x << ", " << top.y << " stands at " << at.x << ", " << at.y << ", " << at.z
+	                         << " on layer " << (int)ai->adapter().getLayer());
+	CHECK(isWallLayer(ai->adapter().getLayer()));
+	CHECK(at.z == pf.getLayerHeight(at.x, at.y, ai->adapter().getLayer()));
+	CHECK((at.x - top.x) * (at.x - top.x) + (at.y - top.y) * (at.y - top.y) < 900.0f); // tolerance: within the close-enough distance of the goal cell
 }
