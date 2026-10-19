@@ -499,7 +499,7 @@ const std::vector<std::string> &AptCreateAHero::stopLines()
 		"first ButtonImage), the row names, the labels without their hot-key marks, the wizard line and the matrix's first scroll position are inferred",
 		"[S-1405] Create-a-Hero screen: the hero portrait (OnTakePicture), OnPlayGame's test map, which page \"CreateAHero\" forwards to, the "
 		"SuppressCahPromo preference (kept for the session), the color picker's \"?<picker>Color\" externs (undefined), the 3D view's camera (ViewInfo, "
-		"RW 0x9BFE74: the ground point, angle, blend and field of view as retail; the eye height Floor * Zoom and the pitch's use inferred, lane CAH-2) and the name prompt (ShowNamePrompt: \"1\" while the entry is empty; the movie reads it when the page opens, so its text "
+		"RW 0x9BFE74: the ground point, angle, blend and field of view as retail; the mode-1 eye transform follows BFME2; RotWK named-camera mode and remaining device flags unverified, lane CAH-2) and the name prompt (ShowNamePrompt: \"1\" while the entry is empty; the movie reads it when the page opens, so its text "
 		"stays over a name typed later) are inferred or not ported",
 		"[S-1408] Create-a-Hero appearance (lane CAH-2 r2: ported): the record's three colours reach the drawable as kind 3 (RW 0x80AF0B -> 0x80959A -> "
 		"0x6727B0) and its model's house colour textures are recoloured texel by texel before filtering as RW 0x531C77 (mipmaps from the recoloured level); INFERENCE: the recoloured texel replaces the base where the house texture's alpha "
@@ -527,6 +527,7 @@ AptCreateAHero::AptCreateAHero(WindowManager &windows, Shell &shell, ShellEnviro
 		m_myHero->onChanged = [this]() {
 			bumpDisplay();
 			refreshTexts();
+			invoke("UpdateHeroBaseAttributes", {});
 		};
 		// RW 0x9C4951: the class page's hero of every (class, subclass)
 		const std::vector<CreateAHeroClass> &classes = m_env.createAHero->system->classes();
@@ -702,7 +703,13 @@ void AptCreateAHero::refreshTexts()
 	}
 	const int cost = m_myHero->buildCost();
 	windows().setAptText("APT:MyHeroCost", cost >= 0 ? std::to_string(cost) : std::string(" "));
-	setImage("Cah::Portrait", h.classIndex < classes.size() ? classes[h.classIndex].iconImage : std::string()); // INFERENCE (S-1405): the portrait file is not ported
+	// DONOR AptMyHero::rva005B0725: use the preview drawable's portrait;
+	// HPGandalf is the explicit default until that drawable supplies an image.
+	// The device returns the applied model-state portrait after each revision.
+	if (!windows().aptImage("Cah::Portrait"))
+	{
+		setImage("Cah::Portrait", "HPGandalf");
+	}
 }
 
 void AptCreateAHero::registerAll()
@@ -712,7 +719,7 @@ void AptCreateAHero::registerAll()
 	registerCommand("AptCreateAHero::PrepareToTakePicture", [this](const std::string &) { m_pictureFrames = 0; });
 	registerCommand("AptCreateAHero::OnTakePicture", [this](const std::string &) {
 		windows().note("unported-command", "AptCreateAHero::OnTakePicture: the hero portrait is not taken [S-1405]");
-		notAvailable(u"Taking a hero portrait is not available yet: the hero keeps its class's picture."); // lane MENUWORK-1 (S-4755)
+		notAvailable(u"Taking a hero portrait is not available yet: the hero keeps its model's portrait."); // lane MENUWORK-1 (S-4755)
 		invoke("OnGameTookPicture", {});
 	});
 	registerCommand("AptCreateAHero::RotateLeft", [this](const std::string &a) { m_rotateLeft = !a.empty() && a[0] == 't'; });
@@ -1253,6 +1260,19 @@ void AptCreateAHero::selectHero(int index)
 	}
 	m_selectedHero = index;
 	m_myHero->edit(e->hero, false);
+	// DONOR AptMyHero RVA 0x5B0446 refreshes all ten level entries through
+	// RVA 0x5B0416 (MyPowerLevel text and MyPowerIcon image). This is also
+	// needed on the manager, which does not run refreshPowersPage.
+	for (int i = 0; i < CahPowers::MAX_POWERS; ++i)
+	{
+		const CommandButton *button = TheCommandStore ? TheCommandStore->findCommandButton(e->hero.powers[(size_t)i].commandButton) : nullptr;
+		const std::string suffix = std::to_string(i + 1);
+		setImage("MyPowerIcon_" + suffix, powerIcon(button));
+		std::u16string name = button && !button->m_textLabel.empty() ? fetchOrMissing(m_env.gameText, button->m_textLabel.front()) : u" ";
+		name.erase(std::remove(name.begin(), name.end(), u'&'), name.end());
+		windows().setAptText("APT:MyPowerLevel_" + suffix, loadScreenU16ToUtf8(name));
+	}
+	windows().setAptText("APT:HeroPowersDescription", " ");
 	m_showClassHero = false;
 	invoke("EnableCustomizeButtons", { e->system ? "false" : "true" });
 	bumpDisplay();
@@ -1341,11 +1361,12 @@ void AptCreateAHero::fillHeroList()
 	}
 }
 
-WindowMsgHandledType AptCreateAHero::gadgetMessage(GameWindow *from, std::uint32_t msg, WindowMsgData data1, WindowMsgData)
+WindowMsgHandledType AptCreateAHero::gadgetMessage(GameWindow *, std::uint32_t msg, WindowMsgData data1, WindowMsgData data2)
 {
-	if (msg == GLM_SELECTED && from == m_heroList) // RW 0x9C5114: 0x4014 from the hero list
+	GameWindow *gadget = reinterpret_cast<GameWindow *>(data1);
+	if (msg == GLM_SELECTED && gadget == m_heroList) // RW 0x9C5114: 0x4014 from the hero list
 	{
-		const int row = (int)data1;
+		const int row = (int)(std::intptr_t)data2;
 		selectHero(row >= 0 && (size_t)row < m_rowEntries.size() ? m_rowEntries[(size_t)row] : row); // lane MENUWORK-1: the sorted row's hero
 		return MSG_HANDLED;
 	}

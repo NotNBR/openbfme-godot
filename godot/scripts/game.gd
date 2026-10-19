@@ -2884,6 +2884,12 @@ func _run_cah() -> void:
 		return
 	await _step(30)
 	_cah_shot("4-appearance")
+	var attributes := "Main.mcAppearanceScreen.Screen.TypeWindow"
+	_cah_invoke(attributes + ":gotoAndPlay", ["_attributes"])
+	await _step(60)
+	_cah_shot("4a-attributes")
+	_cah_invoke(attributes + ":gotoAndPlay", ["_appearance"])
+	await _step(60)
 	# lane CAH-2 r2: a colour picked with the mouse on the shown colour tab's palette (GadgetColorPicker.swf's Click button: the drag writes <tab>Cursor,
 	# the ColorPicker component reads the palette texel, SetColor -> Appearance::On<tab>): the hero's record must change
 	var before: PackedByteArray = _shell.get_create_a_hero_view().get("record", PackedByteArray())

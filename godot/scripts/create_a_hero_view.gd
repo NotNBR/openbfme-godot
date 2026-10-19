@@ -7,9 +7,10 @@
 ## rectangle (lane CAH-2; the window's own 3D is off while the builder is up). Each frame the shell's view state (AptMenuPlayer.get_create_a_hero_view) is read: a new
 ## revision applies the shown record to the preview object (GameWorld.cah_preview_apply, TheCreateAHeroSystem + 0x18C set: cah_builder), the held
 ## rotate / zoom buttons turn and zoom the camera.
-## The map locations are RW 0x9C09FC's (GameWorld.cah_preview_locations: an object named "<x>_<n>" is location n). INFERENCE (stop S-1405): the camera is an
-## approximation of RW 0x9BFE74 (the ground point Dist ahead of the hero's facing and Shift aside, then the view's pitch); the near / far zoom blend and the
-## close-up / portrait views of the Powers / Manager pages are not reproduced exactly.
+## The map locations are RW 0x9C09FC's. The named camera's pose uses the donor
+## W3DViewRva0008A2EF / W3DViewMoveAlongWaypointPath / W3DCamTransform mode-1
+## path: Floor is an absolute plane, with the map camera offset scaled by Zoom.
+## S-1405 remains for target verification, named-camera flags and portrait views.
 extends Node
 
 const MAP := "createahero" # Maps\\CreateAHero\\CreateAHero.map (RW 0xC7CBF0)
@@ -56,7 +57,7 @@ func begin(world: Node3D, shell: Node2D, size: Vector2i) -> bool:
 	_cam = Camera3D.new()
 	_cam.name = "CreateAHeroCamera"
 	_cam.fov = rad_to_deg(0.83) # RW 0x9BFE74: DAT 0xC2D8F0, horizontal as the tactical view's (TacticalCamera: View + 0x6C)
-	_cam.keep_aspect = Camera3D.KEEP_HEIGHT
+	_cam.keep_aspect = Camera3D.KEEP_WIDTH
 	_cam.near = 1.0
 	_cam.far = 20000.0
 	_view.add_child(_cam)
@@ -114,6 +115,10 @@ func tick(delta: float) -> void:
 
 func _apply(view: Dictionary) -> void:
 	_info = _world.cah_view_info(int(view.get("class", 0)), int(view.get("subclass", 0)))
+	if not _info.get("ok", false):
+		errors.append(str(_info.get("error", "Create-a-Hero view information is unavailable")))
+		_info = {} # A failed refresh must not feed incomplete data to _place_camera.
+		return
 	var loc := int(_info.get("map_location", 0))
 	if _locations.is_empty():
 		return
@@ -131,6 +136,8 @@ func _apply(view: Dictionary) -> void:
 	if _t < 0.0:
 		_t = clampf(float(_info.get("normal_cam", 0.0)), 0.0, 1.0)
 	var r: Dictionary = _world.cah_preview_apply(_object, _record)
+	if r.ok:
+		_shell.set_create_a_hero_portrait(str(r.portrait))
 	if not r.ok:
 		errors.append(str(r.get("error", "")))
 		printerr("CAH preview: ", r.get("error", ""))
@@ -142,9 +149,8 @@ func _place_camera(page: String) -> void:
 	# screen's fixed view (+0x178) is on. The angle is the map location's (+4) plus CameraAngle (+0x64); the camera's ground point is the hero's position
 	# plus (cos a * dist - sin a * shift, sin a * dist + cos a * shift), and RW 0x489B77 records it with height Floor, heading a + pi/2 (DAT 0xBD89D0), Pitch,
 	# Zoom and the field of view 0.83 (DAT 0xC2D8F0) for the tactical view (TheTacticalView vslot 0x60).
-	# INFERENCE (S-1405): the eye stands at the ground point, Floor * Zoom above the hero's ground, looking back along the heading at Pitch below the
-	# horizon (vslot 0x60's use of the record was not read); the fixed view is taken on the Powers page (close-up); RotateLeft / RotateRight turn the
-	# angle, ZoomIn / ZoomOut move t.
+	# BFME2 donor mode-1 transform below; S-1405 still covers target mode/flags
+	# and fixed-view selection. No page-specific pitch sign or distance tuning.
 	if _cam == null or _info.is_empty():
 		return
 	var near: Array = _info.get("near", [0.0, 1.0, 20.0, 40.0, 0.0])
@@ -162,14 +168,28 @@ func _place_camera(page: String) -> void:
 	var dist: float = float(v[3])
 	var shift: float = float(v[4])
 	var a: float = _facing + float(_info.get("camera_angle", 0.0)) + _yaw
-	# SAGE x, y, z -> Godot x, z, -y
-	var ex := _hero_sage.x + cos(a) * dist - sin(a) * shift
-	var ey := _hero_sage.y + sin(a) * dist + cos(a) * shift
-	var ez := _hero_sage.z + floor_h * zoom
-	var dir := Vector3(-cos(a) * cos(pitch), -sin(a) * cos(pitch), -sin(pitch))
-	var eye := Vector3(ex, ez, -ey)
-	var look := eye + Vector3(dir.x, dir.z, -dir.y) * 10.0
-	_cam.look_at_from_position(eye, look, Vector3.UP)
+	# Donor W3DViewRva0008A2EF / W3DViewMoveAlongWaypointPath copy the
+	# named camera Floor directly to groundLevel. W3DCamTransform mode 1
+	# rotates the zoomed map offset, scales by 1 - Floor / offset.z, and
+	# translates by Floor. It does not add the preview object's terrain Z.
+	var offset: Vector3 = _info.camera_offset * zoom
+	var factor := 1.0 - floor_h / offset.z
+	var py := offset.y * cos(pitch) - offset.z * sin(pitch)
+	var pz := offset.y * sin(pitch) + offset.z * cos(pitch)
+	var heading := a + PI * 0.5
+	var point := _hero_sage + Vector3(cos(a) * dist - sin(a) * shift, sin(a) * dist + cos(a) * shift, 0)
+	var eye_sage := Vector3((offset.x * cos(heading) - py * sin(heading)) * factor + point.x,
+		(offset.x * sin(heading) + py * cos(heading)) * factor + point.y, pz * factor + floor_h)
+	var target_sage := Vector3(point.x, point.y, floor_h)
+	if page == "P":
+		# S-1405: the Powers fixed-view mode is not established. Preserve its
+		# previous device placement until its named-camera mode is decoded.
+		eye_sage = Vector3(offset.x * cos(heading) - offset.y * sin(heading) + point.x,
+			offset.x * sin(heading) + offset.y * cos(heading) + point.y, _hero_sage.z + floor_h)
+		var down_pitch := -pitch
+		target_sage = eye_sage + Vector3(-cos(a) * cos(down_pitch), -sin(a) * cos(down_pitch), -sin(down_pitch))
+	_cam.look_at_from_position(Vector3(eye_sage.x, eye_sage.z, -eye_sage.y),
+		Vector3(target_sage.x, target_sage.z, -target_sage.y), Vector3.UP)
 	_cull_cam.global_transform = _cam.global_transform
 	_cull_cam.fov = _cam.fov
 	_cull_cam.near = _cam.near
