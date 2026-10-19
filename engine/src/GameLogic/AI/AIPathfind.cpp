@@ -107,7 +107,7 @@ float shapeSphere(const PathfindShape &s)
 }
 } // namespace
 
-float PathfindGeometry::boundingCircleRadius() const
+float PathfindGeometry::computeBoundingCircleRadius() const
 {
 	// RW 0xAD2860: start at 0.01f (0x3C23D70A), keep the larger (fcomp: an equal value is taken from the shape, the same value)
 	float best = 0.01f;
@@ -127,7 +127,7 @@ float PathfindGeometry::boundingCircleRadius() const
 	return best;
 }
 
-float PathfindGeometry::boundingSphereRadius() const
+float PathfindGeometry::computeBoundingSphereRadius() const
 {
 	float best = 0.0f; // RW 0xAD287A
 	for (size_t i = 0; i < shapeCount(); ++i)
@@ -220,10 +220,12 @@ Pathfinder::Pathfinder(const PathfindConfig &config, const PathfindWorld *world)
 	m_extent.lo = ICoord2D();
 	m_extent.hi = ICoord2D();
 	m_logicalExtent = m_extent;
+	m_pool.setGrowthLimit(kCellInfoPoolMax); // lane PATHPERF-4
 	m_pool.allocate(config.cellInfoPoolSize);
 	m_zoneManager.setBlockSize(config.zoneBlockSize);
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 }
 
 Pathfinder::~Pathfinder() {}
@@ -250,6 +252,7 @@ void Pathfinder::reset()
 	m_zoneManager.reset();
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 	m_units.clear();
 	m_unitIndex.clear();
 }
@@ -326,6 +329,7 @@ void Pathfinder::newMap(const PathfindTerrain &terrain, const std::vector<Pathfi
 	m_blockOfMapCells.assign((size_t)(bounds.hi.x + 1) * (size_t)(bounds.hi.y + 1), PathfindCell());
 	m_queue1.reset();
 	m_queue2.reset();
+	m_uberBurst = false;
 	m_units.clear();
 	m_unitIndex.clear();
 	m_stops.clear();
@@ -543,6 +547,10 @@ void Pathfinder::crc(StateHasher &h) const
 		}
 	}
 	m_zoneManager.crc(h);
+	if (m_uberLimits)
+	{
+		h.addU32(m_uberBurst ? 1u : 0u); // lane PATHPERF-4: Uber only, a Faithful game hashes as before
+	}
 	h.addU32((std::uint32_t)m_queue1.size());
 	for (size_t i = 0; i < m_queue1.size(); ++i)
 	{

@@ -139,6 +139,6 @@ void AIWorld::xferBody(Xfer &x)
 	AIXfer::blockReadToEnd(x, "ai world"); // inside the transaction: a block with bytes after its state is refused before anything stays changed
 	if (loading)
 	{
-		m_noted = std::set<std::string>(noted.begin(), noted.end());
+		m_noted = decltype(m_noted)(noted.begin(), noted.end());
 	}
 }

@@ -63,7 +63,7 @@ void PathfindRequestRing::xfer(Xfer &x)
 	x.xferInt(&tail);
 	if (x.isLoading())
 	{
-		if (head < 0 || head >= PATHFIND_QUEUE_LEN || tail < 0 || tail >= PATHFIND_QUEUE_LEN)
+		if (head < 0 || head >= m_len || tail < 0 || tail >= m_len) // lane PATHPERF-4: this ring's length (the game's profile)
 		{
 			throw XferException("pathfinder: a request ring's head " + std::to_string(head) + " / tail " + std::to_string(tail));
 		}
@@ -71,7 +71,7 @@ void PathfindRequestRing::xfer(Xfer &x)
 		m_head = head;
 		m_tail = tail;
 	}
-	for (int s = m_head; s != m_tail; s = (s + 1) % PATHFIND_QUEUE_LEN)
+	for (int s = m_head; s != m_tail; s = (s + 1) % m_len)
 	{
 		x.xferUnsignedInt(&m_slots[(size_t)s]);
 		if (x.isLoading()) // lane SAVE-4e (closed sets): an id the game issued (a later object must not inherit a queued request)
@@ -161,14 +161,17 @@ std::uint32_t Pathfinder::configHash() const
 		h.addI32(v);
 	}
 	h.addU32((std::uint32_t)m_blockOfMapCells.size());
-	h.addI32(m_pool.capacity());
+	// upstream hashed the pool's capacity here, which was always the configured size; an Uber pool grows (lane PATHPERF-4), so the configured size is
+	// hashed instead: the same value as before, so a snapshot of an earlier build keeps its configuration hash (review #63)
+	h.addI32(m_config.cellInfoPoolSize);
 	return h.value();
 }
 
 void Pathfinder::xfer(Xfer &x)
 {
-	XferVersion v{ 1, 1 };
+	XferVersion v{ 1, 2 }; // 2: the Uber profile's limits, the request rings' lengths and the burst latch (lane PATHPERF-4)
 	x.xferVersion(v);
+	const int version = v.current;
 	const bool loading = x.isLoading();
 	if (!loading && (!m_open.empty() || m_closedList))
 	{
@@ -250,7 +253,7 @@ void Pathfinder::xfer(Xfer &x)
 		infoCount += c.hasInfo() ? 1u : 0u;
 	}
 	x.xferCount(&infoCount, 10, sizeof(LoadedInfo)); // index, obstacle, flags, kinds
-	if (loading && infoCount > (std::uint32_t)m_pool.capacity())
+	if (loading && infoCount > (std::uint32_t)std::max(m_pool.capacity(), m_pool.growthLimit())) // lane PATHPERF-4: the pool grows up to its limit
 	{
 		throw XferException("pathfinder: the snapshot holds " + std::to_string(infoCount) + " cell infos, more than the pool of " + std::to_string(m_pool.capacity()));
 	}
@@ -311,6 +314,23 @@ void Pathfinder::xfer(Xfer &x)
 	}
 	PathfindZoneManager zoneManager;
 	PathfindRequestRing queue1, queue2;
+	// version 2 (lane PATHPERF-4): the rings' lengths, retail's PATHFIND_QUEUE_LEN or the Uber profile's kUberQueueLength, so a game that switched its
+	// profile loads into a fresh game of either one (review #64); a version 1 snapshot's rings are retail's
+	std::int32_t len1 = loading ? (std::int32_t)PATHFIND_QUEUE_LEN : (std::int32_t)m_queue1.length();
+	std::int32_t len2 = loading ? (std::int32_t)PATHFIND_QUEUE_LEN : (std::int32_t)m_queue2.length();
+	bool uberLimits = m_uberLimits; // a version 1 snapshot keeps the loading game's
+	if (version >= 2)
+	{
+		x.xferBool(&uberLimits); // the Uber profile's limits on (Pathfinder::setUberLimits; the state hash folds the burst latch only then)
+		x.xferInt(&len1);
+		x.xferInt(&len2);
+		if ((len1 != PATHFIND_QUEUE_LEN && len1 != kUberQueueLength) || (len2 != PATHFIND_QUEUE_LEN && len2 != kUberQueueLength))
+		{
+			throw XferException("pathfinder: request ring lengths len1 " + std::to_string(len1) + ", len2 " + std::to_string(len2));
+		}
+	}
+	queue1.setLength(len1);
+	queue2.setLength(len2);
 	PathfindZoneManager &zm = loading ? zoneManager : m_zoneManager;
 	PathfindRequestRing &q1 = loading ? queue1 : m_queue1, &q2 = loading ? queue2 : m_queue2;
 	zm.xfer(x);
@@ -366,6 +386,12 @@ void Pathfinder::xfer(Xfer &x)
 	}
 	std::vector<std::string> stops = m_stops;
 	AIXfer::reportStrings(x, stops);
+	// version 2 (lane PATHPERF-4): the request queue's burst latch (AIPathfindUnits.cpp; hashed in an Uber game, always false in a Faithful one)
+	bool uberBurst = loading ? false : m_uberBurst;
+	if (version >= 2)
+	{
+		x.xferBool(&uberBurst);
+	}
 	if (!loading)
 	{
 		return;
@@ -508,6 +534,8 @@ void Pathfinder::xfer(Xfer &x)
 	}
 	m_hierLast = -1; // the last search's corridor is that search's scratch (rebuilt by findClosestHierarchicalPath before it is read)
 	m_stops = std::move(stops);
+	m_uberBurst = uberBurst;
+	m_uberLimits = uberLimits;
 }
 
 void Path::xfer(Xfer &x)

@@ -241,16 +241,24 @@ public:
 	void allocate(int count);
 	PathfindCellInfo *get(PathfindCell *cell, const ICoord2D &pos);
 	void release(PathfindCellInfo *info);
-	int capacity() const { return (int)m_infos.size(); }
+	int capacity() const { return m_capacity; }
 	int freeCount() const;
 	bool exhaustedOnce() const { return m_exhausted; }
+	// lane PATHPERF-4: above allocate's count the pool grows in blocks up to `maxRecords` (0: fixed, the default); allocate keeps the limit
+	void setGrowthLimit(int maxRecords) { m_growthLimit = maxRecords; }
+	int growthLimit() const { return m_growthLimit; } // lane PATHPERF-4 (the snapshot load: the most records it may hold)
+	int growths() const { return m_growths; }
 	PathfindOccupant *newOccupant();
 	void setExhausted(bool on) { m_exhausted = on; } ///< lane SAVE-4c: a loaded game keeps the flag of the saved one
 	void freeOccupant(PathfindOccupant *o);
 	size_t occupantsInUse() const { return m_occupantsInUse; }
 
 private:
-	std::vector<PathfindCellInfo> m_infos;
+	void addBlock(int count);
+	std::vector<std::unique_ptr<PathfindCellInfo[]>> m_blocks; // lane PATHPERF-4: blocks never move, cells keep pointers into them
+	int m_capacity = 0;
+	int m_growthLimit = 0;
+	int m_growths = 0;
 	PathfindCellInfo *m_firstFree = nullptr;
 	bool m_exhausted = false;
 	std::vector<std::unique_ptr<PathfindOccupant[]>> m_occChunks;
@@ -484,13 +492,18 @@ class PathfindOpenHeap
 public:
 	bool empty() const { return m_v.empty(); }
 	size_t size() const { return m_v.size(); }
-	void clear() { m_v.clear(); }
+	void clear()
+	{
+		m_v.clear();
+		m_k.clear();
+	}
 	void push(PathfindCell *c);
 	PathfindCell *pop();
 	const std::vector<PathfindCell *> &items() const { return m_v; }
 
 private:
 	std::vector<PathfindCell *> m_v;
+	std::vector<std::uint16_t> m_k; // lane PATHPERF-2: m_v[i]'s total cost (see push)
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -524,24 +537,47 @@ class PathfindRequestRing
 public:
 	void reset()
 	{
-		m_slots.assign(PATHFIND_QUEUE_LEN, PATHFIND_INVALID_ID);
+		m_slots.assign((size_t)m_len, PATHFIND_INVALID_ID);
 		m_head = m_tail = 0;
 	}
+	// lane PATHPERF-4: the ring's length (PATHFIND_QUEUE_LEN, retail's, unless the Uber profile's limits are on: Pathfinder::setUberLimits); the queued ids
+	// keep their order
+	void setLength(int len)
+	{
+		if (len == m_len || (int)size() >= len - 1)
+		{
+			return; // a ring never drops what it holds
+		}
+		std::vector<PathfindObjectID> ids;
+		for (size_t i = 0; i < size(); ++i)
+		{
+			ids.push_back(at(i));
+		}
+		m_len = len;
+		reset();
+		for (PathfindObjectID id : ids)
+		{
+			m_slots[(size_t)m_tail] = id;
+			m_tail = (m_tail + 1) % m_len;
+		}
+	}
+	int length() const { return m_len; }
+	int head() const { return m_head; } ///< the next slot pop reads (lane PATHPERF-4: an Uber ring's goes past retail's 512)
 	bool empty() const { return m_head == m_tail; }
-	size_t size() const { return (size_t)((m_tail - m_head + PATHFIND_QUEUE_LEN) % PATHFIND_QUEUE_LEN); }
+	size_t size() const { return (size_t)((m_tail - m_head + m_len) % m_len); }
 	// the i-th queued id from the head (state hash, MOVE-1)
-	PathfindObjectID at(size_t i) const { return m_slots[(size_t)((m_head + (int)i) % PATHFIND_QUEUE_LEN)]; }
+	PathfindObjectID at(size_t i) const { return m_slots[(size_t)((m_head + (int)i) % m_len)]; }
 	// RW 0x6EC096 (linear duplicate scan) then 0x6EC069: true when queued or already queued, false when the ring is full
 	bool push(PathfindObjectID id)
 	{
-		for (int s = m_head; s != m_tail; s = (s + 1) % PATHFIND_QUEUE_LEN)
+		for (int s = m_head; s != m_tail; s = (s + 1) % m_len)
 		{
 			if (m_slots[(size_t)s] == id)
 			{
 				return true;
 			}
 		}
-		const int next = (m_tail + 1) % PATHFIND_QUEUE_LEN;
+		const int next = (m_tail + 1) % m_len;
 		if (next == m_head)
 		{
 			return false;
@@ -554,7 +590,7 @@ public:
 	PathfindObjectID pop()
 	{
 		const PathfindObjectID id = m_slots[(size_t)m_head];
-		m_head = (m_head + 1) % PATHFIND_QUEUE_LEN;
+		m_head = (m_head + 1) % m_len;
 		return id;
 	}
 	// lane SAVE-4c: the head, the tail and the queued ids (the free slots hold no state)
@@ -563,6 +599,7 @@ public:
 private:
 	std::vector<PathfindObjectID> m_slots;
 	int m_head = 0, m_tail = 0;
+	int m_len = PATHFIND_QUEUE_LEN;
 };
 
 // RW checkForMovement info (the ZH TCheckMovementInfo). Mode flags (RW info+0x14): 0x02 allies block, 0x04 count terrain
@@ -802,6 +839,19 @@ public:
 
 	// ---- queue ----
 	bool queueForPath(PathfindObjectID id);
+	// lane PATHPERF-4 (Uber profile only, docs/UBER.md): retail's request rings hold 511 units (a refused unit waits for a path that never comes, until its
+	// next order) and the queue serves MaxPathfindCellsPerFrame cells a call. With the Uber limits the rings hold kUberQueueLength and, while at least
+	// kUberBurstQueue requests wait (a mass order), the budget is kUberBudgetScale times retail's, so the burst is served in a few frames. A sustained
+	// battle's repaths keep 60-90 waiting (10,000 troops): they get retail's budget, which a larger one would only spend on the same steady trickle
+	// (+34 ms a frame at 4x). A Faithful game never turns the limits on
+	enum { kUberQueueLength = 16384, kUberBudgetScale = 4, kUberBurstQueue = 120, kUberBurstEnd = 40 };
+	void setUberLimits(bool on);
+	bool uberLimits() const { return m_uberLimits; }
+	bool uberBurst() const { return m_uberBurst; } // lane PATHPERF-4: the request queue is draining a burst (the snapshot keeps it)
+	const PathfindRequestRing &requestRing() const { return m_queue1; } // lane PATHPERF-4: the path request ring (its length and head)
+	// lane PATHPERF-4: the cell-info pool grows past PathfindConfig::cellInfoPoolSize up to this many records (about 100 MB), as retail's grows; the
+	// pathfinder's searches and reservations then no longer fail on a full pool in a big battle
+	enum { kCellInfoPoolMax = 1000000 };
 	// RW processPathfindQueue 0x6F2364: the counter of allocated cells is reset once; the blocked repaths run while it is below half the
 	// budget, then the path requests while it is below the budget (one counter for both); what is not reached stays queued
 	void processPathfindQueue(PathfindRequestHandler &handler);
@@ -821,8 +871,10 @@ public:
 	// configuration must be the saved ones)
 	void xfer(class Xfer &x);
 
-private:
+public:
 	std::uint32_t configHash() const; ///< the configuration and extent part of crc (a snapshot of another map or AIData is refused)
+
+private:
 	struct Slot
 	{
 		bool occupied = false;
@@ -845,6 +897,22 @@ public:
 	// lane PATHPERF-1 (tests): false switches the search memo (occupantFacts) and the unit index (findUnit) off, every answer then asked afresh / looked up in
 	// the map; test_pathperf1_hier.cpp compares the searches both ways. Not part of the state (it changes no result)
 	void setSearchShortcuts(bool on) { m_searchShortcuts = on; }
+	// lane PATHPERF-2: while a scope lives (Path::optimize), isLinePassable remembers each line cell's verdict: whether the cell, entered from a given
+	// neighbour (or as the line's first cell), blocks the line. Optimize's greedy scan walks the lines from one anchor to ever farther nodes, which cross
+	// mostly the same cells in the same direction, and nothing the verdict reads changes inside it. Only isLinePassable calls with the scope's first
+	// (object, surfaces, blocked, allowPinched, layer) use it; with the shortcuts off it is not used
+	class LineMemoScope
+	{
+	public:
+		explicit LineMemoScope(Pathfinder &pf);
+		~LineMemoScope();
+		LineMemoScope(const LineMemoScope &) = delete;
+		LineMemoScope &operator=(const LineMemoScope &) = delete;
+
+	private:
+		Pathfinder &m_pf;
+		bool m_outer;
+	};
 private:
 	enum { kUnitIndexMax = 1 << 20 };
 	void releaseSlot(PathfindObjectID id, Slot &slot);
@@ -878,9 +946,17 @@ private:
 	// lane PATHPERF-1: what checkForMovement and occupantCost ask of an occupant `id` and of the searching unit `obj` (only side-effect-free getters, all
 	// asked at once). While internalFindPath runs for `obj` nothing they read can change, so the answers are kept per search (generation counted) and an
 	// occupant met in many cells is resolved once; elsewhere they are asked afresh. Null when the occupant's object is gone
+	// lane PATHPERF-2: a unit's secondsToReach inputs (PathfindObject::reachInputs), asked once per search: state 0 not asked yet, 1 asked, 2 not provided
+	struct ReachMemo
+	{
+		std::uint8_t state = 0;
+		float x = 0.0f, y = 0.0f, speed = 0.0f;
+	};
+	float reachSeconds(const PathfindObject &o, ReachMemo &memo, float x, float y) const;
 	struct OccupantFacts
 	{
 		unsigned gen = 0;
+		mutable ReachMemo reach; // lane PATHPERF-2
 		const PathfindObject *o = nullptr;
 		PathfindRelationship rel = PATHFIND_ENEMIES; // obj's relationship to o
 		bool parked = false, hasAI = false, hasLocomotor = false, infantry = false, largeRect = false, throughEachOther = false;
@@ -940,9 +1016,29 @@ private:
 	std::vector<OccupantFacts> m_memo;
 	OccupantFacts m_memoScratch;
 	SearcherFacts m_memoSelf;
+	ReachMemo m_memoSelfReach; // lane PATHPERF-2: m_memoObj's secondsToReach inputs
 	const PathfindObject *m_memoObj = nullptr;
 	unsigned m_memoGen = 0;
 	bool m_memoActive = false;
 	bool m_searchShortcuts = true;
+	bool m_uberLimits = false; // lane PATHPERF-4
+	bool m_uberBurst = false;  // lane PATHPERF-4: the queue is draining a burst (hashed in an Uber game)
+	// lane PATHPERF-2: the line memo (LineMemoScope): an open-addressed table of (cell index * 10 + entry code + 1) -> blocked, entries valid in generation
+	// m_lineMemoGen; the parameters are bound by the scope's first isLinePassable call
+	struct LineMemoEntry
+	{
+		std::uint32_t key = 0, gen = 0;
+		bool blocked = false;
+	};
+	bool lineMemoFind(std::uint32_t key, bool &blocked) const;
+	void lineMemoStore(std::uint32_t key, bool blocked);
+	std::vector<LineMemoEntry> m_lineMemo;
+	size_t m_lineMemoCount = 0;
+	std::uint32_t m_lineMemoGen = 0;
+	bool m_lineMemoActive = false, m_lineMemoBound = false;
+	const PathfindObject *m_lineMemoObj = nullptr;
+	unsigned m_lineMemoSurfaces = 0;
+	bool m_lineMemoBlockedArg = false, m_lineMemoPinchedArg = false;
+	PathfindLayerEnum m_lineMemoLayer = LAYER_GROUND;
 	std::vector<std::string> m_stops;
 };

@@ -217,6 +217,7 @@ void Path::optimize(Pathfinder &pathfinder, const PathfindObject *obj, unsigned 
 		m_isOptimized = true;
 		return;
 	}
+	Pathfinder::LineMemoScope lineMemo(pathfinder); // lane PATHPERF-2: the line cells' verdicts are asked once per optimize
 	if (dir == nullptr)
 	{
 		const bool tflag = obj && obj->isKindOf(PK_MACHINE); // template KindOf bit 11 (MACHINE): RW tmpl+0x108 >> 11 & 1

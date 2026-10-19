@@ -71,9 +71,36 @@ struct PathfindGeometry
 	PathfindShape shape(size_t i) const;
 	// RW GeometryInfo +0x10 (computed by RW 0xAD2860): the largest bounding circle (RW 0xAD2700) of the ACTIVE shapes, at least 0.01. A shape's circle is
 	// sqrt(offX^2 + offY^2) + major for a SPHERE / CYLINDER and sqrt((|offX| + major)^2 + (|offY| + minor)^2) for a BOX.
-	float boundingCircleRadius() const;
+	float boundingCircleRadius() const { return m_radii.valid ? m_radii.circle : computeBoundingCircleRadius(); }
 	// RW GeometryInfo +0x14 (RW 0xAD2860): the largest bounding sphere (RW 0xAD2770) of the ACTIVE shapes, at least 0.
-	float boundingSphereRadius() const;
+	float boundingSphereRadius() const { return m_radii.valid ? m_radii.sphere : computeBoundingSphereRadius(); }
+	float computeBoundingCircleRadius() const;
+	float computeBoundingSphereRadius() const;
+	// lane UBER-2B (performance, both profiles: the same values): RW keeps the two radii in the GeometryInfo (+0x10 / +0x14, computed once by RW 0xAD2860); the
+	// port recomputed them (seven emulated x87 operations and a root per shape) on every call, about 10% of a 10k battle's logic frame (the melee reach scans,
+	// subjectOf, footprintSize). The OWNER of a geometry that no longer changes stores them: AIWorld::movementInfo (a template's geometry, after buildInfo) and
+	// ObjectPathfindAdapter::getGeometry (an object's own shape flags, after each rebuild). The cache is not copied: a copy (which its holder may change) starts
+	// uncached and computes, so no edited copy can answer a stale radius. Whoever changes an owner's fields after cacheRadii must call cacheRadii again.
+	void cacheRadii()
+	{
+		m_radii.valid = false;
+		m_radii.circle = computeBoundingCircleRadius();
+		m_radii.sphere = computeBoundingSphereRadius();
+		m_radii.valid = true;
+	}
+	struct RadiiCache
+	{
+		bool valid = false;
+		float circle = 0.0f, sphere = 0.0f;
+		RadiiCache() = default;
+		RadiiCache(const RadiiCache &) {}
+		RadiiCache &operator=(const RadiiCache &)
+		{
+			valid = false;
+			return *this;
+		}
+	};
+	RadiiCache m_radii;
 	// RW 0xAD14F0: `pos` moved by the shape's offset turned by `angle` (x += cos * offX - sin * offY, y += sin * offX + cos * offY, z += offZ)
 	static void applyShapeOffset(const PathfindShape &s, float angle, Coord3D &pos);
 	// RW 0xAD1D60: the 2D box (lo.x, lo.y, hi.x, hi.y) around `pos` and every ACTIVE shape of the object at `pos` turned by `angle`
@@ -172,6 +199,10 @@ public:
 	// RW 0x6ED21E: the unit has a locomotor and the time (seconds) it needs to get to (x, y): hypot / speed
 	virtual bool hasLocomotor() const { return false; }
 	virtual float secondsToReach(float x, float y) const { (void)x; (void)y; return 0.0f; }
+	// lane PATHPERF-2: the two inputs of secondsToReach, so the search can ask them once per unit: `x`, `y` the position, `speed` the speed (0: secondsToReach
+	// answers 0). secondsToReach(qx, qy) must equal speed > 0 ? divf32(length2d(subf32(qx, x), subf32(qy, y)), speed) : 0 for every point. false: not
+	// provided, the search asks secondsToReach itself
+	virtual bool reachInputs(float &x, float &y, float &speed) const { (void)x; (void)y; (void)speed; return false; }
 	// the object stands still (AI vtable +0x228 false): only such units hold a position slot
 	virtual bool isStationary() const { return true; }
 	// object status bits the footprint code reads (RW status index 0x58 and 0x4D; names INFERRED: S-164)
