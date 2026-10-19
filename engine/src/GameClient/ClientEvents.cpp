@@ -44,6 +44,7 @@ ClientEvent &ClientEventRecorder::push(ClientEvent::Kind kind, const Object &obj
 
 void ClientEventRecorder::objectCreated(Object &obj)
 {
+	if (obj.isKindOfName("CAPTUREFLAG")) m_animationConditions[obj.getID()] = obj.getModelConditionBits();
 	ClientEvent &e = push(ClientEvent::CREATED, obj);
 	e.tmpl = obj.getTemplate();
 	// ZH Object::friend_bindToDrawable: new drawables follow the map's time of day and weather (was DrawableManager::objectCreated)
@@ -87,6 +88,7 @@ void ClientEventRecorder::objectCreated(Object &obj)
 
 void ClientEventRecorder::objectDestroyed(Object &obj)
 {
+	m_animationConditions.erase(obj.getID());
 	if (obj.clientHooks() != this)
 	{
 		return; // never bound (the object died before it was announced)
@@ -210,9 +212,25 @@ void ClientEventRecorder::loadedObject(Object &obj)
 	pushFlush(obj);
 }
 
-void ClientEventRecorder::pushFlush(const Object &obj)
+void ClientEventRecorder::pushFlush(Object &obj)
 {
+	if (obj.isKindOfName("CAPTUREFLAG"))
+	{
+		auto &before = m_animationConditions[obj.getID()];
+		// Dispatch before pushing the flush: Lua can append subobject events.
+		if (before != obj.getModelConditionBits()) m_logic.animationConditionEvents(obj, before);
+		before = obj.getModelConditionBits();
+	}
 	ClientEvent &e = push(ClientEvent::MODEL_FLUSH, obj);
+	if (obj.isKindOfName("CAPTUREFLAG"))
+	{
+		// RW 0x853D31's capture colour: the raising flag belongs visually to the
+		// capturer before ownership transfers. Cancel returns to the current owner.
+		const Object *capturer = m_logic.findObjectByID(obj.getCapturerID());
+		const Player *player = capturer ? capturer->getControllingPlayer() : obj.getControllingPlayer();
+		e.hasHouseColor = true;
+		e.houseColor = player ? player->getPlayerColor() : 0;
+	}
 	e.scriptTarget = DrawableScriptTarget::capture(m_logic, obj); // lane FX-3: what the state scripts this flush starts ask about (RW 0x73667D / 0x734A75)
 	if (const ObjectWeapons *w = obj.getWeapons())
 	{
@@ -281,7 +299,7 @@ std::vector<ClientEvent> ClientEventRecorder::take(bool endOfFrame)
 			{
 				continue; // flushed or destroyed since (a later entry, if any, is its live one)
 			}
-			if (const Object *o = m_logic.findObjectByID(d.id))
+			if (Object *o = m_logic.findObjectByID(d.id))
 			{
 				pushFlush(*o);
 			}

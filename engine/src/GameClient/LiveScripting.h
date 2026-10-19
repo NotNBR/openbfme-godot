@@ -60,6 +60,8 @@ public:
 	// LuaGameHost
 	bool findObject(int id, LuaObjectInfo *out) override;
 	std::uint32_t logicFrame() override;
+	std::string objectPlayerSide(int id) override;
+	bool objectCapturingPlayerSide(int id, std::string *out) override;
 	bool drawableShowModule(int id, const std::string &name, bool visible, bool permanent) override;
 	void drawableShowSubObject(int id, const std::string &name, bool visible, bool permanent) override;
 	// lane UPGRADE-1: the upgrade callees of RW 0x736DF5 / the has-upgrade binding, on TheUpgradeCenter and the live objects

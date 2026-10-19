@@ -240,6 +240,7 @@ void DrawableManager::applyEvents(const std::vector<ClientEvent> &events)
 		case ClientEvent::MODEL_FLUSH:
 			if (Drawable *d = findByObject(ev.object))
 			{
+				if (ev.hasHouseColor) d->setHouseColor(ev.houseColor);
 				d->setScriptTarget(ev.scriptTarget); // lane FX-3: before the flush runs the state scripts
 				d->flushModelConditions(ev.hasWeaponTiming, ev.weaponTimingFrames);
 			}
