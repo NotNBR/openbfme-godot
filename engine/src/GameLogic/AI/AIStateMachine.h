@@ -90,6 +90,9 @@ public:
 	// one). Pure: every state class says what it keeps, a state without fields writes its version only (xferNoFields)
 	virtual void xfer(class Xfer &x) = 0;
 	static void xferNoFields(class Xfer &x);
+	// lane UBER-2C: true for a state whose crcPersistent writes anything (every override of crcPersistent answers true). The machine's hash walks only
+	// those states: walking every state of every unit's machine for the empty default was most of the Faithful state hash's own time
+	virtual bool hasPersistentCrc() const { return false; }
 	// lane MODULES-3 r2: RW State slot 0x1C, called on the current state when a temporary state ends by itself (RW 0x751D9A); nothing for most states, the move
 	// states clear their internal move's "waiting for a path" (RW 0x740C97)
 	virtual void onTemporaryStateEnded() {}
@@ -210,6 +213,7 @@ private:
 	AIUpdateInterface *m_owner;
 	std::string m_name;
 	std::map<unsigned, std::unique_ptr<AIState>> m_states;
+	std::vector<const AIState *> m_persistentStates; // lane UBER-2C: the states with hasPersistentCrc, in m_states' (id) order
 	AIState *m_currentState = nullptr;
 	AIState *m_temporaryState = nullptr;
 	unsigned m_temporaryStateFrameEnd = 0;

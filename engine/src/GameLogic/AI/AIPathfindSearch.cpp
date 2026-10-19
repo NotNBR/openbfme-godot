@@ -33,6 +33,12 @@
 
 namespace
 {
+// lane UBER-3P (Uber profile only): a cell search that cannot reach its goal ends once its answer held for this many cells (internalFindPath)
+constexpr int kUberStallCells = 256;
+} // namespace
+
+namespace
+{
 inline int realToIntFloor(float f)
 {
 	return SimMath::floorToInt(f);
@@ -357,9 +363,24 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
 		worldToCell(&s, &start);
 		worldToCell(&e, &end);
 	}
+	// lane PATHPERF-2: the line memo (LineMemoScope) binds to the scope's first parameters; a call with others walks without it
+	bool memo = false;
+	if (m_lineMemoActive && m_searchShortcuts)
+	{
+		if (!m_lineMemoBound)
+		{
+			m_lineMemoBound = true;
+			m_lineMemoObj = obj;
+			m_lineMemoSurfaces = acceptableSurfaces;
+			m_lineMemoBlockedArg = blocked;
+			m_lineMemoPinchedArg = allowPinched;
+			m_lineMemoLayer = layer;
+		}
+		memo = m_lineMemoObj == obj && m_lineMemoSurfaces == acceptableSurfaces && m_lineMemoBlockedArg == blocked && m_lineMemoPinchedArg == allowPinched &&
+			m_lineMemoLayer == layer;
+	}
 	const bool blockedLine = walkLine(*this, layer, start, end, [&](PathfindCell *from, PathfindCell *to, int x, int y) -> bool {
 		// RW 0x6EE234, with info+0x5C = 1: goal reservations of other units block the line
-		const PathfindOccupant *list = to->occupants(OCC_GROUND_GOAL);
 		if (to->getExtraPass())
 		{
 			li.latch5D = true;
@@ -368,47 +389,176 @@ bool Pathfinder::isLinePassable(const PathfindObject *obj, unsigned acceptableSu
 		{
 			return true;
 		}
-		for (const PathfindOccupant *n = list; n; n = n->next)
+		// the rest depends only on the cell and the neighbour it is entered from (checkForMovement's footprint overlap): walkLine steps to a neighbour, and
+		// li.prev is `from`'s cell whenever `from` is set
+		// the cell by its coordinates and layer, not by its address (review #64: a raised walkway's cells are another array, and a difference of pointers
+		// into different arrays is undefined)
+		const std::uint64_t cellKey = x >= 0 && y >= 0
+			? ((std::uint64_t)x * (std::uint64_t)m_stride + (std::uint64_t)y) * 0x41u + (std::uint64_t)to->getLayer()
+			: 0xFFFFFFFFu;
+		std::uint32_t key = 0;
+		if (memo && cellKey < 400000000u)
 		{
-			const PathfindObject *o = m_world ? m_world->findObjectByID(n->owner) : nullptr;
-			if (!o)
+			const unsigned code = from ? (unsigned)((x - li.prev.x + 1) * 3 + (y - li.prev.y + 1)) : 9u;
+			key = (std::uint32_t)(cellKey * 10u + code + 1u);
+			bool known = false;
+			if (lineMemoFind(key, known))
 			{
-				// an occupant the world no longer knows blocks like an unknown object (retail dereferences it)
-				return true;
-			}
-			if (o != obj && o->getContainer() != obj)
-			{
-				return true;
-			}
-		}
-		li.move.cell.x = x;
-		li.move.cell.y = y;
-		li.move.layer = to->getLayer();
-		const bool ok = checkForMovement(obj, li.move, from ? &li.prev : nullptr);
-		if (!ok)
-		{
-			return true;
-		}
-		if (li.move.terrainPenalty != 0)
-		{
-			return true;
-		}
-		li.prev.x = x;
-		li.prev.y = y;
-		if (!li.allowPinched)
-		{
-			if (to->getPinched())
-			{
-				return true;
-			}
-			if (to->getBit23())
-			{
-				return true;
+				if (!known)
+				{
+					li.prev.x = x;
+					li.prev.y = y;
+				}
+				return known;
 			}
 		}
-		return !validMovementPosition(li.move.mv, to);
+		const bool cellBlocks = [&]() -> bool {
+			for (const PathfindOccupant *n = to->occupants(OCC_GROUND_GOAL); n; n = n->next)
+			{
+				const PathfindObject *o = m_world ? m_world->findObjectByID(n->owner) : nullptr;
+				if (!o)
+				{
+					// an occupant the world no longer knows blocks like an unknown object (retail dereferences it)
+					return true;
+				}
+				if (o != obj && o->getContainer() != obj)
+				{
+					return true;
+				}
+			}
+			li.move.cell.x = x;
+			li.move.cell.y = y;
+			li.move.layer = to->getLayer();
+			const bool ok = checkForMovement(obj, li.move, from ? &li.prev : nullptr);
+			if (!ok)
+			{
+				return true;
+			}
+			if (li.move.terrainPenalty != 0)
+			{
+				return true;
+			}
+			if (!li.allowPinched)
+			{
+				if (to->getPinched())
+				{
+					return true;
+				}
+				if (to->getBit23())
+				{
+					return true;
+				}
+			}
+			return !validMovementPosition(li.move.mv, to);
+		}();
+		if (key != 0)
+		{
+			lineMemoStore(key, cellBlocks);
+		}
+		if (!cellBlocks)
+		{
+			li.prev.x = x;
+			li.prev.y = y;
+		}
+		return cellBlocks;
 	});
 	return !blockedLine;
+}
+
+// lane PATHPERF-2: the line memo
+Pathfinder::LineMemoScope::LineMemoScope(Pathfinder &pf) : m_pf(pf), m_outer(!pf.m_lineMemoActive)
+{
+	if (m_outer)
+	{
+		pf.m_lineMemoActive = true;
+		pf.m_lineMemoBound = false;
+		pf.m_lineMemoCount = 0;
+		if (++pf.m_lineMemoGen == 0)
+		{
+			for (LineMemoEntry &e : pf.m_lineMemo)
+			{
+				e.gen = 0;
+			}
+			pf.m_lineMemoGen = 1;
+		}
+	}
+}
+
+Pathfinder::LineMemoScope::~LineMemoScope()
+{
+	if (m_outer)
+	{
+		m_pf.m_lineMemoActive = false;
+		m_pf.m_lineMemoBound = false;
+	}
+}
+
+namespace
+{
+inline size_t lineMemoSlot(std::uint32_t key, size_t mask)
+{
+	return (size_t)((key * 2654435761u) >> 7) & mask;
+}
+} // namespace
+
+bool Pathfinder::lineMemoFind(std::uint32_t key, bool &blocked) const
+{
+	if (m_lineMemo.empty())
+	{
+		return false;
+	}
+	const size_t mask = m_lineMemo.size() - 1;
+	for (size_t i = lineMemoSlot(key, mask);; i = (i + 1) & mask)
+	{
+		const LineMemoEntry &e = m_lineMemo[i];
+		if (e.gen != m_lineMemoGen)
+		{
+			return false;
+		}
+		if (e.key == key)
+		{
+			blocked = e.blocked;
+			return true;
+		}
+	}
+}
+
+void Pathfinder::lineMemoStore(std::uint32_t key, bool blocked)
+{
+	if ((m_lineMemoCount + 1) * 2 > m_lineMemo.size())
+	{
+		// grow (power of two, at most half full); the current generation's entries move over
+		std::vector<LineMemoEntry> old;
+		old.swap(m_lineMemo);
+		m_lineMemo.assign(old.empty() ? 4096 : old.size() * 2, LineMemoEntry());
+		const std::uint32_t gen = m_lineMemoGen;
+		m_lineMemoCount = 0;
+		for (const LineMemoEntry &e : old)
+		{
+			if (e.gen == gen)
+			{
+				lineMemoStore(e.key, e.blocked);
+			}
+		}
+	}
+	const size_t mask = m_lineMemo.size() - 1;
+	for (size_t i = lineMemoSlot(key, mask);; i = (i + 1) & mask)
+	{
+		LineMemoEntry &e = m_lineMemo[i];
+		if (e.gen != m_lineMemoGen)
+		{
+			e.key = key;
+			e.gen = m_lineMemoGen;
+			e.blocked = blocked;
+			++m_lineMemoCount;
+			return;
+		}
+		if (e.key == key)
+		{
+			e.blocked = blocked;
+			return;
+		}
+	}
 }
 
 bool Pathfinder::isGroundLineClear(const Coord3D &a, const Coord3D &b)
@@ -582,9 +732,9 @@ int Pathfinder::occupantCost(const PathfindObject *obj, const PathfindCell *pare
 					const float qx = SimMath::mulf32((SimMath::addf32((float)i, 0.5f)), 10.0f), qy = SimMath::mulf32((SimMath::addf32((float)j, 0.5f)), 10.0f);
 					if (selfT < 0.0f)
 					{
-						selfT = obj->secondsToReach(qx, qy);
+						selfT = (m_memoActive && obj == m_memoObj) ? reachSeconds(*obj, m_memoSelfReach, qx, qy) : obj->secondsToReach(qx, qy);
 					}
-					const float oT = o->secondsToReach(qx, qy);
+					const float oT = reachSeconds(*o, f->reach, qx, qy);
 					if (selfT > oT)
 					{
 						add = 4;
@@ -888,6 +1038,7 @@ struct Pathfinder::SearchMemoScope
 		{
 			pf.m_memoSelf = pf.searcherFacts(obj);
 		}
+		pf.m_memoSelfReach = ReachMemo();
 	}
 	~SearchMemoScope()
 	{
@@ -1050,6 +1201,7 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
 	int bestPosition = 0; // RW [ebp + 0x24]: the best corridor position so far (0 to start with: a cell off the corridor, -1, never qualifies)
 	int bestD2 = std::numeric_limits<int>::max();
 	int slack = std::numeric_limits<int>::max();
+	int closestAt = 0, candidateAt = 0; // lane UBER-3P: the cell counts when `closest`, and the candidate key, last changed
 	while (!m_open.empty())
 	{
 		PathfindCell *c = m_open.pop();
@@ -1107,13 +1259,33 @@ Path *Pathfinder::internalFindPath(PathfindObject *obj, const PathfindLocomotorI
 			}
 			if (candidate)
 			{
+				candidateAt = cellCount;
 				bestClose = key;
 				int out = 0;
 				if (checkDestination(obj, c->getXIndex(), c->getYIndex(), destinationLayer, radius, centerInCell, &out, false) && out == 0 &&
 					validMovementPosition(mv, c))
 				{
 					closest = c;
+					closestAt = cellCount;
 				}
+			}
+		}
+		// lane UBER-3P (Uber profile only, docs/UBER.md): a search that cannot reach its goal (an approximate search: the goal is in another zone or
+		// not a valid movement position; or the goal cell was closed, its footprint rejected) ends here once its answer has held for kUberStallCells
+		// cells: the closest cell (or, with none yet, the candidate key that would test a new one) did not change, and the exhausted search's answer
+		// (the path to that closest cell, or none) is given. In a battle the repaths toward a contact point in the press fail this way and kept
+		// expanding up to the slack or MaxCellsFindPathLimit. Measured on the 30,000-troop clash (2,094 searches): a failed search's closest cell was
+		// final after ~10 cells and never replaced 250 cells on; 1,182 of the 1,644 unreachable searches found no closest cell at all (72% of their
+		// cells), 45 of them tested a candidate after such a pause. A tunnelling search tests no candidates: its pause starts when it leaves the obstacle
+		if (m_uberLimits && (approx || goalCell->getClosed()))
+		{
+			if (m_isTunneling)
+			{
+				candidateAt = cellCount;
+			}
+			else if (cellCount - (closest != nullptr ? closestAt : candidateAt) >= kUberStallCells)
+			{
+				break;
 			}
 		}
 		// TARGET RW 0x6FDB7F .. 0x6FDBD9: an approximate search skips a cell beyond the slack unless it is within 10 cells; with a corridor only after 2000 cells

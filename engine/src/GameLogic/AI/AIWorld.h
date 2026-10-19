@@ -31,12 +31,15 @@
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIPathfindHost.h"
 #include "GameLogic/Locomotor.h"
+#include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/ObjectTypes.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class ArchiveFileSystem;
@@ -104,6 +107,7 @@ public:
 	int aiPriority() const override;
 	bool hasLocomotor() const override;
 	float secondsToReach(float x, float y) const override;
+	bool reachInputs(float &x, float &y, float &speed) const override;
 	bool isStationary() const override;
 	bool footprintSkippedByStatus() const override;
 	bool ignoresAsTarget(const PathfindObject &other) const override;
@@ -204,6 +208,7 @@ public:
 	int peakTickCells() const { return m_peakTickCells; }
 	size_t peakQueued() const { return m_peakQueued; }
 	unsigned long long collisionPairsLastFrame() const { return m_collisionPairs; }
+	unsigned long long collisionPairsSkippedLastFrame() const { return m_collisionPairsSkipped; } ///< lane UBER-2B: Uber's inert pairs (counted in the above too)
 
 	// ---- PathfindWorld ----
 	PathfindObject *findObjectByID(PathfindObjectID id) const override;
@@ -232,7 +237,7 @@ public:
 	void noteStop(const char *stop);
 	// the AICommandSink handler (production's commands to a produced object's AI)
 	bool executeCommand(Object &obj, const AICommand &command);
-	const std::set<std::string> &noted() const { return m_noted; }
+	const std::set<std::string, std::less<>> &noted() const { return m_noted; }
 
 private:
 	GameLogic &m_logic;
@@ -244,7 +249,7 @@ private:
 	std::map<PathfindObjectID, AIUpdateInterface *> m_ais;
 	std::map<const ThingTemplate *, std::unique_ptr<ObjectMovementInfo>> m_info;
 	std::vector<std::string> m_errors;
-	std::set<std::string> m_noted;
+	std::set<std::string, std::less<>> m_noted; // transparent: noteStop looks a text up without building a std::string (every AI update notes one)
 	std::map<std::string, unsigned> m_failures; // "template: text" -> count
 	bool m_mapReady = false;
 	int m_nextFormationId = 1; ///< AI + 0x20 (hashed once a formation was made)
@@ -269,6 +274,10 @@ private:
 		std::vector<std::pair<int, int>> pairs; ///< (lower unit index, higher unit index), in the order the serial pass met them
 	};
 	std::vector<CollisionChunk> m_collisionChunks;
+	// lane UBER-2B: the Uber pass's per-unit collide facts (ObjectCollide::PairFacts), taken at a unit's first pair
+	std::vector<ObjectCollide::PairFacts> m_collisionFacts;
+	std::vector<std::uint8_t> m_collisionFactState; ///< 0: not taken yet, 1: taken, 2: taken and AIUpdateInterface::isContained
+	unsigned long long m_collisionPairsSkipped = 0;
 	int m_moveAlliesDepth = 0; // lane PHYS-1: RW pathfinder + 0x1C1BC, the recursion guard of moveAllies
 	int m_peakTickCells = 0;
 	size_t m_peakQueued = 0;

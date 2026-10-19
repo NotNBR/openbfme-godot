@@ -293,6 +293,7 @@ const Pathfinder::OccupantFacts *Pathfinder::occupantFacts(const PathfindObject 
 		}
 	}
 	f->gen = m_memoGen;
+	f->reach = ReachMemo();
 	f->o = m_world ? m_world->findObjectByID(id) : nullptr;
 	if (!f->o)
 	{
@@ -309,6 +310,27 @@ const Pathfinder::OccupantFacts *Pathfinder::occupantFacts(const PathfindObject 
 	f->aiPriority = o.aiPriority();
 	f->container = o.getContainer();
 	return f;
+}
+
+// lane PATHPERF-2: secondsToReach from the memo's inputs. The speed is the costly part (Locomotor::getMaxSpeedForCondition reads the damage state, the
+// charge status and the crew), and nothing it reads changes during a search; the arithmetic is secondsToReach's own. With the shortcuts off every
+// answer is asked afresh (test_pathperf1_bench.cpp compares both ways)
+float Pathfinder::reachSeconds(const PathfindObject &o, ReachMemo &memo, float x, float y) const
+{
+	if (!m_searchShortcuts)
+	{
+		return o.secondsToReach(x, y);
+	}
+	if (memo.state == 0)
+	{
+		memo.state = o.reachInputs(memo.x, memo.y, memo.speed) ? 1 : 2;
+	}
+	if (memo.state == 2)
+	{
+		return o.secondsToReach(x, y);
+	}
+	const float dist = SimMath::length2d(SimMath::subf32(x, memo.x), SimMath::subf32(y, memo.y));
+	return memo.speed > 0.0f ? SimMath::divf32(dist, memo.speed) : 0.0f;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1382,6 +1404,14 @@ bool Pathfinder::adjustToPossibleDestination(PathfindObject &obj, const Pathfind
 // ---------------------------------------------------------------------------------------------------------
 // queue
 // ---------------------------------------------------------------------------------------------------------
+void Pathfinder::setUberLimits(bool on)
+{
+	m_uberLimits = on;
+	const int len = on ? (int)kUberQueueLength : (int)PATHFIND_QUEUE_LEN;
+	m_queue1.setLength(len);
+	m_queue2.setLength(len);
+}
+
 bool Pathfinder::queueForPath(PathfindObjectID id)
 {
 	// TARGET RW 0x6ED0FB: a linear duplicate scan (a duplicate returns true), a full ring returns false
@@ -1432,6 +1462,17 @@ void Pathfinder::processPathfindQueue(PathfindRequestHandler &handler)
 	setLogicalExtentFromTerrain();
 	m_cumulativeCellsAllocated = 0;
 	int budget = m_config.cellsPerFrame;
+	if (m_uberLimits)
+	{
+		// lane PATHPERF-4 (Uber only): a burst (a mass order) starts at kUberBurstQueue waiting requests and lasts until the queue is down to
+		// kUberBurstEnd; the steady repaths of a fight never start one
+		const size_t queued = m_queue1.size() + m_queue2.size();
+		m_uberBurst = m_uberBurst ? queued > (size_t)kUberBurstEnd : queued >= (size_t)kUberBurstQueue;
+		if (m_uberBurst)
+		{
+			budget *= kUberBudgetScale;
+		}
+	}
 	if (m_world && m_world->getFrame() < 25u)
 	{
 		budget *= 100;
