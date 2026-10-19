@@ -11,4 +11,5 @@ set(OPENBFME_WALL2_TESTS
     tests/test_wall2_portals.cpp
     tests/test_wall2_modules.cpp
     tests/test_wall2_raised.cpp
+    tests/test_wall2_fortress.cpp
 )
