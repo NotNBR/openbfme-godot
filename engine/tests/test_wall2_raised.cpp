@@ -289,3 +289,129 @@ TEST_CASE("wall2 raised: wall tops and ramps carry bit 17 (RW 0x935051 / 0x93527
 	}
 	delete p;
 }
+
+// lane WALL-2, the melee searches on layers: RW 0x7463E8's mark (RW 0x74661A) on a plateau no ramp reaches, and RW 0x6F37B3's layer and WALL_UPGRADE retry
+// on an isolated walkway (a RaisedWallMesh with no ramps: its zone is its own)
+namespace
+{
+class ReachRange : public PathfindAttackRange
+{
+public:
+	ReachRange(Coord3D centre, float reach) : m_centre(centre), m_reach(reach) {}
+	bool inRangeFrom(const Coord3D &from, float extra) const override { return inRangeFromTo(from, m_centre, extra); }
+	bool inRangeFromTo(const Coord3D &from, const Coord3D &victimPos, float extra) const override
+	{
+		const float dx = from.x - victimPos.x, dy = from.y - victimPos.y;
+		return dx * dx + dy * dy + extra * extra <= m_reach * m_reach;
+	}
+
+private:
+	Coord3D m_centre;
+	float m_reach;
+};
+
+struct IslandWorld
+{
+	SyntheticTerrain terrain{ 60, 100 };
+	TestWorld world;
+	std::unique_ptr<Pathfinder> pf;
+	WallPieceObject *piece = nullptr;
+	// raised: a wide walkway x 200 .. 400, y 40 .. 160 at z 60 (wider than the first search budget reaches from its middle); else the wall top x 100 .. 300, y 50 .. 250 at z 60; neither has a ramp
+	explicit IslandWorld(bool raised)
+	{
+		piece = new WallPieceObject();
+		piece->id = 50;
+		piece->pos = { 550.0f, 950.0f, 0.0f }; // its one-cell footprint in a corner
+		piece->structure = true;
+		piece->kinds.insert(PK_WALK_ON_TOP_OF_WALL);
+		piece->geometry.type = PATHFIND_GEOMETRY_BOX;
+		piece->geometry.majorRadius = 1.0f;
+		piece->geometry.minorRadius = 1.0f;
+		if (raised)
+		{
+			piece->walls.raised.push_back(quad(200.0f, 40.0f, 400.0f, 160.0f, 60.0f, 60.0f));
+		}
+		else
+		{
+			piece->walls.walls.push_back(quad(100.0f, 50.0f, 300.0f, 250.0f, 60.0f, 60.0f));
+		}
+		world.objects[piece->id] = piece;
+		pf = std::make_unique<Pathfinder>(testConfig(), &world);
+		pf->newMap(terrain);
+		pf->addObjectToPathfindMap(*piece);
+		struct None : PathfindRequestHandler
+		{
+			void doPathfind(PathfindObjectID) override {}
+		} none;
+		pf->processPathfindQueue(none);
+	}
+	~IslandWorld()
+	{
+		for (auto &kv : world.objects)
+		{
+			delete kv.second;
+		}
+	}
+	template <class T> T *add(PathfindObjectID id, float x, float y, float z)
+	{
+		T *u = new T();
+		u->id = id;
+		u->pos = { x, y, z };
+		u->mobile = true;
+		u->geometry.type = PATHFIND_GEOMETRY_SPHERE;
+		u->geometry.majorRadius = 5.0f;
+		world.objects[id] = u;
+		return u;
+	}
+};
+} // namespace
+
+TEST_CASE("wall2 raised: the melee back-off marks a refused step on a wall top (RW 0x74661A) and stands back CastleSiegeStandBackDistance more")
+{
+	IslandWorld w(false);
+	LayeredUnit *u = w.add<LayeredUnit>(1, 150.0f, 350.0f, 0.0f);
+	REQUIRE(w.pf->getLayerAt(150.0f, 100.0f, 60.0f) == LAYER_WALL_FIRST);
+	// a destination on the plateau: the steps back toward the unit (20 each) are refused up to y 240, all on the wall top (marked); y 260 is reached,
+	// then the mark moves the point CastleSiegeStandBackDistance (500) plus the unit's radius further back
+	Coord3D dest{ 150.0f, 100.0f, 60.0f };
+	REQUIRE(w.pf->meleeBackOff(*u, groundLoco(), 20.0f, &dest));
+	INFO("backed off to " << dest.x << ", " << dest.y);
+	CHECK(dest.x == 150.0f);
+	CHECK(dest.y == 765.0f); // 260 + 500 + the radius 5
+}
+
+TEST_CASE("wall2 raised: the melee engagement search runs on the destination's layer; a WALL_UPGRADE target on a walkway no unit reaches is retried on the ground (RW 0x6F37B3)")
+{
+	IslandWorld w(true);
+	REQUIRE(w.pf->getLayerAt(300.0f, 100.0f, 60.0f) == LAYER_TOP);
+	TestObject *unit = w.add<TestObject>(1, 500.0f, 100.0f, 0.0f); // east of the walkway: the step toward it (+x) keeps the destination on it
+	// a WALL_UPGRADE target on the walkway: the walkway's cells are another zone and no ground cell is one of layer 2's: the ground retry finds the
+	// passage under the walkway, in reach of the target
+	TestObject *upgrade = w.add<TestObject>(2, 300.0f, 100.0f, 60.0f);
+	upgrade->mobile = false;
+	upgrade->team = 1;
+	upgrade->kinds.insert(PK_WALL_UPGRADE);
+	const ReachRange reach(upgrade->pos, 40.0f);
+	Coord3D dest = upgrade->pos;
+	REQUIRE(w.pf->findMeleeEngagementLocation(*unit, groundLoco(), *upgrade, reach, &dest));
+	MESSAGE("engagement at " << dest.x << ", " << dest.y << ", " << dest.z);
+	CHECK(reach.inRangeFrom(dest, 0.0f));
+	CHECK(w.pf->getLayerAt(dest.x, dest.y, dest.z) == LAYER_GROUND);
+	CHECK(dest.x == 305.0f); // the cell under the destination cell (31, 10), on the ground
+	CHECK(dest.y == 105.0f);
+	// the same target as no WALL_UPGRADE: no retry, nothing on the walkway is in the unit's zone
+	TestObject *plain = w.add<TestObject>(3, 300.0f, 100.0f, 60.0f);
+	plain->team = 1;
+	Coord3D none = plain->pos;
+	const bool plainFound = w.pf->findMeleeEngagementLocation(*unit, groundLoco(), *plain, ReachRange(plain->pos, 40.0f), &none);
+	MESSAGE("the plain target: " << plainFound << " at " << none.x << ", " << none.y << ", " << none.z);
+	CHECK_FALSE(plainFound);
+	// a unit on the walkway reaches the plain target there: the search runs on layer 2 and stays on it
+	LayeredUnit *top = w.add<LayeredUnit>(4, 250.0f, 100.0f, 60.0f);
+	top->layer = LAYER_TOP;
+	Coord3D onTop = plain->pos;
+	REQUIRE(w.pf->findMeleeEngagementLocation(*top, groundLoco(), *plain, ReachRange(plain->pos, 40.0f), &onTop));
+	INFO("on the walkway at " << onTop.x << ", " << onTop.y << ", " << onTop.z);
+	CHECK(w.pf->getLayerAt(onTop.x, onTop.y, onTop.z) == LAYER_TOP);
+	CHECK(onTop.z == 60.0f);
+}

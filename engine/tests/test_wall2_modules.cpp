@@ -11,12 +11,14 @@
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
+#include "Common/SpecialPower.h"
 #include "Common/Upgrade.h"
 #include "GameClient/GUI/Skirmish/IniSkirmishSetupSource.h"
 #include "GameClient/LiveGame.h"
 #include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIWorld.h"
+#include "GameLogic/ActionManager.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/GateModules.h"
@@ -633,4 +635,122 @@ TEST_CASE("wall2 walls retail: a wall piece is classified with the model of its 
 	g.game->ai().removeObjectFromPathfindMap(*culvert);
 	g.game->ai().addObjectToPathfindMap(*culvert);
 	CHECK(wallCellsNear(*culvert) == 512);
+}
+
+// RW 0x82C366 (stop S-1872): an AI walking a path with a portal's waypoint nodes while it stands on a wall top refuses every power; standing on the wall,
+// or walking a path without waypoint nodes, it does not
+TEST_CASE("wall2 modules retail: ActionManager RW 0x82C366: a hero on Helm's Deep's wall walking a path through the postern gate is refused powers on the wall-top cells")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s);
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *culvert = g.first("HelmsDeepCulvert");
+	REQUIRE(culvert);
+	Player *owner = culvert->getControllingPlayer();
+	REQUIRE(owner);
+	const UpgradeTemplate *u = TheUpgradeCenter ? TheUpgradeCenter->findUpgrade("Upgrade_PosternGate") : nullptr;
+	REQUIRE(u);
+	culvert->giveUpgrade(u);
+	const SpecialPowerTemplate *power = TheSpecialPowerStore ? TheSpecialPowerStore->findSpecialPowerTemplate("SpecialAbilitySmite") : nullptr;
+	REQUIRE(power);
+	const Coord3D inside{ 1730.0f, 2810.0f, 0.0f }, outside{ 1730.0f, 3110.0f, 0.0f };
+	std::string error;
+	Object *hero = g.game->createObject("GondorBoromir", owner->getPlayerIndex(), inside, 0.0f, &error);
+	REQUIRE_MESSAGE(hero, error);
+	g.frames(2);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	// the nearest wall-top cell inside the top (all eight neighbours on its layer) the hero reaches from inside
+	Coord3D top{};
+	bool found = false;
+	for (int r = 1; r <= 30 && !found; ++r)
+	{
+		for (int dx = -r; dx <= r && !found; ++dx)
+		{
+			for (int dy = -r; dy <= r && !found; ++dy)
+			{
+				const int x = 173 + dx, y = 281 + dy;
+				const PathfindCell *c = pf.cellAt(x, y);
+				if ((dx != -r && dx != r && dy != -r && dy != r) || !c || !isWallLayer(c->getLayer()) || c->getType() != PathfindCell::CELL_CLEAR)
+				{
+					continue;
+				}
+				bool inner = true;
+				for (int ex = -1; ex <= 1; ++ex)
+				{
+					for (int ey = -1; ey <= 1; ++ey)
+					{
+						const PathfindCell *n = pf.cellAt(x + ex, y + ey);
+						inner = inner && n && n->getLayer() == c->getLayer();
+					}
+				}
+				if (!inner)
+				{
+					continue;
+				}
+				Coord3D from = *hero->getPosition(), to{ (float)x * 10.0f + 5.0f, (float)y * 10.0f + 5.0f, 0.0f };
+				bool partial = true;
+				Path *p = pf.findPath(&ai->adapter(), ai->locomotorInfo(), &from, &to, &partial);
+				found = p && !partial && isWallLayer(p->getLastNode()->getLayer());
+				top = to;
+				delete p;
+			}
+		}
+	}
+	REQUIRE_MESSAGE(found, "no reachable wall-top cell near the culvert");
+	ai->aiMoveToPosition(top, CMD_FROM_PLAYER);
+	for (int f = 0; f < 900; ++f)
+	{
+		g.frames(1);
+		const Coord3D q = *hero->getPosition();
+		if ((q.x - top.x) * (q.x - top.x) + (q.y - top.y) * (q.y - top.y) < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	INFO("the hero stands at " << hero->getPosition()->x << ", " << hero->getPosition()->y << " on layer " << (int)ai->adapter().getLayer());
+	REQUIRE(isWallLayer(ai->adapter().getLayer()));
+	// standing on the wall: not refused for the layer
+	const unsigned long long standing = ActionManager::stats().movingOnLayer;
+	ActionManager::canDoSpecialPower(*hero, power);
+	CHECK(ActionManager::stats().movingOnLayer == standing);
+	// back inside: this wall top's ramp leads down outside the wall, so the path takes the postern gate (its waypoint nodes); on a wall-top cell with that
+	// path every power is refused, on the ground's cells none is
+	ai->aiMoveToPosition(inside, CMD_FROM_PLAYER);
+	int refusedOnWall = 0, framesOnWallWithPortal = 0, refusedOffWall = 0;
+	bool leftWall = false;
+	for (int f = 0; f < 900; ++f)
+	{
+		g.frames(1);
+		const Path *path = ai->mover().path();
+		// RW 0x6EACB9: the ground grid's cell under the hero (a wall top's cells are ground grid cells; the passage under the culvert's top is one too)
+		const Coord3D h = *hero->getPosition();
+		const PathfindCell *under = pf.cellAt(SimMath::floorToInt(SimMath::mulf32(h.x, 0.1f)), SimMath::floorToInt(SimMath::mulf32(h.y, 0.1f)));
+		const bool onWall = under && isWallLayer(under->getLayer());
+		leftWall = leftWall || !isWallLayer(ai->adapter().getLayer());
+		const unsigned long long before = ActionManager::stats().movingOnLayer;
+		const bool can = ActionManager::canDoSpecialPower(*hero, power);
+		const bool refused = ActionManager::stats().movingOnLayer != before;
+		CHECK(!(refused && can));
+		if (onWall && path && path->hasWaypointNodes())
+		{
+			++framesOnWallWithPortal;
+			refusedOnWall += refused ? 1 : 0;
+		}
+		else
+		{
+			refusedOffWall += refused ? 1 : 0;
+		}
+		const Coord3D q = *hero->getPosition();
+		if ((q.x - inside.x) * (q.x - inside.x) + (q.y - inside.y) * (q.y - inside.y) < 400.0f && !ai->isMoving())
+		{
+			break;
+		}
+	}
+	MESSAGE("frames on the wall with the portal path " << framesOnWallWithPortal << ", refused " << refusedOnWall << "; refused elsewhere " << refusedOffWall);
+	CHECK(leftWall);
+	CHECK(framesOnWallWithPortal > 0); // tolerance: some frames walk the wall before the ramp
+	CHECK(refusedOnWall == framesOnWallWithPortal);
+	CHECK(refusedOffWall == 0);
 }
