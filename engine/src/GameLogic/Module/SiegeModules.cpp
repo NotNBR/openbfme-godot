@@ -38,9 +38,10 @@
 namespace
 {
 const char *const kStopPortal =
-	"[S-4870] siege deploy (lane SIEGE-1): the ladder's / tower's DynamicPortalBehaviour is lane WALL-2's: SiegeDeploySpecialPower asks it through "
-	"SiegePortalInterface (RW 0x863EB3 IsEndPortalAboveWall, the waypoints RW 0x86404D / 0x8639EF); a DynamicPortalBehaviour without that runtime answers no, so "
-	"the deploy reaches the wall, faces it and waits in phase 1 (never lowers onto it)";
+	"[S-4870] siege deploy portal (lanes SIEGE-1 / WALL-2): SiegeDeploySpecialPower asks the ladder's / tower's DynamicPortalBehaviour through "
+	"SiegePortalInterface (RW 0x863EB3 IsEndPortalAboveWall, the waypoints RW 0x86404D / 0x8639EF, RW 0x863D77 / 0x863D30 the top attack point); INFERENCE: "
+	"RW 0x863D77's arithmetic order is lane SIEGE-1's reading; a DynamicPortalBehaviour that does not implement the interface (none in the port) would keep "
+	"the deploy in phase 1";
 const char *const kStopAdjust =
 	"[S-4871] siege deploy (lane SIEGE-1): Pathfinder::adjustMeleeOffset (RW 0x6EA0EC) is not ported: a SiegeDeploySpecialPower with SkipAdjustPosition No (no "
 	"retail object) keeps the unadjusted offset";

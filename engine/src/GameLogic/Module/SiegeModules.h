@@ -91,28 +91,10 @@ class Object;
 class StateHasher;
 class SpecialPowerTemplate;
 
-// ---- the WALL-2 integration point (S-4870) -----------------------------------------------------------------------------------------------------------
-// What SiegeDeploySpecialPower asks the siege object's DynamicPortalBehaviour (the module WALL-2 ports). TARGET FACTS (RotWK, BFME2 counterparts in
-// Open-BFME-2 Code/GameEngine/Source/GameLogic/Object/Behavior/DynamicPortalBehaviour*.cpp):
-//   * RW 0x863983 (BFME2 0x4608E0): the object's DynamicPortalBehaviour module, null when it has none;
-//   * RW 0x863EB3 (BFME2 0x460DF6, WorldBuilder name IsEndPortalAboveWall): the bone of the waypoint AboveWall (the BonePrefix bones, NumberOfBones, world
-//     space) is on a wall (Pathfinder::IsPointOnWall(point, false)); `out` (may be null) receives the point; an AboveWall out of the waypoint list answers true
-//     with the object's position;
-//   * RW 0x86404D (BFME2 0x460F90): the deployed ladder's / tower's waypoints and portal links are made (the climb joins the pathfinder);
-//   * RW 0x8639EF (BFME2 0x46094C): the waypoints made are removed again (on leaving the deployed phase and when the object dies);
-//   * RW 0x863D77: the world point of TopAttackPos (module data + 0x164 / + 0x168 / + 0x16C: X, Y scaled by the length of the object's planar X axis
-//     normalised by its larger component, Z as is, through the object's transform RW 0x70BFD1) and RW 0x863D30: TopAttackRadius (data + 0x170). The melee
-//     reach of a unit against a deployed SIEGE_TOWER (RW 0x6EDB6F .. 0x6EDC74, ObjectWeapons) reads them.
-class SiegePortalInterface
-{
-public:
-	virtual ~SiegePortalInterface() = default;
-	virtual bool isEndPortalAboveWall(Coord3D *out) = 0; // RW 0x863EB3
-	virtual void createPortalWaypoints() = 0;            // RW 0x86404D
-	virtual void clearPortalWaypoints() = 0;             // RW 0x8639EF
-	virtual Coord3D topAttackPosition() = 0;             // RW 0x863D77
-	virtual float topAttackRadius() const = 0;           // RW 0x863D30
-};
+// ---- the WALL-2 integration point -------------------------------------------------------------------------------------------------------------------
+// What SiegeDeploySpecialPower asks the siege object's DynamicPortalBehaviour: SiegePortalInterface (its own header; WALL-2's DynamicPortalBehaviour,
+// PortalModules.h, implements it)
+#include "GameLogic/Module/SiegePortalInterface.h"
 
 // lane SIEGE-1: RW 0x6EDB6F .. 0x6EDC74 (the melee reach's SIEGE_TOWER branch): a unit at `sourcePos` with the bounding radius `sourceRadius` reaches the
 // deployed ladder / tower `tower` when the tower's portal answers its top attack point within 20 in height (RW 0xBDBC6C, a double compare of the fabs) and

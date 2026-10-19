@@ -27,6 +27,7 @@
 #include "GameLogic/GameMessage.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/PortalModules.h"
 #include "GameLogic/Module/SiegeModules.h"
 #include "GameLogic/Object/Contain/SiegeEngineContainRuntime.h"
 #include "GameLogic/Object/Object.h"
@@ -238,7 +239,7 @@ TEST_CASE("siege1 retail: Helm's Deep's wall sections read their dock points fro
 	CHECK(siegeReportHas(r.logic(), "[S-4872]"));
 }
 
-TEST_CASE("siege1 retail: without WALL-2's DynamicPortalBehaviour a siege ladder ordered at Helm's Deep's wall drives to the wall, faces it and waits (S-4870)")
+TEST_CASE("siege1 retail: a siege ladder ordered at Helm's Deep's wall drives to the wall, faces it and, its own DynamicPortalBehaviour answering IsEndPortalAboveWall, lowers and deploys (S-4870)")
 {
 	if (!haveWorld("siege1 ladder without portal"))
 	{
@@ -287,16 +288,21 @@ TEST_CASE("siege1 retail: without WALL-2's DynamicPortalBehaviour a siege ladder
 	INFO("the ladder came within " << closest << " of its approach point");
 	CHECK(closest < 15.0f); // tolerance: the locomotor stops within its close-enough distance of the approach point
 	CHECK(facedThere);
-	// the deploy needs the portal's answer (IsEndPortalAboveWall): without it the ladder never lowers, it tries the wall's other dock points
-	CHECK(maxPhase == SiegeDeploySpecialPower::PHASE_APPROACH);
-	CHECK_FALSE(sc.ladder->testStatus((unsigned)CombatNames::status("DEPLOYED")));
+	// the deploy asks the ladder's own DynamicPortalBehaviour (lane WALL-2, merged): its AboveWall bone is on the wall top (IsEndPortalAboveWall), so the ladder
+	// lowers (UNPACKING) and stands DEPLOYED on the dock point it reserved; the portal stop S-4870 is not raised any more
+	CHECK(maxPhase == SiegeDeploySpecialPower::PHASE_DEPLOYED);
+	CHECK(sc.ladder->testStatus((unsigned)CombatNames::status("DEPLOYED")));
 	reserved = 0;
 	for (const SiegeDockingBehavior::Entry &e : dock->entries())
 	{
 		reserved += e.reservedBy == sc.ladder->getID() ? 1 : 0;
 	}
-	CHECK(reserved == 3);
-	CHECK(siegeReportHas(r.logic(), "[S-4870]"));
+	CHECK(reserved == 1);
+	CHECK_FALSE(siegeReportHas(r.logic(), "[S-4870]"));
+	// and the climb is in the pathfinder: the portal made its waypoints
+	const DynamicPortalBehaviour *portal = DynamicPortalBehaviour::of(*sc.ladder);
+	REQUIRE(portal);
+	CHECK(portal->created());
 }
 
 TEST_CASE("siege1 retail: with a portal answering IsEndPortalAboveWall a siege ladder lowers onto Helm's Deep's wall (UNPACKING, LowerDelay), deploys, takes no order but evacuate and raises on the retract button (PACKING, RaiseDelay)")
