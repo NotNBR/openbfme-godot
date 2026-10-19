@@ -228,6 +228,12 @@ MessageDisposition LookAtTranslator::translate(const ClientMessage &msg)
 			{
 				const float angle = (float)(m_midCur.x - m_rotAnchor.x) * kRotatePerPixel * m_rotateScale; // lane OPTS-2: the option's scale (1 = retail)
 				m_camera.setAngle(m_camera.getAngle() + angle);
+				// lane PLAY-1 (the free camera, NOT retail; RotWK turns only): dragging down tilts the view down, as the map workshop's test-game camera
+				// (its TILT_PER_PIXEL, the game's own rotation per pixel); a smaller pitch looks more steeply down (TacticalCamera::buildPose)
+				if (m_camera.freeCamera() && m_midCur.y != m_rotAnchor.y)
+				{
+					m_camera.setPitch(m_camera.getPitch() - (float)(m_midCur.y - m_rotAnchor.y) * kRotatePerPixel);
+				}
 				m_rotAnchor = p;
 			}
 			break;

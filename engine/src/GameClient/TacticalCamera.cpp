@@ -22,6 +22,12 @@ constexpr float kMaxGroundLevel = 700.0f; // RW 0xBDD378 (BFME1 initHeightForMap
 constexpr float kPitchLimit = 0.6283185482025146f; // RW 0xC0C324 / 0xC0C328
 constexpr float kLegacyPitch = 37.5f, kLegacyMin = 120.0f, kLegacyMax = 300.0f; // RW 0xBE5634, 0xBDD424, 0xBD9E90
 constexpr float kHeightSampleToWorld = 0.0390625f; // RW 0xBDB8EC = MAP_HEIGHT_SCALE
+// lane PLAY-1 (the owner's free camera, NOT retail): the map workshop's test-game camera (bfme2-map-studio native/ingame/ingame.cpp: ZOOM_STEP, its
+// 40 unit closest distance, MAX_PITCH, CLEARANCE)
+constexpr float kFreeZoomStep = 1.15f;      // the height factor per wheel notch (retail: * 0.96 - 1 / * 1.05 + 1)
+constexpr float kFreeMinHeight = 40.0f;     // the closest height above the ground (retail: the map's minimum, 120 by default)
+constexpr float kFreeSteepest = 1.5533430f; // 89 degrees below the horizon at the steepest (90 would make the view direction parallel to up)
+constexpr float kFreeClearance = 20.0f;     // the eye stays this high above the terrain under it
 
 float normAngle(float a)
 {
@@ -324,6 +330,15 @@ void TacticalCamera::buildPose(Coord3D &eye, Coord3D &target) const
 	target.x = pos.x;
 	target.y = pos.y;
 	target.z = m_groundLevel;
+	// lane PLAY-1: tilted low behind a hill, the free camera looks over it instead of from inside it
+	if (m_free && m_logic)
+	{
+		const float floor = sampleTerrainHeight(eye.x, eye.y) + kFreeClearance;
+		if (eye.z < floor)
+		{
+			eye.z = floor;
+		}
+	}
 }
 
 void TacticalCamera::calcCameraConstraints()
@@ -438,17 +453,33 @@ void TacticalCamera::setAngle(float angle)
 
 void TacticalCamera::setPitch(float pitch)
 {
-	// RW 0x65E8D0
+	// RW 0x65E8D0 (lane PLAY-1: the free camera's lower limit is pitchMin())
 	m_pitch = pitch;
-	if (-kPitchLimit > pitch)
+	if (pitchMin() > pitch)
 	{
-		m_pitch = -kPitchLimit;
+		m_pitch = pitchMin();
 	}
 	else if (pitch > kPitchLimit)
 	{
 		m_pitch = kPitchLimit;
 	}
 	setCameraTransform();
+}
+
+float TacticalCamera::pitchMin() const
+{
+	if (!m_free)
+	{
+		return -kPitchLimit;
+	}
+	// the offset's own angle above the horizon less the pitch is the eye's (buildPose turns the offset about X by the pitch)
+	const float elevation = std::atan2(m_cameraOffset.z, std::sqrt(m_cameraOffset.x * m_cameraOffset.x + m_cameraOffset.y * m_cameraOffset.y));
+	return std::min(-kPitchLimit, elevation - kFreeSteepest);
+}
+
+float TacticalCamera::zoomInLimit() const
+{
+	return m_free ? std::min(m_minHeight, kFreeMinHeight) : m_minHeight;
 }
 
 void TacticalCamera::setAngleAndPitchToDefault()
@@ -467,9 +498,9 @@ void TacticalCamera::setHeightAboveGround(float h)
 	m_heightAboveGround = h;
 	if (m_zoomLimited)
 	{
-		if (m_heightAboveGround < m_minHeight)
+		if (m_heightAboveGround < zoomInLimit()) // lane PLAY-1: m_minHeight unless the free camera is on
 		{
-			m_heightAboveGround = m_minHeight;
+			m_heightAboveGround = zoomInLimit();
 		}
 		if (m_heightAboveGround > zoomOutLimit()) // lane PLAY-1 / ZOOM-1: m_maxHeight unless the free camera or a zoom-out factor is on
 		{
@@ -488,9 +519,13 @@ void TacticalCamera::setFreeCamera(bool on)
 		return;
 	}
 	m_free = on;
-	if (!on && m_heightAboveGround > zoomOutLimit())
+	if (!on && (m_heightAboveGround > zoomOutLimit() || m_heightAboveGround < zoomInLimit()))
 	{
-		setHeightAboveGround(zoomOutLimit());
+		setHeightAboveGround(m_heightAboveGround);
+	}
+	if (!on && m_pitch < pitchMin())
+	{
+		setPitch(m_pitch);
 	}
 	m_constraintValid = false;
 }
@@ -555,11 +590,21 @@ float TacticalCamera::fogShift() const
 
 void TacticalCamera::zoomIn()
 {
+	if (m_free)
+	{
+		setHeightAboveGround(m_heightAboveGround / kFreeZoomStep); // lane PLAY-1
+		return;
+	}
 	setHeightAboveGround(m_heightAboveGround * 0.96f - 1.0f); // RW 0x65E803 (0xC0C320 = 0.96f)
 }
 
 void TacticalCamera::zoomOut()
 {
+	if (m_free)
+	{
+		setHeightAboveGround(m_heightAboveGround * kFreeZoomStep); // lane PLAY-1
+		return;
+	}
 	setHeightAboveGround(m_heightAboveGround * 1.05f + 1.0f); // RW 0x65E82A (0xBF3DCC = 1.05f)
 }
 
@@ -787,7 +832,7 @@ void TacticalCamera::update(bool uiScrolling, bool gamePaused)
 			if (uiScrolling)
 			{
 				const float scrollLen = std::sqrt(m_scrollX * m_scrollX + m_scrollY * m_scrollY);
-				if (m_gd.scrollAmountCutoff > scrollLen || m_minHeight > m_currentHeightAboveGround
+				if (m_gd.scrollAmountCutoff > scrollLen || zoomInLimit() > m_currentHeightAboveGround
 					|| (m_gd.enforceMaxCameraHeight && zoomOutLimit() < m_currentHeightAboveGround)) // lane PLAY-1 / ZOOM-1: m_maxHeight at retail settings
 				{
 					const float adj = (desiredZoom - m_zoom) * m_gd.cameraAdjustSpeed;
