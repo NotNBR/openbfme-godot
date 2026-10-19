@@ -16,6 +16,7 @@
 #include "Common/Thing/ModuleFactory.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/AI/AIEmotionStates.h"
+#include "GameLogic/Module/SiegeModules.h"
 #include "GameLogic/AI/AIAttackMelee.h"
 #include "GameLogic/AI/AIGuard.h"
 #include "GameLogic/AI/AIHunt.h"
@@ -457,6 +458,7 @@ std::unique_ptr<AIStateMachine> AIUpdateInterface::makeStateMachine()
 	m->defineState(AI_BACK_AWAY, std::make_unique<AIBackAwayState>(*m), AI_IDLE, AI_IDLE);
 	m->defineState(AI_QUARREL, std::make_unique<AIQuarrelState>(*m), AI_IDLE, AI_IDLE);
 	m->defineState(AI_FACE_OBJECT_IDLE, std::make_unique<AIFaceObjectIdleState>(*m), AI_IDLE, AI_IDLE);
+	m->defineState(AI_FACE_POSITION, std::make_unique<AIFacePositionState>(*m), AI_IDLE, AI_IDLE); // lane SIEGE-1: RW 0x753755 state 0x25 (RW 0x7449D4 mode 0)
 	m->defineState(AI_HUNT, std::make_unique<AIHuntState>(*m), AI_IDLE, AI_IDLE); // lane SCRIPT-3: RW 0x741133 (AIHunt.cpp)
 	// lane PLAY-4 (RW 0x753755): AIGuardState 16 (RW 0x74109B) and AIGoingIdleState 0x4E (RW 0x7410C2), both ending in idle (AIGuard.cpp)
 	m->defineState(AI_GUARD, std::make_unique<AIGuardState>(*m), AI_IDLE, AI_IDLE);
@@ -821,6 +823,7 @@ void AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float a
 	{
 		RoutedCommand c; // lane FLY-1
 		c.type = kCommandUnidentifiedMove;
+		c.angle = angle;
 		c.position = pos;
 		c.source = source;
 		if (routeCommand(c))
