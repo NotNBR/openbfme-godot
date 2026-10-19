@@ -9,7 +9,7 @@
 // local player's units, through the same lockstep command path as the HUD. The AI players are the logic's own skirmish AI.
 //
 // Usage:
-//   openbfme_peer --rotwk DIR --bfme2 DIR (or ROTWK_INSTALL / BFME2_INSTALL)
+//   openbfme_peer --rotwk DIR --bfme2 DIR (or ROTWK_INSTALL / BFME2_INSTALL; OPENBFME_EXTRA_ARCHIVES: user .big files over the retail mount, as the game's)
 //     --host PORT [--bind IP] --map KEY --seed N --slot "human|easy|medium|hard|brutal,FactionName,startPos,team" (repeated, in slot order)
 //     | --join IP:PORT --name NAME
 //     [--frames N] [--run-ahead N] [--crc-interval N] [--script] [--realtime] [--record FILE] [--hashes FILE] [--report FILE]
@@ -31,6 +31,9 @@
 //     peer, or to one slot; repeated), FAULTS "latency=MS,jitter=MS,loss=PERMILLE,dup=PERMILLE,reorder=PERMILLE,reorder_ms=MS" (jitter is +- around the
 //     latency); --drop / --delay / --jitter are the older spelling (loss, and a delay uniform in delay .. delay + jitter); [--impair-seed N] (default 1 +
 //     the local slot); [--blackout-at FRAME:MS] at that protocol frame the peer is cut off (nothing in, nothing out) for MS ms (repeated);
+//     lane WALL-1: [--battle-log FILE] [--battle-every N] every N logic frames (default 50: 10 s) a GameClient/BattleLog line (per player its troops, the raised
+//     ones, battalions and heroes; the hurt gates and wall pieces; the siege deploys by phase; the script counters), written after the drain;
+//     [--battle-watch T1,T2,...] and every object of those templates one by one (name, position, health, AI state, victim, deploy phase)
 //     [--census FILE] every logic frame's wall time on the simulation owner and living battalions / troops / objects as CSV (GameClient/FrameCensus.h;
 //     tools/net/mp3_perf_table.py reads it); [--no-fast-resend] the transport's MP-2 resend timing (no fast resend, Karn's backoff up to 2 s), for A/B measurements;
 //     [--quit-at FRAME] at that protocol frame the local player exits the game as the quit menu's Exit does (MSG_SELF_DESTRUCT { TRUE } of its player,
@@ -72,6 +75,8 @@
 // Exit code: 0 ok, 1 usage / load error / another profile's replay, 2 desync (or replay mismatch / an incomplete replay), 3 network failure (stall /
 // timeout, refused by the lobby: another profile), 4 network or recording errors (a command that could not be sent or recorded).
 
+#include "Common/ArchiveFile.h"
+#include "GameClient/BattleLog.h"
 #include "Common/JobSystem.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/BuildVersion.h"
@@ -150,6 +155,9 @@ struct Args
 	long long quitAt = -1;                   ///< lane MP-3: --quit-at FRAME
 	bool noFastResend = false;               ///< lane MP-3: --no-fast-resend (MP-2's resend timing, for A/B measurements)
 	std::string census;                      ///< lane MP-3: --census FILE (the per-frame census CSV of the measurements)
+	std::string battleLog;                   ///< lane WALL-1: --battle-log FILE (GameClient/BattleLog lines)
+	int battleEvery = 50;                    ///< lane WALL-1: --battle-every N
+	std::vector<std::string> battleWatch;    ///< lane WALL-1: --battle-watch T1,T2 (templates traced one by one)
 	int startingCash = 1500;
 	std::vector<std::string> features; ///< --feature NAME: an enabled engine feature (part of the profile identity)
 	int lobbyTimeoutSeconds = 120;
@@ -254,6 +262,20 @@ bool parseArgs(int argc, char **argv, Args &a, std::string &error)
 		else if (k == "--paced") a.paced = true;
 		else if (k == "--no-fast-resend") a.noFastResend = true;
 		else if (k == "--census" && next(a.census)) {}
+		else if (k == "--battle-log" && next(a.battleLog)) {}
+		else if (k == "--battle-every" && next(v)) a.battleEvery = std::max(1, std::atoi(v.c_str()));
+		else if (k == "--battle-watch" && next(v))
+		{
+			for (size_t s0 = 0; s0 <= v.size();)
+			{
+				const size_t e = std::min(v.find(',', s0), v.size());
+				if (e > s0)
+				{
+					a.battleWatch.push_back(v.substr(s0, e - s0));
+				}
+				s0 = e + 1;
+			}
+		}
 		else if (k == "--quit-at" && next(v)) a.quitAt = std::atoll(v.c_str());
 		else if (k == "--cash" && next(v)) a.startingCash = std::atoi(v.c_str());
 		else if (k == "--feature" && next(v)) a.features.push_back(v);
@@ -345,6 +367,30 @@ bool loadWorld(const Args &a, World &w, std::string &error)
 		}
 		error = "the retail mount failed (a headless peer needs every archive a rendering peer reads, the W3D archives included):\n" + error;
 		return false;
+	}
+	// Local, not retail, as the rendering peer's mount (GodotRetailFileSystem): OPENBFME_EXTRA_ARCHIVES lists .big files (';'-separated) mounted over
+	// the retail archives (a user map and the maps\mapcache.ini that names it); they stay out of the profile identity there too. Unset, nothing changes.
+	if (const char *extra = std::getenv("OPENBFME_EXTRA_ARCHIVES"); extra != nullptr && extra[0] != 0)
+	{
+		const std::string list = extra;
+		for (size_t start = 0; start <= list.size();)
+		{
+			const size_t end = std::min(list.find(';', start), list.size());
+			const std::string path = list.substr(start, end - start);
+			start = end + 1;
+			if (path.empty())
+			{
+				continue;
+			}
+			std::string openError;
+			std::unique_ptr<ArchiveFile> archive = w.fs->openArchiveFile(path, &openError);
+			if (!archive)
+			{
+				error = "OPENBFME_EXTRA_ARCHIVES: " + openError;
+				return false;
+			}
+			w.fs->mountArchive(std::move(archive), path, true);
+		}
 	}
 	w.profile = ProfileIdentity::compute(mr.mounted, RandomAlgorithm::ZH_CarryChain, a.features, a.uber ? SimulationProfile::Uber : SimulationProfile::Faithful);
 	w.world = std::make_unique<RetailObjectWorld>(*w.fs);
@@ -1221,12 +1267,15 @@ int main(int argc, char **argv)
 		std::uint64_t ms; ///< lane ONLINE-3: NetMilliseconds when it ran (--frame-times)
 	};
 	std::vector<FrameHash> hashes;
+	std::vector<std::string> battleLines; // lane WALL-1: --battle-log (written on the simulation owner, read after the drain)
 	std::vector<std::string> checkpoints; // lane MP-3 (review r1): "self_destruct_checkpoint" lines (written on the simulation owner, read after the drain)
 	std::map<int, int> slotOfPlayer;
 	{
 		const int me = session.config().slotPlayerIndex[(size_t)lobby.localSlot];
 		const long long at = a.injectFrame;
 		const int delay = a.workerDelayMs;
+		const int battleEvery = a.battleLog.empty() ? 0 : a.battleEvery;
+		const std::vector<std::string> battleWatch = a.battleWatch;
 		// lane MP-3 (review r1): the game slot of every player index (a transfer checkpoint names slots)
 		const LiveGame::Report lr0 = game.report();
 		for (int sl = 0; sl < MAX_SLOTS && (size_t)sl < lr0.startSlotPlayers.size(); ++sl)
@@ -1237,7 +1286,11 @@ int main(int argc, char **argv)
 				slotOfPlayer[p->getPlayerIndex()] = sl;
 			}
 		}
-		session.driver().setAfterFrame([me, at, delay, &hashes, &checkpoints, &slotOfPlayer](GameLogic &logic) {
+		session.driver().setAfterFrame([me, at, delay, battleEvery, battleWatch, &hashes, &battleLines, &checkpoints, &slotOfPlayer](GameLogic &logic) {
+			if (battleEvery > 0 && logic.getFrame() % (UnsignedInt)battleEvery == 0)
+			{
+				battleLines.push_back(BattleLog::line(logic, battleWatch));
+			}
 			if (at >= 0 && logic.getFrame() == (UnsignedInt)at)
 			{
 				// the injected divergence: one more unit of money on this peer only (as a desync bug would)
@@ -1505,6 +1558,14 @@ int main(int argc, char **argv)
 			session.service();
 			session.network().update(game.protocolFrame(), game.commands());
 			NetSleepMilliseconds(2);
+		}
+	}
+	if (!a.battleLog.empty())
+	{
+		std::ofstream bl(a.battleLog, std::ios::binary | std::ios::trunc);
+		for (const std::string &l : battleLines)
+		{
+			bl << l << '\n';
 		}
 	}
 	if (!a.census.empty())
