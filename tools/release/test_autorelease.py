@@ -1382,6 +1382,54 @@ def test_a_signature_that_looks_like_zlib_is_a_signature():
     assert any(p.startswith("denylisted (hosts)") for p in a.problems), a.problems
 
 
+def test_a_packed_payload_signature_that_looks_like_zlib_is_a_signature():
+    """The package's random Ed25519 sidecar can also begin with a zlib header."""
+    sig = b"\x78\x9c" + bytes(range(7, 69))
+    path = "openbfme-v0.4.5-macos-arm64/payload.json.sig"
+    a = autorelease.SyncAudit(PRIVATE, top=True)
+    a.blob("package.zip", zip_of({path: sig}))
+    assert a.problems == []
+    # Keep other members, wrong lengths, and deeper wrappers fail-closed.
+    for members in ({path: sig[:-1]}, {path: sig + b"\x00"},
+                    {path.replace("payload.json.sig", "notes.sig"): sig},
+                    {"nested.zip": zip_of({path: sig})}):
+        a = autorelease.SyncAudit(PRIVATE, top=True)
+        a.blob("package.zip", zip_of(members))
+        assert any("unreadable zlib data" in p for p in a.problems), a.problems
+    # A valid compressed stream remains subject to content inspection.
+    hidden = zlib.compress(b"built on lab-vm-q".ljust(53, b" "), 0)
+    assert len(hidden) == 64
+    a = autorelease.SyncAudit(PRIVATE, top=True)
+    a.blob("package.zip", zip_of({path: hidden}))
+    assert any(p.startswith("denylisted (hosts)") for p in a.problems), a.problems
+
+
+def test_linux_packed_payload_signature_that_looks_like_zlib():
+    import tarfile
+    sig = b"\x78\x9c" + bytes(range(7, 69))
+    path = "openbfme-v0.4.5-linux-x64/payload.json.sig"
+    def package(data):
+        member = tarfile.TarInfo(path)
+        member.size = len(data)
+        return gzip.compress(tar_of([(member, data)]))
+    a = autorelease.SyncAudit(PRIVATE, top=True)
+    a.blob("package.tar.gz", package(sig))
+    assert a.problems == []
+    for name, data in (("package.tar.gz", package(sig[:-1])),
+                       ("package.tar.gz", package(sig + b"\x00")),
+                       ("package.tar.gz", gzip.compress(zip_of({path: sig}))),
+                       ("outer.zip", zip_of({"inner.tar.gz": package(sig)})),
+                       ("package.tar.gz", gzip.compress(package(sig)))):
+        a = autorelease.SyncAudit(PRIVATE, top=True)
+        a.blob(name, data)
+        assert any("unreadable zlib data" in p for p in a.problems), a.problems
+    hidden = zlib.compress(b"built on lab-vm-q".ljust(53, b" "), 0)
+    assert len(hidden) == 64
+    a = autorelease.SyncAudit(PRIVATE, top=True)
+    a.blob("package.tar.gz", package(hidden))
+    assert any(p.startswith("denylisted (hosts)") for p in a.problems), a.problems
+
+
 def test_a_swapped_intent_sha_changes_nothing(world):
     """Sol r3: after a lost final read-back, changing only the intent's sha let older source get the next version"""
     a = world.change({"engine/a.cpp": "2\n"}, "A released")

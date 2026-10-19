@@ -426,7 +426,9 @@ std::shared_ptr<W3DInstancer::MeshGpu> W3DInstancer::build_mesh(const MeshModelC
 			houseStopped = true;
 			W3DStopHit h;
 			h.Id = "S-119";
-			h.Message = W3D_Stop_Message("S-119", mesh.Get_Name() + ": team colour applied by the hypothesis base = mix(base, base * team, house texture alpha); the real combine is unrecovered (S-022)");
+			h.Message = W3D_Stop_Message("S-119", mesh.Get_Name() + (mat.Key.HouseColorBaked
+			 ? ": house texels recoloured before filtering; alpha replacement combine remains inferred (S-022)"
+			 : ": instance colour uses the approximate base * team mask path (S-022)"));
 			gpu->Stops.push_back(h);
 		}
 	}

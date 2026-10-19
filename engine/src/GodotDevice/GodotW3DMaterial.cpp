@@ -359,7 +359,7 @@ Ref<Texture2D> W3DMaterialFactory::Load_Texture(const std::string &name, std::ve
 
 Ref<Texture2D> W3DMaterialFactory::Recolored_House_Texture(const std::string &name, const HouseColorParams &params, std::vector<std::string> &errors, std::vector<std::string> &notes)
 {
-	TextureResolution res = Resolve_W3D_Texture(name, [&](const std::string &p) { return Fs.doesFileExist(p); }, isBfme1Data(Fs)); // community PR #36: the archives' layout
+	TextureResolution res = Resolve_House_Texture(name, [&](const std::string &p) { return Fs.doesFileExist(p); }, isBfme1Data(Fs)); // community PR #36: the archives' layout
 	if (!res.Found)
 	{
 		return Ref<Texture2D>(); // as Load_Texture's quiet case: a missing house texture only means no tint
@@ -371,6 +371,8 @@ Ref<Texture2D> W3DMaterialFactory::Recolored_House_Texture(const std::string &na
 	auto it = Textures.find(cacheKey);
 	if (it != Textures.end())
 	{
+		const auto note = PackedHouseTextureNotes.find(cacheKey);
+		if (note != PackedHouseTextureNotes.end()) notes.push_back(note->second);
 		return it->second;
 	}
 	std::vector<std::uint8_t> bytes;
@@ -386,8 +388,18 @@ Ref<Texture2D> W3DMaterialFactory::Recolored_House_Texture(const std::string &na
 	if (!bytes.empty()) std::memcpy(buffer.ptrw(), bytes.data(), bytes.size());
 	Ref<Image> image;
 	image.instantiate();
-	Error err = decodeTexture(image, buffer, res.IsDDS);
-	if (err != OK || image->is_empty())
+	Error err;
+	if (res.Path.size()>=4 && res.Path.substr(res.Path.size()-4)==".jpg") {
+	 AptArchiveFileSource source(Fs);bool paired=false;
+	 image=loadPackedTexture(source,res.Path.substr(0,res.Path.size()-4),&paired);
+	 err=image.is_valid() ? OK : ERR_FILE_CORRUPT;
+	 if (paired) {
+	  const std::string note = "[S-1482] house texture " + res.Path + ": packed PNG colour multiplication and alpha replacement are inferred; the loader merge was not read";
+	  notes.push_back(note);
+	  PackedHouseTextureNotes[cacheKey] = note;
+	 }
+	} else err = decodeTexture(image, buffer, res.IsDDS);
+	if (err != OK || image.is_null() || image->is_empty())
 	{
 		errors.push_back("could not decode texture " + res.Path);
 		TextureErrors.push_back(errors.back());
@@ -615,7 +627,6 @@ W3DMaterialResult W3DMaterialFactory::Create(const MeshRenderData &mesh, const M
 	{
 		if (const std::string *hc = HouseColors->Find(tex[0]))
 		{
-			bool hcFound = false;
 			std::vector<std::string> hcErrors; // 313 housecolor.ini textures, 204 shipped as files: a missing one only means no tint
 			if (loadTextures && HouseParams.kind > 0)
 			{
@@ -625,8 +636,9 @@ W3DMaterialResult W3DMaterialFactory::Create(const MeshRenderData &mesh, const M
 			}
 			else
 			{
-				hcTex = loadTextures ? Load_Texture(*hc, hcErrors, hcFound, true) : Placeholder_Texture(false);
+				hcTex = loadTextures ? Recolored_House_Texture(*hc, HouseColorParams(), hcErrors, out.Notes) : Placeholder_Texture(false);
 			}
+			out.Errors.insert(out.Errors.end(), hcErrors.begin(), hcErrors.end());
 			if (hcTex.is_valid())
 			{
 				key.HouseColor = true;
@@ -667,6 +679,19 @@ W3DMaterialResult W3DMaterialFactory::Create(const MeshRenderData &mesh, const M
 		mappers[0] = simpleUv;
 	}
 
+	// Donor MeshClassRecolorPrototype.cpp, BFME2 0x54B8C0:
+	// HOUSECOLOR mesh parts set ambient and diffuse to the primary colour.
+	// Preserve opacity, emissive and specular. Channel unpacking follows the
+	// existing target ARGB convention in Recolor_House_Texel, not the donor's
+	// address-derived ABI cast expressions.
+	if (HouseColors && HouseParams.kind > 0 && Is_House_Color_Material(mesh.Name))
+	{
+	 const auto color=HouseParams.colors[0];
+	 const Color rgb(((color>>16)&255)/255.0f,((color>>8)&255)/255.0f,(color&255)/255.0f);
+	 diffuse.r=rgb.r;diffuse.g=rgb.g;diffuse.b=rgb.b;
+	 ambientMat=rgb;
+	 out.Notes.push_back("HOUSECOLOR ambient/diffuse recoloured from donor BFME2 0x54B8C0; RotWK material path unverified (S-119)");
+	}
 	Ref<ShaderMaterial> mat;
 	mat.instantiate();
 	key.AlphaOverride = AlphaOverride; // lane BUILD-5 r3

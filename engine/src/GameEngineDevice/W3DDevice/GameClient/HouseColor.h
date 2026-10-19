@@ -15,15 +15,17 @@
 // name. Retail's id is -1 for a base texture that is not in the asset registry, so all such blocks collide in retail; the
 // table does not reproduce that. Unknown fields or stray lines are errors.
 //
-// NOT ported: how the house colour texture is combined with the base texture (the defaultw3d.fxo HouseColorEnable /
-// HouseColorTexture path); spec 3.6 marks the formula [U]. This is the lookup table only.
+// The target's final texture combine remains unverified (S-119 / S-022). This module
+// supplies the table, per-texel recolouring and donor mesh-name/palette rules; see docs/HOUSE_COLOR_PORT.md.
 
 #pragma once
 
+#include "Libraries/WWVegas/WW3D2/textureloader.h"
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Lane CAH-2: RotWK's house colour recolour of a texture (target facts, RotWK game.dat, caveat S-001):
@@ -43,6 +45,17 @@ struct HouseColorParams
 	int kind = 0;                                 ///< 0 .. 3 (the options' low 3 bits)
 	std::uint32_t colors[3] = { 0u, 0u, 0u };     ///< ARGB; only R, G, B are used
 };
+
+// House textures can use the packed JPEG/PNG path (RW texture loader 0x530D29)
+// already decoded by GodotPackedTexture. Preserve ordinary DDS/TGA precedence.
+TextureResolution Resolve_House_Texture(const std::string &name, const std::function<bool(const std::string &)> &exists, bool flatLayout);
+
+// Donor W3DModelDrawRva000B8FA1.cpp: player colour is kind 1. Custom hero
+// palettes take precedence; owner == 0 retains the existing no-colour sentinel.
+HouseColorParams Render_House_Color_Params(std::uint32_t owner, int customKind, const std::uint32_t *customColors);
+// Donor MeshClassRecolorPrototype.cpp, BFME2 0x54B8C0: the name after
+// the first dot (or the complete name) begins with HOUSECOLOR, case-insensitive.
+bool Is_House_Color_Material(std::string_view meshName);
 
 // RW 0x531C77's A8R8G8B8 texel: `rgba` in and out as R, G, B, A bytes
 void Recolor_House_Texel(const HouseColorParams &params, const std::uint8_t in[4], std::uint8_t out[4]);
