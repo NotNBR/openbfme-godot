@@ -185,6 +185,7 @@ include(cmake/Backlog2.cmake)   # BACKLOG2: castle / camp / construction ports (
 include(cmake/Contrib1.cmake)   # CONTRIB-1: the known RotWK 2.01 layouts, Data1.big by its entries (OPENBFME_CONTRIB1_TESTS)
 include(cmake/Netlag1.cmake)    # NETLAG-1: the command delay of a multiplayer game (OPENBFME_NETLAG1_TESTS)
 include(cmake/Wall1.cmake)      # WALL-1: walkable wall tops and ramps (appends to OPENBFME_SIM_SOURCES; OPENBFME_WALL1_TESTS)
+include(cmake/Siege1.cmake)     # SIEGE-1: the siege units (appends to OPENBFME_SIM_SOURCES; OPENBFME_SIEGE1_TESTS)
 add_library(openbfme_core STATIC
     ${OPENBFME_PLAY2_SOURCES}
     ${OPENBFME_APT_SOURCES}
@@ -639,6 +640,7 @@ add_executable(openbfme_tests
     ${OPENBFME_CONTRIB1_TESTS}
     ${OPENBFME_NETLAG1_TESTS}
     ${OPENBFME_WALL1_TESTS}
+    ${OPENBFME_SIEGE1_TESTS}
     tests/test_main.cpp
     tests/test_big_archive.cpp
     tests/test_archive_order.cpp
