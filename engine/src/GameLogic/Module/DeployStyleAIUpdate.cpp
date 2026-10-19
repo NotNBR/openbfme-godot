@@ -685,6 +685,14 @@ void DeployStyleAIUpdate::crc(StateHasher &h) const
 	h.addI32(m_state);
 	h.addU32(m_frame);
 	h.addI32(m_kept.type);
+	// the rest of the kept command, which dispatch() gives again (review #64: two queued orders differing only there hashed the same)
+	h.addFloat(m_kept.position.x);
+	h.addFloat(m_kept.position.y);
+	h.addFloat(m_kept.position.z);
+	h.addI32((std::int32_t)m_kept.source);
+	h.addI32(m_kept.waypointId);
+	h.addFloat(m_kept.angle);
+	h.addI32(m_kept.maxShots);
 	h.addU32(m_keptTarget);
 	h.addBool(m_ran);
 	h.addBool(m_pending);
