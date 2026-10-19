@@ -62,6 +62,7 @@
 
 #include "GameLogic/Module/BehaviorModule.h"
 #include "GameLogic/Module/DieModule.h"
+#include "GameLogic/Module/SiegePortalInterface.h"
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/Module/UpgradeModule.h"
 
@@ -99,7 +100,7 @@ public:
 	static void buildFieldParse(MultiIniFieldParse &p);
 };
 
-class DynamicPortalBehaviour : public UpgradeModule, public CreateModuleInterface, public DieModuleInterface
+class DynamicPortalBehaviour : public UpgradeModule, public CreateModuleInterface, public DieModuleInterface, public SiegePortalInterface
 {
 public:
 	OBFME_MODULE_XFER(DynamicPortalBehaviour) // the save (SAVE-4b): UpgradeModule's, the portal waypoints' ids and the made / disabled flags (the waypoints are the pathfinder's, obfme:AIWorld)
@@ -123,7 +124,14 @@ public:
 	// RW 0x863EB3: the end waypoint (AboveWall) stands on a wall's cell; `pos` (may be null) receives its position (the object's without AboveWall)
 	bool isEndPortalAboveWall(Coord3D *pos) const;
 	// RW 0x863D30
-	float topAttackRadius() const { return m_data->m_topAttackRadius; }
+	float topAttackRadius() const override { return m_data->m_topAttackRadius; }
+	// ---- SiegePortalInterface (lane SIEGE-1's deploy asks the ladder's / tower's portal through it; the merge of WALL-2 and SIEGE-1 connects them) ----
+	bool isEndPortalAboveWall(Coord3D *out) override { return static_cast<const DynamicPortalBehaviour *>(this)->isEndPortalAboveWall(out); }
+	void createPortalWaypoints() override { createWaypoints(); }
+	void clearPortalWaypoints() override { clearPortals(); }
+	// RW 0x863D77: TopAttackPos's X and Y scaled by the length of the object's planar X axis normalised by its larger component, Z as is, through the
+	// object's transform (RW 0x70BFD1). INFERENCE (S-4940): the arithmetic order of RW 0x863D77 was taken from lane SIEGE-1's reading, not re-read
+	Coord3D topAttackPosition() override;
 	const DynamicPortalBehaviourModuleData *portalData() const { return m_data; }
 	bool created() const { return m_created; }
 	bool disabled() const { return m_disabled; }

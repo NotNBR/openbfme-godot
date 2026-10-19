@@ -109,6 +109,8 @@ public:
 	void aiMoveToObject(Object *obj, CommandSourceType source);
 	// RW 0x770C2C (MSG_DO_MOVE_AND_ORIENTATE_OBJECTTO): a move that ends facing `angle`
 	void aiMoveToPositionAndOrientate(const Coord3D &pos, float angle, CommandSourceType source);
+	// lane SIEGE-1: AI command 0x27 (RW 0x7C821E -> AI vslot 0x118 RW 0x667290): the unit turns to face `pos` (state 0x25, GameLogic/Module/SiegeModules.cpp)
+	void aiFacePosition(const Coord3D &pos, CommandSourceType source);
 	void aiIdle(CommandSourceType source);
 	void aiFollowPath(const std::vector<Coord3D> &path, Object *ignoreObject, CommandSourceType source, bool exitProduction);
 	void aiFollowPathAppend(const Coord3D &pos, CommandSourceType source);
@@ -396,7 +398,8 @@ public:
 	// RW 0x667174 (aiDoCommand's gate): `command` is the AICommandType number (0 move to position, 1 move to object, ...; -1 unknown); false when the object is dead,
 	// a PLAYER order meets PreventPlayerCommands (+ 0x3C5) or the model condition 206, a SCRIPT order meets + 0x3C6, the temporary state is locked, or a PLAYER
 	// move order meets a locomotor set speed of 0. Every ai* command of this class asks it first
-	bool allowedToRespondToCommand(CommandSourceType source, int command) const;
+	// (virtual: AI vtable slot 148, isAllowedToRespondToAiCommands; lane SIEGE-1: SiegeAIUpdate overrides it, RW 0x893C80)
+	virtual bool allowedToRespondToCommand(CommandSourceType source, int command) const;
 	// lane AUDIO-3 r2: aiDoCommand's entry: the gate, then (passed) the module's own reaction before the command runs (commandAccepted). Every ai* command calls this
 	bool acceptCommand(CommandSourceType source, int command, Object *target = nullptr)
 	{
@@ -458,6 +461,8 @@ protected:
 		Object *target = nullptr;
 		CommandSourceType source = CMD_FROM_AI;
 		int waypointId = -1;
+		float angle = 0.0f;          // lane SIEGE-1: the move with an angle's final angle (DeployStyleAIUpdate gives a kept command again)
+		int maxShots = 0x7FFFFFFF;   // lane SIEGE-1: the attack commands' shot limit (AICommandParms m_intValue)
 	};
 	virtual bool routeCommand(const RoutedCommand &command) { (void)command; return false; }
 	void setLastCommandSource(CommandSourceType s) { m_lastCommandSource = s; }
