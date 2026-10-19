@@ -301,6 +301,7 @@ public:
 	Dictionary set_create_a_hero(Object *world, const String &profile_dir);
 	Dictionary get_create_a_hero_view() const;
 	Array get_create_a_hero_heroes() const;
+	void set_create_a_hero_portrait(const String &image);
 	void set_create_a_hero_view_texture(const Ref<Texture2D> &texture);
 	// lane CAH-2: retail's Create-a-Hero save folder (GameClient/UserDataFolder.h): the application data folder (OS::get_data_dir: %APPDATA% on Windows,
 	// CSIDL_APPDATA) + the install's gi.dat UserDataLeafName + "Save" (RW 0x644148 / 0x6DD398). { ok, folder, user_data, leaf, error }

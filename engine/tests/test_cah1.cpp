@@ -354,6 +354,32 @@ TEST_CASE("cah1 retail shell: the main menu's Create-a-Hero pushes CreateAHero.a
 	REQUIRE(scr->heroList());
 	CHECK(GadgetListBoxGetNumEntries(scr->heroList()) == 8);
 	CHECK(scr->selectedHero() == 0);
+	// Real list notifications carry the gadget in data1 and row in data2.
+	GadgetListBoxSetSelected(scr->heroList(), 1);
+	CHECK(scr->selectedHero() == scr->rowEntries()[1]);
+	REQUIRE(scr->displayedHero());
+	CHECK(scr->displayedHero()->name == c.heroes.at(scr->rowEntries()[1])->hero.name);
+	// Every list selection refreshes all ten power icons, not only the hero
+	// model and name. Seed stale icons to pin clearing of empty slots too.
+	for (int row = 0; row < 8; ++row)
+	{
+		for (int i = 1; i <= 10; ++i)
+		{
+			c.fx->wm->setAptImage("MyPowerIcon_" + std::to_string(i), "stale");
+		}
+		GadgetListBoxSetSelected(scr->heroList(), row);
+		const auto &hero = c.heroes.at(scr->rowEntries()[(size_t)row])->hero;
+		for (int i = 0; i < 10; ++i)
+		{
+			const CommandButton *button = TheCommandStore->findCommandButton(hero.powers[(size_t)i].commandButton);
+			const std::string expected = !button ? std::string() : !button->m_createAHeroUIIconImageName.empty()
+				? button->m_createAHeroUIIconImageName : button->m_buttonImageName.empty() ? std::string() : button->m_buttonImageName.front();
+			const std::string *image = c.fx->wm->aptImage("MyPowerIcon_" + std::to_string(i + 1));
+			CHECK((image ? *image : std::string()) == expected);
+		}
+	}
+	GadgetListBoxSetSelected(scr->heroList(), 0);
+	CHECK(scr->selectedHero() == scr->rowEntries()[0]);
 	for (const WindowManagerNote &n : c.fx->wm->notes())
 	{
 		if (n.kind != "unported-command" && n.kind != "create-a-hero-stop")
@@ -378,6 +404,11 @@ TEST_CASE("cah1 retail shell: a hero is built page by page through the movies (c
 	REQUIRE_MESSAGE(c.fx->wm->invokeAS(scr->level(), "SetCreateNewHero", { "true" }, nullptr, &error), error);
 	c.show(scr, "Class");
 	CHECK(scr->currentPage() == 'C');
+	REQUIRE(c.fx->wm->aptImage("Cah::Portrait"));
+	CHECK(*c.fx->wm->aptImage("Cah::Portrait") == "HPGandalf");
+	// The applied preview supplies the hero portrait. Text refreshes must not
+	// replace it with the class's faction emblem.
+	c.fx->wm->setAptImage("Cah::Portrait", "CPShieldMaiden");
 	REQUIRE(c.fx->wm->invokeCallback("AptCreateAHero::Class::SetClassAndType", "2 1"));
 	REQUIRE(scr->displayedHero());
 	CHECK(scr->displayedHero()->classIndex == 2);
@@ -387,6 +418,7 @@ TEST_CASE("cah1 retail shell: a hero is built page by page through the movies (c
 	REQUIRE(scr->myHero());
 	CHECK(scr->myHero()->hero().classIndex == 2);
 	CHECK(scr->myHero()->hero().subClassIndex == 1);
+	CHECK(*c.fx->wm->aptImage("Cah::Portrait") == "CPShieldMaiden");
 	// the appearance arrows and the attribute buttons through their commands
 	const int before = scr->myHero()->currentIndex(AptMyHero::KIND_APPEARANCE, 0);
 	REQUIRE(c.fx->wm->invokeCallback("AptCreateAHero::Appearance::NextAppearance", "0"));
@@ -1089,4 +1121,31 @@ TEST_CASE("menuwork1 cah retail shell: the hero list's headers sort it (RW 0x9C4
 	CHECK(scr->lastMessage() == "OpenBFME: Trying a hero on a test map is not available yet: play a skirmish with the hero instead.");
 	REQUIRE(c.fx->wm->invokeCallback("AptCreateAHero::Manager::OnSelectAward", "1"));
 	CHECK(scr->lastMessage() == "OpenBFME: Hero awards are not available yet: OpenBFME does not record them.");
+}
+
+TEST_CASE("cah attributes: duplicate tick initializers position all thirty-two segments of each bar")
+{
+	OPENBFME_REQUIRE_START(s);
+	CahShellFx c(s, true);
+	auto *scr = c.screen();
+	REQUIRE(scr);
+	REQUIRE(c.fx->wm->invokeAS(scr->level(), "SetCreateNewHero", { "true" }));
+	c.show(scr, "Class");
+	scr->setClassAndType(0, 1);
+	c.show(scr, "Appearance");
+	REQUIRE(c.fx->wm->invokeASAt(scr->level(), "Main.mcAppearanceScreen.Screen.TypeWindow", "gotoAndPlay", { "_attributes" }));
+	c.fx->tick(60);
+	CHECK(c.fx->wm->apt().noteCount("duplicate-init-object-unverified") == 160);
+	for (int attribute = 0; attribute < 5; ++attribute)
+	{
+		const std::string path = "Main.mcAppearanceScreen.Screen.TypeWindow.instance12." + std::to_string(attribute) + ".AttribBar";
+		for (int tick = 0; tick < 32; ++tick)
+		{
+			auto *segment = c.fx->at(scr->level(), path + ".Tick_" + std::to_string(tick));
+			REQUIRE(segment);
+			// The retail movie starts at -100 and advances by its 9-pixel tick width.
+			CHECK(segment->matrix.tx == -100.0f + 9.0f * tick);
+			CHECK(segment->matrix.ty == -242.0f);
+		}
+	}
 }

@@ -1208,3 +1208,14 @@ TEST_CASE("draw bones: the drawable scale is applied at the root, and a missing 
 	CHECK(idx == 2); // the SWORD mesh hangs on HAND (bone 2)
 	REQUIRE(b2.barrels[0].size() == 1);
 }
+TEST_CASE("draw runtime: a model animation prefix change refreshes the shared idle state")
+{
+	Rig r({ { "ABUNIT_IDLA", 31 }, { "ABOTHER_IDLA", 31 } },
+		std::string("DefaultModelConditionState\n Model = ABUNIT_SKN\n Skeleton = ABUNIT_SKL\n ModelAnimationPrefix = ABUNIT\nEnd\n") +
+		"ModelConditionState = USER_1\n ModelAnimationPrefix = ABOTHER\nEnd\n" +
+		"IdleAnimationState\n" + anim("#(MODEL)_IDLA") + "End\nEnd\n");
+	r.start();
+	CHECK(r.draw->frame().tracks[0].clipName == "abunit_skl.ABUNIT_IDLA");
+	r.draw->setModelConditionFlags(flagsOf({ "USER_1" }));
+	CHECK(r.draw->frame().tracks[1].clipName == "abunit_skl.ABOTHER_IDLA");
+}

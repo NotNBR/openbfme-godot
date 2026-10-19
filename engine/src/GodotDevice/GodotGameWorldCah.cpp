@@ -7,6 +7,9 @@
 #include "GodotDevice/GodotGameWorld.h"
 
 #include "Common/CreateAHeroRecord.h"
+#include "GameClient/TacticalCamera.h"
+#include "GameClient/PalantirCommandUI.h"
+#include "GodotDevice/GodotRetailFileSystem.h"
 #include "Common/Player.h"
 #include "GameClient/LiveGame.h"
 #include "GameLogic/CreateAHeroSystem.h"
@@ -81,6 +84,7 @@ Dictionary GameWorld::cah_preview_apply(int64_t objectId, const PackedByteArray 
 		return out;
 	}
 	m_game->logic().createAHeroes().applyBuilder(*player, hero, *obj);
+	out["portrait"] = String(PalantirCommandUI::objectPortrait(*obj).c_str());
 	out["ok"] = true;
 	return out;
 }
@@ -153,6 +157,30 @@ Dictionary GameWorld::cah_view_info(int64_t cls, int64_t sub) const
 	{
 		return out;
 	}
+	if (!m_game || m_fs.is_null() || !m_fs->archive_fs())
+	{
+		out["error"] = String("cah_view_info: no map or archive file system is loaded");
+		return out;
+	}
+	if (!m_cahCameraOffsetValid)
+	{
+		CameraSettings settings;
+		std::string cameraError;
+		if (!CameraSettings::load(*m_fs->archive_fs(), settings, &cameraError))
+		{
+			out["error"] = String(cameraError.c_str());
+			return out;
+		}
+		const auto &chunks = m_game->map().chunks;
+		const MapCameraValues values = MapCameraValues::resolve(settings, chunks.hasWorldInfo ? &chunks.worldInfo : nullptr);
+		Coord3D offset;
+		float angle;
+		bool legacy;
+		TacticalCamera::computeCameraOffset(values, offset, angle, legacy);
+		m_cahCameraOffset = Vector3(offset.x, offset.y, offset.z);
+		m_cahCameraOffsetValid = true;
+	}
+	out["camera_offset"] = m_cahCameraOffset;
 	const CreateAHeroViewInfo &v = s->viewInfo;
 	auto five = [](float a, float b, float c, float d, float e) {
 		Array r;

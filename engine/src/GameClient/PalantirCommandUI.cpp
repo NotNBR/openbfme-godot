@@ -2,6 +2,7 @@
 // See PalantirCommandUI.h.
 
 #include "GameClient/PalantirCommandUI.h"
+#include "GameEngineDevice/W3DDevice/GameClient/Drawable/Draw/W3DModelDraw.h"
 
 #include "Common/Player.h"
 #include "Common/PlayerTemplate.h"
@@ -29,6 +30,28 @@ std::string objectPortrait(const Object &obj)
 	{
 		return std::string();
 	}
+	// DONOR: CreateAHeroHero::Update (BFME2 RVA 0x4087E0..0x408802) caches
+	// Drawable's first non-null draw-module portrait (RVA 0x272709, slot 0xCC).
+	// Object::getObjectSelectedPortraitImage (RVA 0x2946AB) uses that before
+	// SelectPortrait. The model state's PortraitImageName is already parsed;
+	// resolve the object's conditions with the same matcher as the draw runtime.
+	if (obj.isKindOfName("CREATE_A_HERO"))
+	{
+		ModelConditionFlags flags;
+		for (int bit = 0; bit < MODELCONDITION_COUNT; ++bit)
+		{
+			flags.set(bit, obj.testModelCondition(bit));
+		}
+		for (const auto &module : t->drawModules().nuggets())
+		{
+			const auto *data = dynamic_cast<const W3DModelDrawModuleData *>(module.data.get());
+			const ModelConditionInfo *state = data ? data->findBestInfo(flags) : nullptr;
+			if (state && !state->portraitImageName.empty())
+			{
+				return state->portraitImageName;
+			}
+		}
+	}
 	if (const FieldValue *v = t->findField("SelectPortrait"))
 	{
 		if (const std::string *name = std::get_if<std::string>(v))
@@ -51,7 +74,7 @@ std::string portraitFor(const HudContext &ctx, ObjectID contextObject, const std
 	const Object *first = nullptr;
 	std::string shared;
 	bool same = true;
-	const ThingTemplate *lastTemplate = nullptr; // lane SELPERF-1: the portrait is the template's: an object of the template just compared shares it
+	const ThingTemplate *lastTemplate = nullptr; // lane SELPERF-1: the portrait is the template's: ordinary objects of the template just compared share it
 	for (ObjectID id : selected)
 	{
 		const Object *obj = ctx.logic.findObjectByID(id);
@@ -59,7 +82,7 @@ std::string portraitFor(const HudContext &ctx, ObjectID contextObject, const std
 		{
 			continue;
 		}
-		if (first && obj->getTemplate() && obj->getTemplate() == lastTemplate)
+		if (first && obj->getTemplate() && obj->getTemplate() == lastTemplate && !obj->isKindOfName("CREATE_A_HERO"))
 		{
 			continue;
 		}
@@ -322,7 +345,7 @@ RankInfo rankInfoFor(const HudContext &ctx, ObjectID contextObject, const std::v
 std::vector<std::string> acceptanceStops()
 {
 	return {
-		"[S-760] Palantir portrait: a drawable's portrait is its template's SelectPortrait; the draw module's template override (RW 0x694BF8) and the local-player branch of the "
+		"[S-760] Palantir portrait: a drawable's portrait uses SelectPortrait or a Create-a-Hero model-state PortraitImageName; the draw module's template override (RW 0x694BF8) and the local-player branch of the "
 		"kind-of bit +0x11F & 0x40 (RW 0x68FBD3) are not ported, nor the cost modifier interface of CommandUI (ShowCostModifierUpgradeInterface)",
 	};
 }

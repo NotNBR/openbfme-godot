@@ -1284,6 +1284,7 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("set_create_a_hero", "world", "profile_dir"), &AptMenuPlayer::set_create_a_hero); // lane CAH-1
 	ClassDB::bind_method(D_METHOD("get_create_a_hero_view"), &AptMenuPlayer::get_create_a_hero_view);
 	ClassDB::bind_method(D_METHOD("get_create_a_hero_heroes"), &AptMenuPlayer::get_create_a_hero_heroes);
+	ClassDB::bind_method(D_METHOD("set_create_a_hero_portrait", "image"), &AptMenuPlayer::set_create_a_hero_portrait);
 	ClassDB::bind_method(D_METHOD("set_create_a_hero_view_texture", "texture"), &AptMenuPlayer::set_create_a_hero_view_texture);
 	ClassDB::bind_method(D_METHOD("create_a_hero_save_folder", "rotwk_install"), &AptMenuPlayer::create_a_hero_save_folder); // lane CAH-2
 	ClassDB::bind_method(D_METHOD("create_a_hero_type_name", "name"), &AptMenuPlayer::create_a_hero_type_name);
@@ -4118,6 +4119,10 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 						if (kv.first == "_imageMap")
 						{
 							record = m->shell->wm->aptImage(kv.second);
+							// Donor AptPlayer::FindRenderImage (BFME2 0x4128F0
+							// parameter lookup): after records, try the mapped image
+							// name itself (VerticalScrollBar's button/thumb artwork).
+							if (!record && m->shell->skins.images.findImageByName(kv.second)) record = &kv.second;
 							mapped = true;
 						}
 					}
@@ -6366,6 +6371,15 @@ bool AptMenuPlayer::create_a_hero_type_name(const String &name)
 	}
 	m->dirty = true;
 	return screen->typeName(u);
+}
+
+void AptMenuPlayer::set_create_a_hero_portrait(const String &image)
+{
+	if (m->shell && m->shell->wm)
+	{
+		m->shell->wm->setAptImage("Cah::Portrait", toNative(image));
+		m->dirty = true;
+	}
 }
 
 void AptMenuPlayer::set_create_a_hero_view_texture(const Ref<Texture2D> &texture)

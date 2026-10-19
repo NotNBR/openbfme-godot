@@ -670,6 +670,9 @@ private:
 	mutable UnsignedInt m_netHashFrame = 0;   ///< lane RENDERWAIT-1: net_status's last state hash (computed where the logic is held) and its frame
 	mutable std::uint32_t m_netHash = 0;
 	std::unique_ptr<LiveGame> m_game;
+	// Per loaded game/map; cleared alongside m_game, including data-source resets.
+	mutable bool m_cahCameraOffsetValid = false;
+	mutable Vector3 m_cahCameraOffset;
 	std::unique_ptr<TributeSource> m_tribute; ///< lane PLAY-1 (tribute_source)
 	std::unique_ptr<SpellStoreModel> m_spellStore;     // lane SPELL-2
 	void waitSpellIdle(const char *file = __builtin_FILE(), int line = __builtin_LINE());
