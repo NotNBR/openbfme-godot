@@ -725,7 +725,8 @@ TEST_CASE("wall2 modules retail: ActionManager RW 0x82C366: a hero on Helm's Dee
 	const unsigned long long standing = ActionManager::stats().movingOnLayer;
 	ActionManager::canDoSpecialPower(*hero, power);
 	CHECK(ActionManager::stats().movingOnLayer == standing);
-	// back inside: this wall top's ramp leads down outside the wall, so the path takes the postern gate (its waypoint nodes); on a wall-top cell with that
+	// back inside: this wall top's way down is the stairs HelmsDeepdwStairsA1 on the `outside` point's side, so the path takes the postern gate (its
+	// waypoint nodes); on a wall-top cell with that
 	// path every power is refused, on the ground's cells none is
 	ai->aiMoveToPosition(inside, CMD_FROM_PLAYER);
 	int refusedOnWall = 0, framesOnWallWithPortal = 0, refusedOffWall = 0;
