@@ -925,6 +925,7 @@ class SyncAudit(audit_package.Audit):
         self.rules = list(rules)
         self.top = top
         self.templates = templates or {}
+        self.payload_tar_containers: set[str] = set()
 
     def _rules(self, name: str, data: bytes | None, depth: int) -> None:
         if (depth > 0 or self.top) and self.rules:
@@ -955,18 +956,25 @@ class SyncAudit(audit_package.Audit):
                 self.files += 1
                 self.blob(f"{name}[zlib]", out, depth + 1)
                 return
-            if not text and not is_detached_signature(name, data, depth):
+            if not text and not is_detached_signature(name, data, depth, name.rsplit(":", 1)[0] in self.payload_tar_containers):
                 self.problems.append(problem)
                 return
         self._rules(name, data, depth)
+        if depth == 1 and re.fullmatch(r"[^:\[\]]+\.tar\.gz\[gzip\]", name) and audit_package.is_tar(data):
+            self.payload_tar_containers.add(name)
         super().blob(name, data, depth)
 
 
-def is_detached_signature(name: str, data: bytes, depth: int) -> bool:
+def is_detached_signature(name: str, data: bytes, depth: int, payload_tar: bool = False) -> bool:
     """PUBLICCI-1: a release's detached Ed25519 signature (manifest*.json.sig, sign_manifest.py: 64 raw bytes, top level) is random; about
     1 in 992 starts with a valid zlib header (the hosted pull request checks hit one in test_autorelease). Such a file that does NOT decode
-    as zlib is a signature, not a finding; one that decodes is still decoded and checked like any other stream"""
-    return depth == 0 and len(data) == 64 and re.fullmatch(r"(?:.*/)?[^/]+\.json\.sig", name) is not None
+    as zlib is a signature, not a finding; one that decodes is still decoded and checked like any other stream.
+    The signed payload sidecar at a release package root has the same random bytes (one archive layer, or the Linux gzip stream followed by its tar)."""
+    if len(data) != 64:
+        return False
+    return (depth == 0 and re.fullmatch(r"(?:.*/)?[^/]+\.json\.sig", name) is not None
+            or depth == 1 and re.fullmatch(r"[^:]+:openbfme-[^/:]+/payload\.json\.sig", name) is not None
+            or depth == 2 and payload_tar and re.fullmatch(r"[^:]+:openbfme-[^/:]+/payload\.json\.sig", name) is not None)
 
 
 def _is_text(data: bytes) -> bool:

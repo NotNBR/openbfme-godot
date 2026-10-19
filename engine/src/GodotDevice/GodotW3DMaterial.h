@@ -122,6 +122,7 @@ private:
 	bool AlphaOverride = false;
 	std::map<std::string, Ref<Shader>> Shaders;
 	std::map<std::string, Ref<Texture2D>> Textures; // by virtual path
+	std::map<std::string, std::string> PackedHouseTextureNotes; // retain S-1482 on cache hits
 	std::vector<std::string> TextureErrors;
 };
 

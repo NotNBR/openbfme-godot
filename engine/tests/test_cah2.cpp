@@ -188,3 +188,39 @@ TEST_CASE("cah2 house colour: the recolour runs on the texels before filtering (
 	CHECK(shaderFirst == 254);
 	CHECK(baked != doctest::Approx((double)shaderFirst));
 }
+
+TEST_CASE("house colour: player palette selection preserves custom heroes and black")
+{
+ const std::uint32_t custom[3]={0xff112233u,0xff445566u,0xff778899u};
+ const auto owner=Render_House_Color_Params(0xffe04020u,0,nullptr);
+ CHECK(owner.kind==1);CHECK(owner.colors[0]==0xffe04020u);
+ CHECK(owner.colors[1]==0u);CHECK(owner.colors[2]==0u);
+ const auto hero=Render_House_Color_Params(0xffe04020u,3,custom);
+ CHECK(hero.kind==3);
+ for(int i=0;i<3;++i) CHECK(hero.colors[i]==custom[i]);
+ CHECK(Render_House_Color_Params(0xff000000u,0,nullptr).kind==1);
+ CHECK(Render_House_Color_Params(0,0,nullptr).kind==0);
+}
+
+TEST_CASE("house colour: donor mesh-name classification is case insensitive and part scoped")
+{
+ CHECK(Is_House_Color_Material("HOUSECOLOR"));
+ CHECK(Is_House_Color_Material("GBBuilding.HouseColorTrim"));
+ CHECK(Is_House_Color_Material("housecolor01"));
+ CHECK_FALSE(Is_House_Color_Material("HOUSECOLOR.body"));
+ CHECK_FALSE(Is_House_Color_Material("mesh.bodyHOUSECOLOR"));
+ CHECK_FALSE(Is_House_Color_Material("mesh.body.HOUSECOLOR"));
+ CHECK_FALSE(Is_House_Color_Material("HOUSECOLOR."));
+ CHECK_FALSE(Is_House_Color_Material(""));
+}
+
+TEST_CASE("house colour: packed house textures resolve without changing ordinary texture precedence")
+{
+ auto packed=[](const std::string &path){return path=="art\\compiledtextures\\hc\\hc_unit.jpg" || path=="art\\compiledtextures\\hc\\hc_unit.png";};
+ auto result=Resolve_House_Texture("HC_Unit.tga",packed,false);
+ REQUIRE(result.Found);CHECK(result.Path=="art\\compiledtextures\\hc\\hc_unit.jpg");CHECK_FALSE(result.IsDDS);
+ auto both=[&](const std::string &path){return packed(path) || path=="art\\compiledtextures\\hc\\hc_unit.dds";};
+ CHECK(Resolve_House_Texture("HC_Unit.tga",both,false).IsDDS);
+ CHECK_FALSE(Resolve_House_Texture("Missing.tga",packed,false).Found);
+ CHECK_FALSE(Resolve_W3D_Texture("HC_Unit.tga",packed,false).Found);
+}

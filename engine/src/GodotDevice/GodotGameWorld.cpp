@@ -9,6 +9,7 @@
 #include "GodotDevice/GodotGameWorld.h"
 
 #include "GameClient/FrameCensus.h"
+#include "GameEngineDevice/W3DDevice/GameClient/HouseColor.h"
 #include "GameClient/ReplaySeek.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameClient/GUI/TributeInfo.h"
@@ -1646,14 +1647,16 @@ void GameWorld::refresh_views(double deltaMs)
 					ev.rawLowered = AsciiStringUtil::lowered(*f.modelName);
 				}
 				static const std::string kNoModel;
-				// lane CAH-2 (S-1408): a drawable with a colour set shows the model "#<model>#<kind>&<c0>&<c1>&<c2>" (RW 0x54BDE0 / 0x535BCF's name) whose
-				// house colour textures are recoloured per texel (W3DInstancer::add_model_colored)
+				// Donor W3DModelDrawRva000B8FA1.cpp (BFME2 0x4B8FA1): ordinary
+				// owners use kind 1; hero custom palettes keep precedence. Bake before
+				// filtering, using the existing RW 0x531C77 texture recolour routine.
+				const auto palette = Render_House_Color_Params(d->getHouseColor(), d->customColorKind(), d->customColors());
 				ev.colorsRevision = d->customColorRevision();
 				std::string coloredModel;
-				if (shown && m_houseColors && d->customColorKind() > 0)
+				if (shown && m_houseColors && palette.kind > 0)
 				{
 					char opt[96];
-					std::snprintf(opt, sizeof(opt), "#%d&%d&%d&%d", d->customColorKind(), (int)d->customColors()[0], (int)d->customColors()[1], (int)d->customColors()[2]);
+					std::snprintf(opt, sizeof(opt), "#%d&%d&%d&%d", palette.kind, (int)palette.colors[0], (int)palette.colors[1], (int)palette.colors[2]);
 					coloredModel = "#" + ev.rawLowered + opt;
 				}
 				// stop S-5015: the state's `Texture = A B` swaps (a building's SNOW state on a snowy map) make another model variant, "<model>#tex&a=b"
@@ -1696,9 +1699,9 @@ void GameWorld::refresh_views(double deltaMs)
 								PackedInt64Array colors;
 								for (int i = 0; i < 3; ++i)
 								{
-									colors.push_back((int64_t)d->customColors()[i]);
+									colors.push_back((int64_t)palette.colors[i]);
 								}
-								mid = dyn->add_model_colored(toGodot(*f.modelName), d->customColorKind(), colors);
+								mid = dyn->add_model_colored(toGodot(*f.modelName), palette.kind, colors);
 							}
 							else
 							{
@@ -1787,20 +1790,25 @@ void GameWorld::refresh_views(double deltaMs)
 			}
 			else if (!e.staticModel.empty() && !e.moduleHidden)
 			{
+				const auto palette=Render_House_Color_Params(d->getHouseColor(),d->customColorKind(),d->customColors());
+				const bool colored=m_houseColors && palette.kind>0;
+				const std::vector<std::pair<std::string, std::string>> swaps=e.kind==W3D_DRAWKIND_FLOOR ? floorWeatherSwaps(e.data,m_streakWeather) : std::vector<std::pair<std::string, std::string>>();
+				std::string model=AsciiStringUtil::lowered(e.staticModel)+W3DInstancer::Texture_Swap_Suffix(swaps);
+				if(colored) model+="#palette&"+std::to_string(palette.kind)+"&"+std::to_string(palette.colors[0])+"&"+std::to_string(palette.colors[1])+"&"+std::to_string(palette.colors[2]);
+				if(ev.model!=model && ev.instance>=0) {dyn->remove_instance(ev.instance);ev.instance=-1;ev.posed=false;}
 				if (!ev.posed)
 				{
 					ev.posed = true;
-					// a player's building's floor (bib) takes its WeatherTexture on a snowy map (stop S-5015)
-					const std::vector<std::pair<std::string, std::string>> swaps =
-						e.kind == W3D_DRAWKIND_FLOOR ? floorWeatherSwaps(e.data, m_streakWeather) : std::vector<std::pair<std::string, std::string>>();
-					const std::string model = AsciiStringUtil::lowered(e.staticModel) + W3DInstancer::Texture_Swap_Suffix(swaps);
 					auto it = m_dynamicModels.find(model);
 					int64_t mid;
 					if (it == m_dynamicModels.end())
 					{
 						const double tm = nowMs();
 						dyn->Set_Build_Texture_Swaps(swaps);
-						mid = dyn->add_model(toGodot(e.staticModel));
+						if(colored) {
+						 PackedInt64Array colors;for(auto color:palette.colors) colors.push_back((int64_t)color);
+						 mid=dyn->add_model_colored(toGodot(e.staticModel),palette.kind,colors);
+						} else mid = dyn->add_model(toGodot(e.staticModel));
 						m_dynamicModels[model] = mid;
 						m_lastNewModelMs = timing::sumMs(m_lastNewModelMs, timing::elapsedMs(tm));
 						++m_lastNewModels;
