@@ -165,7 +165,7 @@ const char *const kNestedHordeStop =
 	"[S-1790] shockwaves (COMBAT-4): NOT ported: MetaImpactNugget's hit on a member of a horde that is itself inside a container (RW 0x910764 .. 0x9107AF: the source scores the member, the outer "
 	"container's contain slots 4 / 0x3C / 0x7C act on it; counted, nothing applied); the handler's audio event (RW 0x696947 .. 0x696A0E, TheAudio slot 0x64) and the drawable's "
 	"projectile type (client); FlipDirection is read by no 2.01 nugget code found; INFERENCE: a horde's member list is its contain list (horde interface slot 0x108 not read), the "
-	"clear-radius landing height is the ground (layer heights S-161), the AI state of RW 0x662D70 is the port's current state";
+	"clear-radius landing height is the layer's (RW 0x680A75) at the shock wave centre's z (lane WALL-2), the AI state of RW 0x662D70 is the port's current state";
 
 // RW 0x68D91A Object::estimateDamage: a TREE (template + 0x113 bit 6) answers 1.0 for FLAME (6) and 0 for anything else; else the body's estimate (body vslot 2);
 // no body: 0 (lane DECOMP-1)

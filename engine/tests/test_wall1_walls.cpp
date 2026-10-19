@@ -29,7 +29,7 @@
 #include <algorithm>
 
 // the wall pieces and ramps of Helm's Deep in this port's classification (printed by the retail test)
-#define WALL1_PIECES 34
+#define WALL1_PIECES 35 // lane WALL-2: HelmsDeepGatehouseCenter (a RaisedWallMesh only) is a wall piece too
 #define WALL1_RAMPS 26
 #include <cmath>
 #include <map>
@@ -73,6 +73,7 @@ class LayeredUnit : public TestObject
 public:
 	PathfindLayerEnum layer = LAYER_GROUND;
 	PathfindLayerEnum getLayer() const override { return layer; }
+	bool canPathThroughGates() const override { return true; } // the template default (RW 0x74004B): bit 17 (wall tops, ramps) does not block it
 };
 
 // 40 x 20 cells of flat terrain at z 0. The wall piece: a box footprint 100 x 60 around (200, 100), its wall top x 150 .. 250, y 90 .. 110 at z 60, a ramp
@@ -161,7 +162,7 @@ TEST_CASE("wall1 walls: a wall piece's wall top takes layer 0x11 at its height, 
 			INFO("cell " << x << ", " << y);
 			CHECK(w.cell(x, y).getLayer() == LAYER_WALL_FIRST);
 			CHECK(w.cell(x, y).getType() == PathfindCell::CELL_CLEAR);
-			CHECK_FALSE(w.cell(x, y).getBit17());
+			CHECK(w.cell(x, y).getBit17()); // lane WALL-2: RW 0x935191 sets it on a wall cell
 		}
 	}
 	// the box footprint (y 70 .. 130) outside the wall top's rows 8 .. 11 stays the box's obstacle on the ground
@@ -596,9 +597,11 @@ TEST_CASE("wall1 walls retail: Helm's Deep's wall sections are walkable: their W
 			}
 		}
 	}
-	// the one retail inconsistency: HelmsDeepCulvert's RampMesh1 / 2 (P2 / P3) are not in its model RBHDDWCulv (retail makes no ramp from them)
+	// the retail inconsistencies: HelmsDeepCulvert's RampMesh1 / 2 (P2 / P3) are not in its model RBHDDWCulv (retail makes no ramp from them); lane WALL-2:
+	// the gatehouses' RaisedWallMesh P3 is not in RBHDGatHsL / RBHDGatHsR (the walkway is the centre's P1 alone)
 	const std::vector<std::string> problems = g.game->report().wallMeshProblems;
-	CHECK(problems == std::vector<std::string>{ "HelmsDeepCulvert: mesh P2 is not a mesh of RBHDDWCulv", "HelmsDeepCulvert: mesh P3 is not a mesh of RBHDDWCulv" });
+	CHECK(problems == std::vector<std::string>{ "HelmsDeepGatehouseRight: mesh P3 is not a mesh of RBHDGatHsR", "HelmsDeepGatehouseLeft: mesh P3 is not a mesh of RBHDGatHsL",
+		"HelmsDeepCulvert: mesh P2 is not a mesh of RBHDDWCulv", "HelmsDeepCulvert: mesh P3 is not a mesh of RBHDDWCulv" });
 	for (const std::string &e : g.game->report().errors)
 	{
 		CHECK_MESSAGE(e.find("wall meshes") == std::string::npos, e);

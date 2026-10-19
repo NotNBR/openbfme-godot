@@ -329,6 +329,8 @@ public:
 	float locomotorSpeed() const override;
 	bool movingBackwards() const override;
 	bool setModelCondition(const char *name, bool on) override;
+	void revealDisguiseOnClimb() override; // lane WALL-2: RW 0x66A143 (a Climb portal)
+	void idleFromAI() override;            // lane WALL-2: RW 0x662A0E's vslot 0x60(2) (a type 7 portal)
 	void startMoveSound() override; // lane AUDIO-3: RW 0x748C0B
 	void stopMoveSound() override;
 	float relativeAngleTo(const Coord3D &p) const override;
@@ -459,6 +461,10 @@ private:
 	bool m_canPathThroughUnits = false;
 	ObjectID m_moveAwayRequesters[2] = { INVALID_ID, INVALID_ID }; // lane PHYS-1: RW AI +0x198 / +0x19C (RW 0x66DA5F)
 	bool m_isInUpdate = false;
+	bool m_movingAwaySearch = false; // lane WALL-2: RW AI + 0x3CF (set around the move-away searches, RW 0x66DBFB / 0x66DC4B)
+public:
+	bool movingAwaySearch() const { return m_movingAwaySearch; }
+private:
 	unsigned long long m_memberUpdates = 0; // lane EXIT-1 (a counter, not hashed)
 	std::array<std::uint32_t, 19> m_luaConditionSnapshot{}; ///< lane HERO-2: + 0x290, the ModelCondition script events' snapshot (RW 0x663E32)
 	bool m_moveLoopPosted = false; // lane AUDIO-3: a move loop is kept for this object on the audio side (audio bookkeeping only: no logic reads it, not hashed)

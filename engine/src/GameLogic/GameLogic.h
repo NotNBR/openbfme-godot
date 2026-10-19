@@ -355,6 +355,9 @@ public:
 	float getGroundHeight(float x, float y) const;
 	// lane WALL-1: ZH TerrainLogic::getHighestLayerForDestination + getLayerHeight: the highest walkable surface at (x, y), a wall top or a ramp over the
 	// terrain (the pathfinder's ground-grid layers); the terrain without an AI world
+	// lane WALL-2: the height of the layer a point at (x, y, z) stands on (TheTerrainLogic vslot 0x1C with RW 0x680A75's layer): a wall top's, a ramp's or a
+	// walkway's, the terrain elsewhere
+	float getLayerHeightForDestination(float x, float y, float z) const;
 	float getHighestLayerHeight(float x, float y) const;
 	// problems nothing explains; each distinct text is kept once and reaches report().errors
 	void reportError(const std::string &text);

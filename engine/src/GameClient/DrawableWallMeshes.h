@@ -7,18 +7,19 @@
 // draw module data and the W3D files, like DrawableLaunchBones answers the launch bones: a headless peer gets the same bits.
 //
 // THE INPUTS: the first draw module of the template (its final override) that names a WallBoundsMesh, RampMesh1 or RampMesh2 (RotWK's INI puts them on the
-// W3DScriptedModelDraw of every wall section, culvert, stair, gatehouse and castle wall); the model of its default model state (findBestInfo with no flags,
-// RW 0x4B4379), posed in its bind pose (PristinePose, the simulation's numeric facade); the sub objects named by the fields (W3DFindSubObjectByName: the
+// W3DScriptedModelDraw of every wall section, culvert, stair, gatehouse and castle wall); the model of the object's current model condition state (findBestInfo with
+// the object's flags, RW 0x4B4379; lane WALL-1 took the no-flags state), posed in its bind pose (PristinePose, the simulation's numeric facade); the sub objects named by the fields (W3DFindSubObjectByName: the
 // name or the part after the HLOD's dot), their triangles through their bone's pose; then the object's scale, turn and position.
 //
 // INFERENCE / not ported (stop S-4840 through Pathfinder::stops(); the data problems are kept in problems()):
-//   * the default model state's model: retail reads the drawable's current render object (a damaged state's model, the night model) and the first of
-//     several Model names;
+//   * the model of the object's current model condition state (lane WALL-2; lane WALL-1 took the default state's): retail reads the drawable's current
+//     render object; of several Model names the first is taken;
 //   * a wall top's height is the highest z of its mesh (retail: the z of the outline's vertices; the RotWK wall meshes are flat);
 //   * the meshes are used as triangles (Pathfinder tests a cell's corners against them), not as the outline polygon / Bridge retail builds.
 
 #pragma once
 
+#include "Common/ModelState.h"
 #include "GameEngineDevice/W3DDevice/GameClient/Drawable/Draw/W3DDrawServices.h"
 #include "GameLogic/AI/AIWorld.h"
 
@@ -40,9 +41,12 @@ public:
 	struct ModelSurfaces
 	{
 		std::string modelName;
-		std::vector<std::vector<PathfindWallTriangle>> walls, ramps;
+		std::vector<std::vector<PathfindWallTriangle>> walls, ramps, raised; // raised: lane WALL-2, RaisedWallMesh
 	};
 	const ModelSurfaces *surfacesOf(const ThingTemplate &tt);
+	// lane WALL-2: the surfaces of the model the draw module shows for `flags` (the object's current model condition: RW 0x936B9F asks the drawable's current
+	// render object, so a damaged or rubble model's meshes count), cached by template and model name
+	const ModelSurfaces *surfacesOf(const ThingTemplate &tt, const ModelConditionFlags &flags);
 	// `model` turned by `angle`, scaled by `scale` and moved to `pos`
 	static void place(const ModelSurfaces &model, const Coord3D &pos, float angle, float scale, PathfindWallGeometry &out);
 
@@ -56,7 +60,7 @@ private:
 		ModelSurfaces surfaces;
 	};
 	void problem(const std::string &p);
-	bool build(const ThingTemplate &tt, ModelSurfaces &out);
+	bool build(const ThingTemplate &tt, const ModelConditionFlags &flags, ModelSurfaces &out);
 
 	W3DDrawAssets &m_assets;
 	std::map<std::string, Entry> m_cache; // looked up only, never iterated

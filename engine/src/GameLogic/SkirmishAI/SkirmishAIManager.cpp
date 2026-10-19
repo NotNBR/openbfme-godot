@@ -642,7 +642,7 @@ std::vector<std::string> SkirmishAIManager::stopLines()
 		"nor active gets aiIdle) is not run (no member pass in a melee)",
 		"[S-1500] horde member slot destination inference (lane MOVE-2): RW 0x6F0889 (via RW 0x871897) is ported for the ground layer; pathfinder + 0x48, which "
 		"it clears first, is taken as the ignored obstacle id; a cell of another layer than the horde's fails (the raised-layer tests RW 0x6E82B3 / 0x5E2F24 and "
-		"the wall-scaling branch RW 0x86E214 are not ported: S-161, S-084)",
+		"the wall-scaling branch RW 0x86E214 are not ported: S-4856, S-084)",
 		"[S-1501] horde command hand-off inference (lane MOVE-2 r2): RW 0x89E169's container test (the container's contain vslot 0x10) is taken as \"the horde "
 		"is contained\"; its porcupine / stance branch (contain vslots 0xF0 / 0x5C / 0x60, RW 0x89DE81 / 0x89DF11) is not read; slot 0x10 RW 0x8759FF(0) is "
 		"run as acceptMemberFromGarrison for every member on its way (no re-form snap); the port's move variants without an identified RotWK command number "

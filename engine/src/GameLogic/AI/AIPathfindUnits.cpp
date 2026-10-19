@@ -1016,7 +1016,7 @@ bool Pathfinder::memberFootprintFits(const PathfindMovement &mv, PathfindLayerEn
 			if (!c->allowsLayer(hordeLayer))
 			{
 				// RW: a cell of another layer than the horde's fails unless the horde is on a raised layer whose tests (RW 0x6E82B3 / 0x5E2F24) pass (the raised
-				// layers 2 .. 15 are not ported, S-161). Lane WALL-1 (INFERENCE, S-4840): a cell that connects to the horde's layer (a ramp's foot for a horde on
+				// layers' tests are not ported, S-4856). Lane WALL-1 (INFERENCE, S-4840): a cell that connects to the horde's layer (a ramp's foot for a horde on
 				// the ground, a joint for one on a wall) is the horde's layer too; the port's old exception for ZH's wall layer 15 is gone
 				return false;
 			}
@@ -1091,7 +1091,7 @@ bool Pathfinder::adjustHordeMemberDestination(const PathfindObject &member, cons
 		{
 			dest->x = x;
 			dest->y = y;
-			dest->z = m_terrain ? getLayerHeight(x, y, getLayerAt(x, y)) : dest->z; // RW 0x680A75 (the destination's layer) then the layer height
+			dest->z = m_terrain ? getLayerHeight(x, y, getLayerAt(x, y, dest->z)) : dest->z; // RW 0x680A75 (the destination's layer) then the layer height
 			return true;
 		}
 	}
@@ -1239,11 +1239,11 @@ bool Pathfinder::checkForAdjust(PathfindObject &obj, const PathfindLocomotorInfo
 	}
 	else
 	{
-		pathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), dest);
-		adjustedPathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), &adjustDest);
+		pathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), dest, &obj); // RW 0x6F5BB0 with the unit (lane WALL-2)
+		adjustedPathExists = clientSafeQuickDoesPathExist(loco, &obj.getPosition(), &adjustDest, &obj);
 		if (!pathExists)
 		{
-			if (clientSafeQuickDoesPathExist(loco, dest, &adjustDest))
+			if (clientSafeQuickDoesPathExist(loco, dest, &adjustDest, &obj))
 			{
 				adjustedPathExists = true;
 			}
@@ -1277,7 +1277,7 @@ bool Pathfinder::adjustDestination(PathfindObject &obj, const PathfindLocomotorI
 	ICoord2D cell;
 	worldToCell(dest, center, &cell);
 	// RW 0x680A75 (TerrainLogic::getLayerForDestination): the destination's own layer (lane WALL-1: a wall top's or a ramp's; the ground elsewhere)
-	const PathfindLayerEnum layer = getLayerAt(dest->x, dest->y);
+	const PathfindLayerEnum layer = getLayerAt(dest->x, dest->y, dest->z);
 	bool candidate = false;
 	Coord3D found = *dest;
 	if (checkForAdjust(obj, loco, isHuman, cell.x, cell.y, layer, &found, candidate))

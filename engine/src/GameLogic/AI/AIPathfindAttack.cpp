@@ -153,7 +153,7 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
 	parentCell->startPathfind(goalCell);
 	m_open.clear();
 	m_closedList = nullptr;
-	parentCell->setTotalCost(parentCell->costToGoal(goalCell));
+	parentCell->setTotalCost(costToGoal(parentCell, goalCell)); // RW 0x6F1F0D (lane WALL-2: through the corridor's portal hops)
 	m_open.push(parentCell);
 	m_shortcutCounter = 0;
 	PathfindCell *best = nullptr, *closest = nullptr;
@@ -211,6 +211,10 @@ Path *Pathfinder::findAttackPath(const PathfindObject *obj, const PathfindLocomo
 		}
 		if (examined < m_config.findAttackPathLimit)
 		{
+			if (!pathThrough)
+			{
+				checkChangeLayers(c, obj); // RW 0x6FC8C6 .. 0x6FC8D0 (lane WALL-2): without the path-through flag
+			}
 			examined += examineNeighboringCells(c, goalCell, loco, isHuman, center, radius, startNdx, obj);
 		}
 	}

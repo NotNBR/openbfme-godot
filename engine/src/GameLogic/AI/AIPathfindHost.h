@@ -27,14 +27,15 @@ typedef std::uint32_t PathfindObjectID;
 static const PathfindObjectID PATHFIND_INVALID_ID = 0;
 
 // The RotWK layer ids (the 6 layer bits 4 .. 9 of the cell dword; BFME2 WorldBuilder decomp Pathfinder::GetWallHeight 0xd3ed70 / IsPointOnWall 0xd3f890,
-// BFME1 Pathfinder::getLayerHeight RVA 0x3D8940): 0 invalid, 1 ground, 2 .. 15 the raised (bridge) layers with cells of their own (not ported, S-161),
-// 0x10 every ramp, 0x11 .. 0x40 one id per wall-top height. Ramps and wall tops are written into the GROUND grid's cells (RW getCell answers the ground
+// BFME1 Pathfinder::getLayerHeight RVA 0x3D8940): 0 invalid, 1 ground, 2 .. 15 the raised layers with cells of their own (lane WALL-2: the RaisedWallMesh
+// walkways, AIPathfindRaised.cpp; the bridge layers are S-161), 0x10 every ramp, 0x11 .. 0x40 one id per wall-top height. Ramps and wall tops are written into the GROUND grid's cells (RW getCell answers the ground
 // grid for layer 1 and every layer from 0x10: RW 0x76550F). ZH's single LAYER_WALL = 15 is not RotWK's.
 enum PathfindLayerEnum
 {
 	LAYER_INVALID = 0,
 	LAYER_GROUND = 1,
-	LAYER_TOP = 2,
+	LAYER_TOP = 2,          // the first raised layer
+	LAYER_RAISED_LAST = 0xF, // the last raised layer
 	LAYER_RAMP = 0x10,
 	LAYER_WALL_FIRST = 0x11,
 	LAYER_WALL_LAST = 0x40,
@@ -42,6 +43,8 @@ enum PathfindLayerEnum
 };
 
 inline bool isWallLayer(PathfindLayerEnum l) { return (int)l >= (int)LAYER_WALL_FIRST && (int)l <= (int)LAYER_WALL_LAST; }
+// RW 0x5E2F24 (IS_BRIDGE_LAYER): 2 .. 15
+inline bool isRaisedLayer(PathfindLayerEnum l) { return (int)l >= (int)LAYER_TOP && (int)l <= (int)LAYER_RAISED_LAST; }
 
 // lane WALL-1: the walkable surfaces of a wall piece in world space, the triangles of its draw module's WallBoundsMesh (a flat wall top, `height` its z)
 // and RampMesh1 / RampMesh2 (a sloped way up, the triangles give the height). See GameClient/DrawableWallMeshes.h for where they come from.
@@ -63,7 +66,8 @@ struct PathfindWallGeometry
 {
 	std::vector<PathfindWallSurface> walls; // WallBoundsMesh
 	std::vector<PathfindWallSurface> ramps; // RampMesh1, RampMesh2
-	bool empty() const { return walls.empty() && ramps.empty(); }
+	std::vector<PathfindWallSurface> raised; // lane WALL-2: RaisedWallMesh (a walkway on a raised layer, `height` its highest point)
+	bool empty() const { return walls.empty() && ramps.empty() && raised.empty(); }
 };
 
 // ZH Geometry.h GeometryType
@@ -253,6 +257,14 @@ public:
 	// lane WALL-1: the wall top and ramp surfaces of a wall piece (the draw module's WallBoundsMesh / RampMesh1 / RampMesh2 at the object's transform), null
 	// for every other object (RW 0x936B7D -> Pathfinder::ClassifyWall, BFME2 0x92F63F, asks the object's drawable)
 	virtual const PathfindWallGeometry *getWallGeometry() const { return nullptr; }
+	// lane WALL-2: RW 0x6822E2 .. 0x682307 (Waypoint::isValidUnitType without AllowNonSkirmishAIUnits): the controlling player is a skirmish AI player (RW
+	// 0x6AAC66) that TheSkirmishAIManager runs (RW 0x6A950B)
+	virtual bool isSkirmishAIControlled() const { return false; }
+	// lane WALL-2: RW 0x68C053, the first test of the portal search RW 0x6F5547 (a unit it answers true for crosses no portal; name INFERRED: S-4851)
+	virtual bool refusesPortals() const { return false; }
+	// lane WALL-2: RW AI + 0x3CF, the unit's AI is inside a move-away search (RW 0x66DBFB / 0x66DC4B set it around getMoveAwayFromPath); a type 7 waypoint
+	// refuses such a unit (RW 0x68230B)
+	virtual bool inMoveAwaySearch() const { return false; }
 };
 
 // TheGameLogic->findObjectByID
@@ -263,6 +275,9 @@ public:
 	virtual PathfindObject *findObjectByID(PathfindObjectID id) const = 0;
 	// TheGameLogic->getFrame()
 	virtual unsigned getFrame() const = 0;
+	// lane WALL-2: RW 0x6E8454, after portals were removed: every object (the logic's list order) whose AI has a path that names a waypoint no longer there
+	// (RW 0x76573F) is told so (RW 0x668AF8 notifyPathHasInvalidPortals). No AI world: nothing
+	virtual void onPathsLostPortals() const {}
 };
 
 // The cell-sampling view of TheTerrainLogic. Coordinates are world units (the pathfinder passes cell corners).
