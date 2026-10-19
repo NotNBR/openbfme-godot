@@ -25,36 +25,61 @@
 
 namespace
 {
+// version 3 (lanes WALL-1 / WALL-2): a cell's layer and connected layer take 7 bits each (0 .. 0x40: the wall tops 0x11 .. 0x40, the ramp 0x10, the raised
+// walkways 2 .. 15); versions 1 and 2 (upstream's 4-bit fields, a map without walls) are still read
 std::uint32_t classWord(const PathfindCell &c)
 {
-	return (std::uint32_t)c.getType() | ((std::uint32_t)c.getLayer() << 4) | ((std::uint32_t)c.getConnectLayer() << 8) | (c.getBit17() ? 1u << 12 : 0u) |
-		(c.getImpassableToPlayers() ? 1u << 13 : 0u) | (c.getExtraPass() ? 1u << 14 : 0u) | (c.getBit22() ? 1u << 15 : 0u) | (c.getBit23() ? 1u << 16 : 0u) |
-		(c.getPinched() ? 1u << 17 : 0u);
+	return (std::uint32_t)c.getType() | ((std::uint32_t)c.getLayer() << 4) | ((std::uint32_t)c.getConnectLayer() << 11) | (c.getBit17() ? 1u << 18 : 0u) |
+		(c.getImpassableToPlayers() ? 1u << 19 : 0u) | (c.getExtraPass() ? 1u << 20 : 0u) | (c.getBit22() ? 1u << 21 : 0u) | (c.getBit23() ? 1u << 22 : 0u) |
+		(c.getPinched() ? 1u << 23 : 0u);
 }
 
-// the closed set of a class word: the 18 bits classWord writes, a cell type 0 .. 7 (RW 0xDA2444's table)
-void checkClassWord(std::uint32_t w)
+// a version 1 or 2 word in version 3's layout
+std::uint32_t widenClassWord(std::uint32_t w)
 {
-	if (w >> 18)
+	return (w & 0xFu) | (((w >> 4) & 0xFu) << 4) | (((w >> 8) & 0xFu) << 11) | ((w >> 12) << 18);
+}
+
+// the closed set of a class word: the 24 bits classWord writes (18 before version 3), a cell type 0 .. 7 (RW 0xDA2444's table), layers up to LAYER_LAST
+void checkClassWord(std::uint32_t w, int version)
+{
+	const int bits = version >= 3 ? 24 : 18;
+	if (w >> bits)
 	{
-		throw XferException("pathfinder: a cell class word " + std::to_string(w) + " with bits beyond the 18 a cell keeps");
+		throw XferException("pathfinder: a cell class word " + std::to_string(w) + " with bits beyond the " + std::to_string(bits) + " a cell keeps");
 	}
 	AIXfer::inRange(w & 0xF, 0, 7, "pathfinder: a cell type");
+	if (version >= 3)
+	{
+		AIXfer::inRange((w >> 4) & 0x7F, LAYER_INVALID, LAYER_LAST, "pathfinder: a cell's layer");
+		AIXfer::inRange((w >> 11) & 0x7F, LAYER_INVALID, LAYER_LAST, "pathfinder: a cell's connected layer");
+	}
 }
 
 void setClassWord(PathfindCell &c, std::uint32_t w)
 {
 	c.setType((PathfindCell::CellType)(w & 0xF));
-	c.setLayer((PathfindLayerEnum)((w >> 4) & 0xF));
-	c.setConnectLayer((PathfindLayerEnum)((w >> 8) & 0xF));
-	c.setBit17((w >> 12) & 1);
-	c.setImpassableToPlayers((w >> 13) & 1);
-	c.setExtraPass((w >> 14) & 1);
-	c.setBit22((w >> 15) & 1);
-	c.setBit23((w >> 16) & 1);
-	c.setPinched((w >> 17) & 1);
+	c.setLayer((PathfindLayerEnum)((w >> 4) & 0x7F));
+	c.setConnectLayer((PathfindLayerEnum)((w >> 11) & 0x7F));
+	c.setBit17((w >> 18) & 1);
+	c.setImpassableToPlayers((w >> 19) & 1);
+	c.setExtraPass((w >> 20) & 1);
+	c.setBit22((w >> 21) & 1);
+	c.setBit23((w >> 22) & 1);
+	c.setPinched((w >> 23) & 1);
 }
+
 } // namespace
+
+std::uint32_t Pathfinder::classWord(const PathfindCell &c)
+{
+	return ::classWord(c);
+}
+
+void Pathfinder::setClassWordWide(PathfindCell &c, std::uint32_t w)
+{
+	::setClassWord(c, w);
+}
 
 void PathfindRequestRing::xfer(Xfer &x)
 {
@@ -113,7 +138,7 @@ void PathfindZoneManager::xfer(Xfer &x)
 		return;
 	}
 	m_tables.clear();
-	// the closed sets: a block per block of the extent, a zone's class (a cell type 0 .. 7, layers 0 .. 15), the adjacency sorted, unique, a < b, of zones
+	// the closed sets: a block per block of the extent, a zone's class (a cell type 0 .. 7, layers 0 .. LAYER_LAST, lanes WALL-1 / WALL-2), the adjacency sorted, unique, a < b, of zones
 	if (m_blockSize <= 0 || m_zoneBlockExtent.x < 0 || m_zoneBlockExtent.y < 0 ||
 		(std::uint64_t)m_zoneBlockExtent.x * (std::uint64_t)m_zoneBlockExtent.y != m_blocks.size())
 	{
@@ -169,7 +194,8 @@ std::uint32_t Pathfinder::configHash() const
 
 void Pathfinder::xfer(Xfer &x)
 {
-	XferVersion v{ 1, 2 }; // 2: the Uber profile's limits, the request rings' lengths and the burst latch (lane PATHPERF-4)
+	XferVersion v{ 1, 3 }; // 2: the Uber profile's limits, the request rings' lengths and the burst latch (lane PATHPERF-4); 3: the walls, the raised
+	                       // walkways and the portals (lanes WALL-1 / WALL-2), the wide class words
 	x.xferVersion(v);
 	const int version = v.current;
 	const bool loading = x.isLoading();
@@ -235,7 +261,16 @@ void Pathfinder::xfer(Xfer &x)
 			at += run;
 		}
 	};
-	runs([](const PathfindCell &c) { return classWord(c); }, words, [&](std::uint32_t &w) { x.xferUnsignedInt(&w); checkClassWord(w); }, "class words");
+	runs([](const PathfindCell &c) { return classWord(c); }, words,
+		[&](std::uint32_t &w) {
+			x.xferUnsignedInt(&w);
+			checkClassWord(w, version);
+			if (version < 3)
+			{
+				w = widenClassWord(w);
+			}
+		},
+		"class words");
 	runs([](const PathfindCell &c) { return (std::uint16_t)c.getZone(); }, zones, [&](std::uint16_t &z) { x.xferUnsignedShort(&z); }, "zones");
 	// the cells with a cell info, in index order (the cell (x, y) is m_blockOfMapCells[x * stride + y], Pathfinder::getCell): the obstacle id, the flags, a
 	// mask of the occupant kinds that have a chain, then those chains in order
@@ -392,6 +427,11 @@ void Pathfinder::xfer(Xfer &x)
 	{
 		x.xferBool(&uberBurst);
 	}
+	WallState walls;
+	if (version >= 3)
+	{
+		xferWalls(x, walls);
+	}
 	if (!loading)
 	{
 		return;
@@ -409,6 +449,17 @@ void Pathfinder::xfer(Xfer &x)
 		if (zones[i] != 0 && zones[i] >= zm.zoneCount())
 		{
 			throw XferException("pathfinder: cell " + std::to_string(i) + " is in the zone " + std::to_string(zones[i]) + " of " + std::to_string(zm.zoneCount()));
+		}
+	}
+	// lanes WALL-1 / WALL-2: a raised cell's zone too (the raised layers' zones are numbered after the ground's in the same table, AIPathfindZones.cpp)
+	for (const WallState::Raised &r : walls.raised)
+	{
+		for (std::uint16_t z : r.zones)
+		{
+			if (z != 0 && z >= zm.zoneCount())
+			{
+				throw XferException("pathfinder: a raised cell is in the zone " + std::to_string(z) + " of " + std::to_string(zm.zoneCount()));
+			}
 		}
 	}
 	for (const LoadedInfo &li : infos)
@@ -536,6 +587,7 @@ void Pathfinder::xfer(Xfer &x)
 	m_stops = std::move(stops);
 	m_uberBurst = uberBurst;
 	m_uberLimits = uberLimits;
+	applyWalls(walls, version >= 3);
 }
 
 void Path::xfer(Xfer &x)

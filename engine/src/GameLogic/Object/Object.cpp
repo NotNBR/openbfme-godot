@@ -909,6 +909,15 @@ void Object::friend_onBuildComplete()
 	}
 }
 
+void Object::friend_onMapPlacement(const Dict *properties)
+{
+	// lane WALL-2, RW 0x694692 .. 0x6946BF: the +0xC interface's slot 45 of every module
+	for (size_t i = 0; i < m_modules.size(); ++i)
+	{
+		m_modules[i]->onMapPlacement(properties);
+	}
+}
+
 void Object::friend_onDie(const DieModuleInterface::Event &event)
 {
 	// RW 0x698F06 (the dead flag RW + 0x458 bit 0 first: from now on the object is no target and takes no more damage)

@@ -57,7 +57,7 @@ void AIWorld::xferBody(Xfer &x)
 	}
 	m_pathfinder->xfer(x);
 	// the pathfinder views' layers (a view exists from the object's first pathfinder use; a view the snapshot does not name is on the ground): read and
-	// checked (an object of the game, named once, a layer 0 .. 15) before any layer changes
+	// checked (an object of the game, named once, a layer 0 .. LAYER_LAST: the wall layers reach 0x40, lane WALL-1) before any layer changes
 	std::vector<std::pair<ObjectID, PathfindLayerEnum>> views;
 	if (!loading)
 	{

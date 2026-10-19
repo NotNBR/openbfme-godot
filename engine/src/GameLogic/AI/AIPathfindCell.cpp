@@ -39,6 +39,7 @@ void PathfindCellInfoPool::addBlock(int count)
 		info.m_cell = nullptr;
 		info.m_totalCost = 0;
 		info.m_costSoFar = 0;
+		info.m_viaPortal = 0;
 		info.m_pos = ICoord2D();
 		info.m_obstacleID = PATHFIND_INVALID_ID;
 		for (int k = 0; k < OCC_KIND_COUNT; ++k)
@@ -92,6 +93,7 @@ PathfindCellInfo *PathfindCellInfoPool::get(PathfindCell *cell, const ICoord2D &
 		info->m_pathParent = nullptr;
 		info->m_costSoFar = 0;
 		info->m_totalCost = 0;
+		info->m_viaPortal = 0;
 		info->m_open = 0;
 		info->m_closed = 0;
 		info->m_obstacleID = PATHFIND_INVALID_ID;
@@ -190,6 +192,7 @@ bool PathfindCell::startPathfind(PathfindCell *goalCell)
 	m_info->m_nextOpen = nullptr;
 	m_info->m_prevOpen = nullptr;
 	m_info->m_pathParent = nullptr;
+	m_info->m_viaPortal = 0;
 	m_info->m_costSoFar = 0;
 	m_info->m_totalCost = 0;
 	if (goalCell)
@@ -204,6 +207,14 @@ bool PathfindCell::startPathfind(PathfindCell *goalCell)
 void PathfindCell::setParentCell(PathfindCell *parent)
 {
 	m_info->m_pathParent = parent->m_info;
+	m_info->m_viaPortal = 0; // lane WALL-2 (see the header)
+}
+
+void PathfindCell::setParentCellViaPortal(PathfindCell *parent, std::uint16_t portalSlot)
+{
+	// RW 0x93443D: info + 8 = the parent's record, info + 0xC = the waypoint
+	m_info->m_pathParent = parent ? parent->m_info : nullptr;
+	m_info->m_viaPortal = portalSlot;
 }
 
 bool PathfindCell::allocateInfo(PathfindCellInfoPool &pool, const ICoord2D &pos)
@@ -350,6 +361,18 @@ bool PathfindCell::removeObstacle(PathfindCellInfoPool &pool, const PathfindObje
 		return false;
 	}
 	if (m_info->m_obstacleID != obstacle.getID())
+	{
+		return false;
+	}
+	m_type = CELL_CLEAR;
+	m_info->m_obstacleID = PATHFIND_INVALID_ID;
+	releaseInfo(pool);
+	return true;
+}
+
+bool PathfindCell::removeObstacleId(PathfindCellInfoPool &pool, PathfindObjectID id)
+{
+	if (!m_info || id == PATHFIND_INVALID_ID || m_info->m_obstacleID != id)
 	{
 		return false;
 	}

@@ -109,13 +109,13 @@ TEST_CASE("module coverage: every registry class is ported, base AI, parsed only
 	// DualWeaponBehavior: +2 -> 121 / 186; GARRISON-2 (TransportContain, HordeTransportContain, SiegeEngineContain, HordeSiegeEngineContain,
 	// TunnelContain): +5 -> 126 / 181; MOD-4 (AISpecialPowerUpdate, RepairSpecialPower, SpawnBehavior, SlavedUpdate): +4 -> 130 / 177;
 	// AUDIO-4 (LargeGroupAudioUpdate, AnimationSoundClientBehavior): +2 -> 132 / 175; CAMP-1 (AttachUpdate): +1 -> 133 / 174;
-	// HUD-5 (GateOpenAndCloseBehavior, AIGateUpdate): +2 -> 135 / 172; DECOMP-2 (ModelCondition / Upgrade / RandomSoundSelectorClientBehavior): +3 -> 138 / 169; SPELL-3 (FloodUpdate): +1 -> 139 / 168; FACT-B (WeaponChangeSpecialPowerModule, CastleUpgrade): +2 -> 141 / 166; FACT-A (ObjectCreationUpgrade, ReplaceSelfUpgrade; its CastleUpgrade is FACT-B's): +2 -> 143 / 164; FACT-C (HordeDispatchSpecialPower; its ObjectCreationUpgrade is FACT-A's, replaced by FACT-C's port): +1 -> 144 / 163; FLY-1 (GiantBirdAIUpdate: base AI -> ported): 145, base AI 8
+	// HUD-5 (GateOpenAndCloseBehavior, AIGateUpdate): +2 -> 135 / 172; DECOMP-2 (ModelCondition / Upgrade / RandomSoundSelectorClientBehavior): +3 -> 138 / 169; SPELL-3 (FloodUpdate): +1 -> 139 / 168; FACT-B (WeaponChangeSpecialPowerModule, CastleUpgrade): +2 -> 141 / 166; FACT-A (ObjectCreationUpgrade, ReplaceSelfUpgrade; its CastleUpgrade is FACT-B's): +2 -> 143 / 164; FACT-C (HordeDispatchSpecialPower; its ObjectCreationUpgrade is FACT-A's, replaced by FACT-C's port): +1 -> 144 / 163; FLY-1 (GiantBirdAIUpdate: base AI -> ported): 145, base AI 8; WALL-2 (DynamicPortalBehaviour, FakePathfindPortalBehaviour): +2
 	// S-1991: BloodthirstyUpdate moves from missing to ported.
-	CHECK(c.ported == 146);
+	CHECK(c.ported == 148); // + WALL-2's DynamicPortalBehaviour and FakePathfindPortalBehaviour
 	CHECK(c.baseAi == 8);
 	// S-207: SpawnUnitBehavior data is parsed-only; its runtime remains unported (S-140).
 	CHECK(c.parsedOnly == 14);
-	CHECK(c.missing == 161); // merge of the archive (S-207 SpawnUnitBehavior missing -> parsed only) with S-1991 (BloodthirstyUpdate missing -> ported)
+	CHECK(c.missing == 159); // merge of the archive (S-207 SpawnUnitBehavior missing -> parsed only) with S-1991 (BloodthirstyUpdate missing -> ported)
 
 	if (const char *out = std::getenv("OPENBFME_MODULE_COVERAGE_OUT"))
 	{

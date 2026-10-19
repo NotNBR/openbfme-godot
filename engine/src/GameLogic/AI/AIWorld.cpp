@@ -3,6 +3,7 @@
 
 #include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/Object/ObjectGeometry.h"
+#include "GameLogic/Module/PortalModules.h"
 #include "GameLogic/Module/CollideModule.h"
 
 #include "Common/ArchiveFileSystem.h"
@@ -14,7 +15,9 @@
 #include "Common/Team.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/AI/AIPathfindConfig.h"
+#include "GameLogic/AI/AIPathfindStops.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/SkirmishAI/SkirmishAIManager.h"
 #include "GameLogic/AI/AIGroup.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Object/Contain/HordeContainRuntime.h"
@@ -259,7 +262,7 @@ void buildInfo(const ThingTemplate &tt, INIEnvironment &env, ObjectMovementInfo 
 	{
 		out.formationDepth = (int)v;
 	}
-	bool gates = false;
+	bool gates = true;
 	if (boolField(tt, "CanPathThroughGates", gates))
 	{
 		out.canPathThroughGates = gates;
@@ -449,6 +452,31 @@ bool ObjectPathfindAdapter::isMobile() const
 	return !isKindOf(PK_IMMOBILE);
 }
 
+const PathfindWallGeometry *ObjectPathfindAdapter::getWallGeometry() const
+{
+	PathfindWallMeshSource *source = m_world.wallMeshes();
+	if (!source)
+	{
+		return nullptr;
+	}
+	const Coord3D &p = *m_object->getPosition();
+	const float angle = m_object->getOrientation(), scale = m_object->getInstanceScale();
+	const ThingTemplate *tt = m_object->getTemplate();
+	if (!m_wallLooked || tt != m_wallTemplate || p.x != m_wallPos.x || p.y != m_wallPos.y || p.z != m_wallPos.z || angle != m_wallAngle || scale != m_wallScale ||
+		m_object->getModelConditionBits() != m_wallBits)
+	{
+		m_wallLooked = true;
+		m_wallTemplate = tt;
+		m_wallPos = p;
+		m_wallAngle = angle;
+		m_wallScale = scale;
+		m_wallBits = m_object->getModelConditionBits();
+		m_wallGeometry = PathfindWallGeometry();
+		m_hasWall = source->wallGeometry(*m_object, m_wallGeometry) && !m_wallGeometry.empty();
+	}
+	return m_hasWall ? &m_wallGeometry : nullptr;
+}
+
 bool ObjectPathfindAdapter::isKindOf(PathfindKind kind) const
 {
 	const int bit = kindBits().bit[(int)kind];
@@ -506,6 +534,14 @@ bool ObjectPathfindAdapter::isComputerControlled() const
 	return p && p->getPlayerType() == PLAYER_COMPUTER;
 }
 
+bool ObjectPathfindAdapter::isSkirmishAIControlled() const
+{
+	// lane WALL-2, RW 0x6822E2 .. 0x682307: the player's skirmish AI flag (RW 0x6AAC66: player + 0x34 -> + 0x151; INFERENCE S-4851: a computer player) and
+	// TheSkirmishAIManager's AI for the player (RW 0x6A950B: the port's SkirmishAIManager::findAI)
+	const Player *p = m_object->getControllingPlayer();
+	return p && p->getPlayerType() == PLAYER_COMPUTER && m_object->logic().skirmishAI().findAI(p->getPlayerIndex()) != nullptr;
+}
+
 unsigned ObjectPathfindAdapter::getCrusherLevel() const { return info().crusherLevel; }
 
 PathfindRelationship ObjectPathfindAdapter::getRelationship(const PathfindObject &other) const
@@ -553,6 +589,13 @@ bool ObjectPathfindAdapter::isParked() const
 }
 
 bool ObjectPathfindAdapter::hasAI() const { return m_object->getAIUpdateInterface() != nullptr; }
+
+bool ObjectPathfindAdapter::inMoveAwaySearch() const
+{
+	// lane WALL-2: RW AI + 0x3CF, set only around the two getMoveAwayFromPath calls (RW 0x66DBFB / 0x66DC4B)
+	const AIUpdateInterface *ai = m_object->getAIUpdateInterface();
+	return ai && ai->movingAwaySearch();
+}
 
 PathfindObjectID ObjectPathfindAdapter::getIgnoredObstacleID() const
 {
@@ -929,6 +972,89 @@ PathfindObject *AIWorld::findObjectByID(PathfindObjectID id) const
 unsigned AIWorld::getFrame() const
 {
 	return m_logic.getFrame();
+}
+
+// lane WALL-2: RW 0x668AF8 AIUpdateInterface::notifyPathHasInvalidPortals (BFME2 WB 0xe599c0 the same body):
+//   * a unit that is not a HORDE inside a container (RW 0x693A1A) passes it on to the container's AI when that has a path, else its path goes (RW 0x66276B);
+//   * else the waypoint of the point ahead on its path (RW 0x766173, (node's next optimised ?: node) + 0x20): none, or still there -> the path goes; gone ->
+//     a unit that is not a HORDE dies (RW 0x698EC3 kill(8, 0)); a HORDE classifies its members before / on / after the portal (the horde contain's slot 0x21C,
+//     HordeContain::ClassifyBeforeOnAfterInvalidPortal), kills the ones on it (and the smaller side), clears the others' paths and stands past the portal
+//     when more were after it: NOT PORTED (stop S-4852, reported): the horde's and its members' paths go;
+//   * the path goes.
+static void notifyPathHasInvalidPortals(AIWorld &world, AIUpdateInterface &ai)
+{
+	Object &obj = ai.adapter().object();
+	if (!obj.isKindOfName("HORDE"))
+	{
+		if (Object *top = obj.getContainedBy())
+		{
+			AIUpdateInterface *cai = world.aiOf(*top);
+			if (!cai)
+			{
+				return;
+			}
+			if (cai->mover().path())
+			{
+				notifyPathHasInvalidPortals(world, *cai);
+			}
+			else
+			{
+				ai.mover().destroyPath();
+			}
+			return;
+		}
+	}
+	Path *path = ai.mover().path();
+	if (!path)
+	{
+		return;
+	}
+	const LocomotorPathPoint pt = path->computePointAhead(ai.locomotor() ? ai.locomotor()->speed() : 40.0f);
+	const PathNode *node = path->lastAheadNode();
+	const PathNode *n = node ? (node->getNextOptimized() ? node->getNextOptimized() : node) : nullptr;
+	(void)pt;
+	const int id = n ? n->getWaypointID() : PathNode::NO_WAYPOINT;
+	if (id != PathNode::NO_WAYPOINT && world.pathfinder().findWaypoint(id) == nullptr)
+	{
+		if (!obj.isKindOfName("HORDE"))
+		{
+			obj.kill(0); // RW 0x668D6A: kill(8, 0)
+			return;
+		}
+		world.pathfinder().noteStop(pathstops::kPortalLostHorde);
+		for (Object *o = world.logic().getFirstObject(); o; o = o->getNextObject())
+		{
+			if (o->getContainedBy() == &obj)
+			{
+				if (AIUpdateInterface *mai = world.aiOf(*o))
+				{
+					mai->mover().destroyPath();
+				}
+			}
+		}
+	}
+	ai.mover().destroyPath();
+}
+
+std::function<bool(const PathfindObject &)> AIWorld::portalFilterOf(PathfindObjectID owner) const
+{
+	Object *o = m_logic.findObjectByID((ObjectID)owner);
+	const DynamicPortalBehaviour *p = o ? DynamicPortalBehaviour::of(*o) : nullptr;
+	return p ? p->waypointFilter() : std::function<bool(const PathfindObject &)>();
+}
+
+void AIWorld::onPathsLostPortals() const
+{
+	AIWorld &self = const_cast<AIWorld &>(*this);
+	// RW 0x6E8454: TheGameLogic's objects (first RW 0x97338F, next + 0x8C), those with an AI (+ 0x260) whose path (+ 0x140) has invalid portals (RW 0x76573F)
+	for (Object *o = m_logic.getFirstObject(); o; o = o->getNextObject())
+	{
+		AIUpdateInterface *ai = aiOf(*o);
+		if (ai && ai->mover().path() && ai->mover().path()->hasInvalidPortals())
+		{
+			notifyPathHasInvalidPortals(self, *ai);
+		}
+	}
 }
 
 const ObjectMovementInfo &AIWorld::movementInfo(const ThingTemplate &tt)
