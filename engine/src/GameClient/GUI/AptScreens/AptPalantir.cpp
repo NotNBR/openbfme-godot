@@ -333,12 +333,12 @@ void AptPalantir::syncFrames(const std::vector<ControlBarButton> &buttons, bool 
 			const ControlBarButton *button = nullptr;
 			for (const auto &b : buttons) if (b.position == i) { button = &b; break; }
 			const std::string number = std::to_string(i + 1);
-			const std::string state = !button ? "_unused" : commandStateName(button->state, button->button ? button->button->m_options : 0u);
+			const std::string state = !button ? "_disabled" : commandStateName(button->state, button->button ? button->button->m_options : 0u);
 			const std::string sig = state + (button ? button->image : std::string());
 			if (m_arc[i].sig != sig) { call("", "SetCommandButtonState", { number, state }); m_arc[i].sig = sig; }
 			const std::string frame = "CommandButtons.Command" + number;
 			m_arcFramePath[i] = frame;
-			m_arc[i].created = button != nullptr;
+			m_arc[i].created = true;
 			m_arc[i].slot = button ? button->slot : -1;
 			m_images[levelPrefix() + frame] = NativeImage{ button ? button->image : std::string(), button && button->state == ButtonState::Restricted };
 			windows().setAptText("APT:PalantirCommand" + number + "ProductionCount", button && button->queued > 0 ? "x" + std::to_string(button->queued) : " ");
@@ -368,6 +368,12 @@ void AptPalantir::syncFrames(const std::vector<ControlBarButton> &buttons, bool 
 				") has no frame in the movie (RW 0x92F082 stops at the first missing frame)");
 		}
 	}
+	// Empty arc slots retain their inert button content so the six circular
+	// frames remain drawn after selection is cleared. Slot -1 cannot dispatch.
+	ControlBarButton empty;
+	empty.slot = -1;
+	empty.state = ButtonState::Restricted;
+	if (arc) for (int i = 0; i < positions; ++i) if (!at[i]) at[i] = &empty;
 	for (int i = 0; i < positions; ++i)
 	{
 		// the clip of position i: the frame the movie reported for it (lane HUD-4; the arc's are CommandButtons.<i>, the side bar's
@@ -802,7 +808,9 @@ void AptPalantir::sync(const ControlBar &bar)
 		// (the faction icon of the resource bar: syncLocal)
 		m_started = true;
 		call("", "SetPalantirFrameState", { m_evil ? "_evil" : "_good" });
-		m_arcShown = true; // the arc starts shown by the frame state: hide it until a selection has commands
+		if (m_bfme1) call("", "ShowCommandInterface", {});
+		else call("CommandButtons", "gotoAndPlay", { "_show" });
+		m_arcShown = true; // the frame state shows the six command slots
 		m_sideShown = true;
 	}
 	syncLocal();
@@ -814,7 +822,8 @@ void AptPalantir::sync(const ControlBar &bar)
 		windows().setAptText("APT:PalantirCommandPoints", std::to_string(bar.commandPointsUsed()) + "/" + std::to_string(bar.commandPointsLimit()));
 		windows().setAptText("APT:PalantirResourceMultiplier", "x1"); // the territory multiplier is the economy's (stop S-290)
 	}
-	const bool wantArc = !bar.palantirButtons().empty();
+	// OpenBFME: the six-slot frame stays visible even when no commands are assigned.
+	const bool wantArc = true;
 	if (wantArc != m_arcShown)
 	{
 		m_arcShown = wantArc;
