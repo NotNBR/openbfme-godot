@@ -62,6 +62,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <set>
 #include <string>
@@ -769,7 +770,10 @@ private:
 
 	std::vector<PhaseWork> m_phaseWork;
 	std::map<const ThingTemplate *, ObjectTemplateInfo> m_templateInfo; ///< looked up only, never iterated
-	std::map<const ThingTemplate *, std::unique_ptr<CrushTemplateInfo>> m_crushInfo; ///< looked up only, never iterated
+	std::unordered_map<const ThingTemplate *, std::unique_ptr<CrushTemplateInfo>> m_crushInfo; ///< looked up only, never iterated
+	// lane WALL-1 (performance: a lookup per colliding pair): the infos by template id, each slot with the template it holds (an override shares its
+	// base's id: a slot taken by another template sends the lookup to m_crushInfo); filled only where m_crushInfo is (on the logic thread)
+	std::vector<std::pair<const ThingTemplate *, const CrushTemplateInfo *>> m_crushById;
 	std::vector<std::string> m_errors;
 	const TerrainLogic *m_terrain = nullptr;
 	AICommandSink m_aiCommands;

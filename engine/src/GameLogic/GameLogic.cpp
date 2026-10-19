@@ -201,14 +201,28 @@ void GameLogic::invalidateTemplateInfo()
 {
 	m_templateInfo.clear();
 	m_crushInfo.clear();
+	m_crushById.clear();
 }
 
 const CrushTemplateInfo &GameLogic::crushInfo(const ThingTemplate *finalOverride)
 {
+	const size_t id = finalOverride->getTemplateID();
+	if (id < m_crushById.size() && m_crushById[id].first == finalOverride)
+	{
+		return *m_crushById[id].second;
+	}
 	auto it = m_crushInfo.find(finalOverride);
 	if (it == m_crushInfo.end())
 	{
 		it = m_crushInfo.emplace(finalOverride, std::make_unique<CrushTemplateInfo>(CrushTemplateInfo::of(*finalOverride))).first;
+	}
+	if (id >= m_crushById.size())
+	{
+		m_crushById.resize(id + 1, { nullptr, nullptr });
+	}
+	if (!m_crushById[id].first)
+	{
+		m_crushById[id] = { finalOverride, it->second.get() }; // the first template of the id keeps the slot
 	}
 	return *it->second;
 }
@@ -924,6 +938,7 @@ void GameLogic::reset()
 	m_objectsById.clear();
 	m_templateInfo.clear();
 	m_crushInfo.clear();
+	m_crushById.clear();
 	m_frame = 0;
 	m_gameDifficulty = 1; // lane CAMP-1H: GameLogic::reset RW 0x62D3EB (+ 0xA4 = 1)
 	m_nextObjectID = 1;
