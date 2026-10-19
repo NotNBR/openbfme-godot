@@ -561,6 +561,12 @@ public:
 	// is not ported (S-129)
 	typedef std::function<void(Object &self, const std::array<std::uint32_t, 19> &before)> ModelConditionEventProc;
 	void setModelConditionEventProc(ModelConditionEventProc proc) { m_modelConditionEventProc = std::move(proc); }
+	// S-090 inference: authored animation-state events run before the client flush.
+	void setAnimationConditionEventProc(ModelConditionEventProc proc) { m_animationConditionEventProc = std::move(proc); }
+	void animationConditionEvents(Object &obj, const std::array<std::uint32_t, 19> &before)
+	{
+		if (m_animationConditionEventProc) m_animationConditionEventProc(obj, before);
+	}
 	void scriptModelConditionEvents(Object &self, std::array<std::uint32_t, 19> &snapshot);
 	typedef std::function<void(Object &)> WorldHook;
 	void setWorldHooks(WorldHook entered, WorldHook left)
@@ -793,6 +799,7 @@ private:
 	ObjectCreatedProc m_objectCreatedProc;
 	ScriptEventProc m_scriptEventProc;
 	ModelConditionEventProc m_modelConditionEventProc;
+	ModelConditionEventProc m_animationConditionEventProc;
 	unsigned long long m_scriptEventsWithoutDispatch = 0;
 	WorldHook m_enteredWorld, m_leftWorld;
 	struct ExtraHooks
