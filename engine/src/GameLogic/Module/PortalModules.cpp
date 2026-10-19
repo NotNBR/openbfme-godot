@@ -235,6 +235,30 @@ DynamicPortalBehaviour *DynamicPortalBehaviour::of(const Object &obj)
 	return dynamic_cast<DynamicPortalBehaviour *>(obj.findModule("DynamicPortalBehaviour"));
 }
 
+Coord3D DynamicPortalBehaviour::topAttackPosition()
+{
+	// RW 0x863D77 (lane SIEGE-1's reading): the object's planar X axis normalised by its larger component, its length scales TopAttackPos's X and Y; the point
+	// through the object's transform (RW 0x70BFD1)
+	using SimMath::addf32;
+	using SimMath::mulf32;
+	const Object *obj = getObject();
+	const float *b = obj->getBasis();
+	const Coord3D &p = *obj->getPosition();
+	const Coord3D &t = m_data->m_topAttackPos;
+	const double ax = SimMath::absD((double)b[0]), ay = SimMath::absD((double)b[3]);
+	const float m = (float)(ax >= ay ? ax : ay);
+	float lx = t.x, ly = t.y;
+	if (m != 0.0f)
+	{
+		const float len = SimMath::length2d(SimMath::divf32(b[0], m), SimMath::divf32(b[3], m));
+		lx = mulf32(t.x, len);
+		ly = mulf32(t.y, len);
+	}
+	return Coord3D{ addf32(addf32(addf32(mulf32(b[0], lx), mulf32(b[1], ly)), mulf32(b[2], t.z)), p.x),
+		addf32(addf32(addf32(mulf32(b[3], lx), mulf32(b[4], ly)), mulf32(b[5], t.z)), p.y),
+		addf32(addf32(addf32(mulf32(b[6], lx), mulf32(b[7], ly)), mulf32(b[8], t.z)), p.z) };
+}
+
 int DynamicPortalBehaviour::bones(std::vector<Coord3D> &out) const
 {
 	// RW 0x68C650(prefix, NumberOfBones, positions[16], null, toWorld, 0): the drawable's bones prefix01 .. (RW 0x672A73 with start index 1), each to the world
