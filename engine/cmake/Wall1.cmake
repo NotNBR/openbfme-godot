@@ -8,4 +8,5 @@ list(APPEND OPENBFME_SIM_SOURCES
 )
 set(OPENBFME_WALL1_TESTS
     tests/test_wall1_walls.cpp
+    tests/test_wall1_battle.cpp
 )
