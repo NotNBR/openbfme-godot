@@ -982,6 +982,10 @@ void HudDevice::drawIconOps(RID parent)
 	{
 		for (const IconUIOp &op : hud->iconOps())
 		{
+			if (op.stageTextSize > 0.0f)
+			{
+				continue; // a money text is anchored to its own building and grows through its size (below), not about a group's centre
+			}
 			const Rect2 r(op.x, op.y, op.w, op.h);
 			auto it = groups.find(op.object);
 			if (it == groups.end())
@@ -1005,7 +1009,7 @@ void HudDevice::drawIconOps(RID parent)
 	for (const IconUIOp &raw : hud->iconOps())
 	{
 		IconUIOp op = raw;
-		if (k != 1.0f)
+		if (k != 1.0f && raw.stageTextSize <= 0.0f)
 		{
 			const Vector2 c = groups[raw.object].get_center();
 			op.x = c.x + (raw.x - c.x) * k;
@@ -1044,10 +1048,14 @@ void HudDevice::drawIconOps(RID parent)
 					continue;
 				}
 				const String text = String::utf8(op.text.c_str());
-				const Vector2 size = font->get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fontSize);
-				const Vector2 at(op.x - std::floor(size.x / 2.0f), op.y + font->get_ascent(fontSize)); // RW 0x677F1B: x - width / 2, the string's top at y
-				font->draw_string(iconItem, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fontSize, col(op.dropColor));
-				font->draw_string(iconItem, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fontSize, col(op.color));
+				// a stage-sized text (the money texts) grows with the window as the HUD movies do: the window height over the 600 stage rows
+				const float stageScale = op.stageTextSize > 0.0f ? std::max(1.0f, (float)hud->windowHeight() / 600.0f) : 1.0f;
+				const int size_px = op.stageTextSize > 0.0f ? (int)std::lround(op.stageTextSize * stageScale * k) : fontSize;
+				const float drop = op.stageTextSize > 0.0f ? std::max(1.0f, std::round(stageScale)) : 1.0f;
+				const Vector2 size = font->get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px);
+				const Vector2 at(op.x - std::floor(size.x / 2.0f), op.y + font->get_ascent(size_px)); // RW 0x677F1B: x - width / 2, the string's top at y
+				font->draw_string(iconItem, at + Vector2(drop, drop), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, col(op.dropColor));
+				font->draw_string(iconItem, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, col(op.color));
 				break;
 			}
 		}
@@ -2213,6 +2221,24 @@ Dictionary InGameHudNode::get_state() const
 	if (!d->hud)
 	{
 		return s;
+	}
+	{
+		// the money texts (GameClient/FloatingText.h)
+		Array texts;
+		for (const FloatingTextList::Record &r : d->hud->floatingText().records())
+		{
+			Dictionary t;
+			t["text"] = String::utf8(r.text.c_str());
+			t["x"] = r.pos.x;
+			t["y"] = r.pos.y;
+			t["z"] = r.pos.z;
+			t["alpha"] = (int64_t)(r.color >> 24);
+			t["color"] = (int64_t)(r.color & 0xFFFFFFu);
+			t["frames"] = (int64_t)r.frameCount;
+			texts.push_back(t);
+		}
+		s["floating_texts"] = texts;
+		s["floating_texts_added"] = (int64_t)d->hud->floatingText().added();
 	}
 	const InGameUI &ui = d->hud->input().ui();
 	s["cursor"] = toGodot(ui.cursor());

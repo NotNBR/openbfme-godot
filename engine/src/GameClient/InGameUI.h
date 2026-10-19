@@ -6,7 +6,7 @@
 // flags and a list with push_front; here the ids of the selected objects, the NEWEST first: the first one drives the control bar); the simulation's selection is Player::selection(),
 // changed only by the selection messages the translators append (MSG_CREATE_SELECTED_GROUP ...), never from here.
 //
-// What is not ported (stop S-283): the radius cursor decals, the military subtitles, floating text, superweapon timers, the popup messages, the
+// What is not ported (stop S-283): the radius cursor decals, the military subtitles, superweapon timers, the popup messages, the
 // beacon / replay controls, the "can selected objects do X" queries beyond what the translators call and
 // the alternate mouse bookkeeping (RotWK's default setup is the alternate one, RW 0x642A4B: CommandTranslator::setUseAlternateMouse, lane PLAY-1).
 
