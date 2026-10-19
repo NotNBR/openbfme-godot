@@ -50,6 +50,8 @@ class ModuleFactory;
 class DeployStyleAIUpdate : public AIUpdateInterface
 {
 public:
+	OBFME_MODULE_XFER(DeployStyleAIUpdate) // the save (SAVE-4e): its version and AIUpdateInterface's (its state: xferAIStateBody)
+	void xferAIStateBody(class Xfer &x) override; // the deploy state, the kept command, the attack flags (obfme:AIWorld)
 	enum DeployState
 	{
 		READY_TO_MOVE = 0,
@@ -126,6 +128,7 @@ public:
 class ToggleDeploySpecialAbilityUpdate : public SpecialAbilityUpdate
 {
 public:
+	OBFME_MODULE_XFER(ToggleDeploySpecialAbilityUpdate) // the save (SAVE-4b): SpecialAbilityUpdate's and the counts
 	ToggleDeploySpecialAbilityUpdate(Thing *thing, const ToggleDeploySpecialAbilityUpdateModuleData *data); // RW 0x8B1B87
 	bool allowsSpecialPowerUse() const override; // RW 0x8B1C5F
 	unsigned deploys() const { return m_deploys; }

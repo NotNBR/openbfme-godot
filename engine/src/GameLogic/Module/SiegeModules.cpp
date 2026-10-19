@@ -10,6 +10,7 @@
 #include "Common/SpecialPower.h"
 #include "Common/StateHash.h"
 #include "Common/Xfer.h"
+#include "GameLogic/SnapshotXfer.h"
 #include "Common/Thing/ModuleFactory.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/AI/AIGarrisonStates.h"
@@ -210,6 +211,8 @@ public:
 		: AIUpdateInterface(thing, data)
 	{
 	}
+	// the save (SAVE-4e): its version and AIUpdateInterface's (no state of its own, as DozerAIUpdate's)
+	OBFME_MODULE_XFER(SiegeAIUpdate)
 	bool allowedToRespondToCommand(CommandSourceType source, int command) const override
 	{
 		if (!AIUpdateInterface::allowedToRespondToCommand(source, command)) // RW 0x667174
@@ -229,6 +232,12 @@ public:
 		return true;
 	}
 };
+void SiegeAIUpdate::xfer(Xfer &x)
+{
+	XferVersion v{ 1, 1 };
+	x.xferVersion(v);
+	AIUpdateInterface::xfer(x);
+}
 } // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -475,6 +484,20 @@ Coord3D SiegeDockingBehavior::dockDirection(int index) const
 	return *getObject()->getPosition();
 }
 
+void SiegeDockingBehavior::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	xferUpdateModule(x);
+	x.xferBool(&m_initialized);
+	SnapshotXfer::each(x, m_entries, 36, [&](Entry &e) { // index, type, two coordinates, the reserving id
+		x.xferInt(&e.index);
+		SnapshotXfer::enumIn(x, e.type, 0, 1, "a siege dock's bone type"); // 0 a SIEGETOWER bone, 1 a SIEGELADDER bone
+		SnapshotXfer::coord3D(x, e.position);
+		SnapshotXfer::coord3D(x, e.direction);
+		x.xferObjectID(&e.reservedBy);
+	});
+}
+
 void SiegeDockingBehavior::crc(StateHasher &h) const
 {
 	UpdateModule::crc(h);
@@ -661,6 +684,17 @@ void SpecialPowerUpdateBase::doSpecialPowerAtLocation(const Coord3D &loc, unsign
 	}
 }
 
+void SpecialPowerUpdateBase::xferSpecialPowerUpdateBase(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	xferUpdateModule(x);
+	x.xferUnsignedInt(&m_readyFrame);
+	x.xferInt(&m_pauseCount);
+	SnapshotXfer::checkRange(m_pauseCount, 0, 0x7FFFFFFF, "a special power update's pause count");
+	x.xferUnsignedInt(&m_pauseFrame);
+	x.xferReal(&m_pausedPercent);
+}
+
 void SpecialPowerUpdateBase::crc(StateHasher &h) const
 {
 	UpdateModule::crc(h);
@@ -786,6 +820,15 @@ UpdateSleepTime SiegeDeployHordeSpecialPower::update()
 	ai->aiIdle(CMD_FROM_AI);
 	ai->aiMoveToPosition(m_deployPosition, CMD_FROM_AI); // RW 0x66C4CA
 	return UPDATE_SLEEP_FOREVER;
+}
+
+void SiegeDeployHordeSpecialPower::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	xferSpecialPowerUpdateBase(x);
+	x.xferObjectID(&m_targetId);
+	SnapshotXfer::coord3D(x, m_deployPosition);
+	x.xferUnsignedInt(&m_counter);
 }
 
 void SiegeDeployHordeSpecialPower::crc(StateHasher &h) const
@@ -1236,6 +1279,19 @@ void SiegeDeploySpecialPower::setPhase(int next)
 	}
 }
 
+void SiegeDeploySpecialPower::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	xferSpecialPowerUpdateBase(x);
+	SnapshotXfer::enumIn(x, m_phase, PHASE_IDLE, PHASE_RAISING, "a siege deploy's phase");
+	x.xferUnsignedInt(&m_frame);
+	x.xferObjectID(&m_dockId);
+	SnapshotXfer::coord3D(x, m_approach);
+	x.xferBool(&m_toggle);
+	SnapshotXfer::coord3D(x, m_direction);
+	x.xferBool(&m_stopRequested);
+}
+
 void SiegeDeploySpecialPower::crc(StateHasher &h) const
 {
 	SpecialPowerUpdateBase::crc(h);
@@ -1261,6 +1317,13 @@ StopSpecialPower::StopSpecialPower(Thing *thing, const StopSpecialPowerModuleDat
 	: SpecialPowerModule(thing, data)
 	, m_stopData(data)
 {
+}
+
+void StopSpecialPower::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	SpecialPowerModule::xfer(x);
+	x.xferUnsignedInt(&m_stops);
 }
 
 BehaviorModule *StopSpecialPower::stopTarget() const

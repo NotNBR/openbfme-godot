@@ -124,6 +124,7 @@ public:
 		ObjectID reservedBy = INVALID_ID; // + 0x20
 	};
 	SiegeDockingBehavior(Thing *thing, const SiegeDockingBehaviorModuleData *data); // RW 0x85C9C4
+	OBFME_MODULE_XFER(SiegeDockingBehavior) // the save (SAVE-4b): UpdateModule's, the dock entries and the made flag
 	UpdateSleepTime update() override;                                              // RW 0x85D216
 	void crc(StateHasher &h) const override;
 
@@ -191,6 +192,8 @@ public:
 	void pauseCountdown(bool pause) override;                                     // RW 0x99116C
 
 protected:
+	// the save of this base (SAVE-4b): UpdateModule's, the ready frame and the pause
+	void xferSpecialPowerUpdateBase(Xfer &x);
 	// RW 0x99135D: the timer's own readiness (the shared player frame for a SharedSynced template, else not paused and the ready frame reached)
 	bool readyImpl(bool insert) const;
 	// RW 0x9913BC: isReady through the vtable (a subclass's override), the paused percent, then the timer
@@ -240,6 +243,7 @@ public:
 		PHASE_RAISING = 4    // PACKING, disabled for RaiseDelay frames
 	};
 	SiegeDeploySpecialPower(Thing *thing, const SiegeDeploySpecialPowerModuleData *data); // RW 0x8C9B49
+	OBFME_MODULE_XFER(SiegeDeploySpecialPower) // the save (SAVE-4b): the base's, the phase and its frame, the dock, the approach
 	UpdateSleepTime update() override; // RW 0x8CA30F
 	void crc(StateHasher &h) const override;
 
@@ -302,6 +306,7 @@ public:
 class SiegeDeployHordeSpecialPower : public SpecialPowerUpdateBase
 {
 public:
+	OBFME_MODULE_XFER(SiegeDeployHordeSpecialPower) // the save (SAVE-4b): the base's, the target, the position, the counter
 	SiegeDeployHordeSpecialPower(Thing *thing, const SiegeDeployHordeSpecialPowerModuleData *data); // RW 0x8CA815
 	UpdateSleepTime update() override; // RW 0x8CA978
 	void initiateIntentToDoSpecialPower(const SpecialPowerTemplate *t, Object *target, const Coord3D *loc, unsigned options, int extra) override; // RW 0x8CAA12
@@ -330,6 +335,7 @@ public:
 class StopSpecialPower : public SpecialPowerModule
 {
 public:
+	OBFME_MODULE_XFER(StopSpecialPower) // the save (SAVE-4b): SpecialPowerModule's and the stop count (the found module is looked up again)
 	StopSpecialPower(Thing *thing, const StopSpecialPowerModuleData *data); // RW 0x8CABF6
 	bool isReady() const override;                           // RW 0x8CACC6
 	float getPercentReady() const override { return isReady() ? 1.0f : 0.0f; }

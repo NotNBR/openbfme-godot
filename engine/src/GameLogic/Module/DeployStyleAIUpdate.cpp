@@ -3,6 +3,8 @@
 
 #include "GameLogic/Module/DeployStyleAIUpdate.h"
 
+#include "Common/Xfer.h"
+#include "GameLogic/SnapshotXfer.h"
 #include "Common/Audio/AudioRequests.h"
 #include "Common/AsciiString.h"
 #include "Common/NumericState.h"
@@ -634,6 +636,46 @@ UpdateSleepTime DeployStyleAIUpdate::update()
 	return (UpdateSleepTime)((int)sleep < (int)base ? sleep : base); // RW 0x8929C8: cmovl
 }
 
+void DeployStyleAIUpdate::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	AIUpdateInterface::xfer(x);
+}
+
+void DeployStyleAIUpdate::xferAIStateBody(Xfer &x)
+{
+	AIUpdateInterface::xferAIStateBody(x);
+	SnapshotXfer::version(x, 1, 1);
+	// the kept command (its target by id: m_keptTarget; RoutedCommand::target is set again where the command is given, aiDoCommand)
+	x.xferInt(&m_kept.type);
+	SnapshotXfer::checkRange(m_kept.type, -1, 0x7FFFFFFF, "a deploy AI's kept command");
+	SnapshotXfer::coord3D(x, m_kept.position);
+	SnapshotXfer::enumIn(x, m_kept.source, CMD_FROM_PLAYER, CMD_FROM_AI, "a deploy AI's kept command source");
+	x.xferInt(&m_kept.waypointId);
+	x.xferReal(&m_kept.angle);
+	x.xferInt(&m_kept.maxShots);
+	m_kept.target = nullptr;
+	x.xferObjectID(&m_keptTarget);
+	x.xferBool(&m_ran);
+	x.xferBool(&m_pending);
+	x.xferInt(&m_classAtCommand);
+	x.xferInt(&m_class);
+	x.xferInt(&m_state);
+	x.xferUnsignedInt(&m_frame);
+	x.xferObjectID(&m_victim);
+	x.xferObjectID(&m_attackObject);
+	SnapshotXfer::coord3D(x, m_attackPos);
+	x.xferBool(&m_attackCommand);
+	x.xferBool(&m_attackObjectCommand);
+	x.xferBool(&m_attackPositionCommand);
+	x.xferBool(&m_attackMoveCommand);
+	x.xferBool(&m_updateAttacked);
+	x.xferBool(&m_deployRequest);
+	x.xferBool(&m_undeployRequest);
+	x.xferBool(&m_replaying);
+	x.xferUnsignedInt(&m_replays);
+}
+
 void DeployStyleAIUpdate::crc(StateHasher &h) const
 {
 	AIUpdateInterface::crc(h);
@@ -711,6 +753,14 @@ bool ToggleDeploySpecialAbilityUpdate::allowsSpecialPowerUse() const
 }
 
 // RW 0x8B1D10
+void ToggleDeploySpecialAbilityUpdate::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1);
+	SpecialAbilityUpdate::xfer(x);
+	x.xferUnsignedInt(&m_deploys);
+	x.xferUnsignedInt(&m_undeploys);
+}
+
 void ToggleDeploySpecialAbilityUpdate::triggerAbilityEffect()
 {
 	SpecialAbilityUpdate::triggerAbilityEffect(); // RW 0x853EDF
