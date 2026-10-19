@@ -18,6 +18,7 @@
 #include "GameLogic/AI/AIPathfindHost.h"
 #include "GameLogic/Locomotor.h"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -122,6 +123,15 @@ private:
 };
 
 class Pathfinder;
+struct PathfindWaypoint;
+
+// lane WALL-2: what a Path asks about the waypoint a node stands for (RW TheTerrainLogic vslot 0x8C getWaypointByID); the Pathfinder answers for its portal waypoints
+class PathfindWaypointSource
+{
+public:
+	virtual ~PathfindWaypointSource() {}
+	virtual const PathfindWaypoint *findWaypoint(int id) const = 0;
+};
 
 class Path : public LocomotorPath
 {
@@ -139,6 +149,18 @@ public:
 
 	void updateLastNode(const Coord3D *pos);
 	void prependNode(const Coord3D *pos, PathfindLayerEnum layer);
+	// lane WALL-2: the waypoints the nodes' ids name (prependCells sets it; null: no node carries one)
+	void setWaypointSource(const PathfindWaypointSource *src) { m_waypoints = src; }
+	const PathfindWaypointSource *waypointSource() const { return m_waypoints; }
+	// lane WALL-2: Path::GetNextPortalID (BFME2 WB 0xf1d500, RW 0x765710): the waypoint id of the first node from the current one that carries one
+	int nextPortalID() const;
+	// lane WALL-2: Path::AdvancePastPortal (BFME2 WB 0xf1d2b0): the current node becomes the node of `portal`, then the nodes after it that carry ids while
+	// their next one does too; the tail when none is left; t = 0
+	void advancePastPortal(int portal);
+	// lane WALL-2: RW 0x765522 (Path::hasInvalidPortals, called through RW 0x76573F): a node's waypoint id names no waypoint any more
+	bool hasInvalidPortals() const;
+	// lane WALL-2: RW 0x765522 itself (cached by RW at + 0x24): a node of the optimised chain from the head carries a waypoint id
+	bool hasWaypointNodes() const;
 	void appendNode(const Coord3D *pos, PathfindLayerEnum layer);
 	void setBlockedByAlly(bool blocked) { m_blockedByAlly = blocked; }
 	bool getBlockedByAlly() const { return m_blockedByAlly; }
@@ -188,6 +210,51 @@ private:
 	float m_t;                     // RW Path +0x14: 0..1 along the current segment
 	Coord3D m_lastAhead;           // RW Path +0x18: the point the last computePointAhead returned
 	const PathNode *m_lastAheadNode = nullptr; // the node of that point (RW PathPoint.node)
+	const PathfindWaypointSource *m_waypoints = nullptr; // lane WALL-2
+};
+
+// ---------------------------------------------------------------------------------------------------------
+// lane WALL-2: pathfind waypoints and portals (AIPathfindPortals.cpp)
+// ---------------------------------------------------------------------------------------------------------
+// RW Waypoint (0xC0 bytes, TerrainLogic.cpp; ctor RW 0x6829B0): the fields the pathfinder, the mover and the portal modules read. The dynamic ones (id 0x7FFFFFFE at
+// construction) take the next id of the counter RW 0xDA0748 (0x40000000 when the waypoint list is empty).
+enum PathfindWaypointType
+{
+	PWAYPOINT_NORMAL = 0,   // a map waypoint
+	PWAYPOINT_TYPE1 = 1,    // a portal type the mover jumps (RW 0x669EEF: put on the point ahead); no RotWK producer known
+	PWAYPOINT_WALK = 2,     // DynamicPortalBehaviour WayPoint Type:Walk (RW 0x86441E)
+	PWAYPOINT_CLIMB = 3,    // Type:Climb
+	PWAYPOINT_PRECLIMB = 4, // Type:PreClimb
+	PWAYPOINT_TYPE7 = 7,    // RW 0x6822FE: refused to a unit whose AI byte + 0x3CF is set; FakePathfindPortalBehaviour's gate pair (RW 0x864D02)
+	PWAYPOINT_MINESHAFT = 8 // MineshaftPortalBehaviour's network waypoints
+};
+
+struct PathfindWaypoint
+{
+	enum { MAX_LINKS = 8, NO_ID = 0x7FFFFFFF };
+	int id = NO_ID;                   ///< + 4
+	Coord3D pos{ 0.0f, 0.0f, 0.0f };  ///< + 0xC
+	int type = PWAYPOINT_NORMAL;      ///< + 0x60
+	int links[MAX_LINKS] = {};        ///< + 0x20 .. + 0x3C: the linked waypoints' ids (addLink RW 0x67262C keeps at most 8)
+	int numLinks = 0;                 ///< + 0x4C
+	int linkedFrom = NO_ID;           ///< + 0x40: the waypoint that links to this one (addLink sets it on the target)
+	int next = NO_ID;                 ///< + 0x44: the next intermediate waypoint of a link (DynamicPortalBehaviour's Via chain)
+	bool portal = true;               ///< + 0x48: set by the constructor and AddPortal, cleared for a Via waypoint and by RemovePortal
+	PathfindObjectID owner = PATHFIND_INVALID_ID; ///< + 0xB0: the object the portal belongs to (0: none)
+	bool allowEnemies = false;        ///< + 0xA8
+	bool allowNonSkirmishAI = true;   ///< + 0xA9 (the constructor sets it)
+	unsigned activationFrame = 0;     ///< + 0xB4: refused before this frame (0: always)
+	// + 0xB8 / + 0xBC: the module's ObjectFilter (RW 0x7640C1 accepts(obj, 0)); empty: none
+	std::function<bool(const PathfindObject &)> filter;
+	bool hasCell = false;             ///< + 0xAC (the portal cell, RW 0x67C630 setPortalCell)
+	ICoord2D cell{ 0, 0 };
+};
+
+// RW pathfinder + 0x1C1CC: one portal hop of the hierarchical corridor (12 bytes: the waypoint's id, then the cell of the portal's start), goal first
+struct PathfindPortalHop
+{
+	int waypointId = PathfindWaypoint::NO_ID;
+	ICoord2D cell{ 0, 0 };
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -223,6 +290,7 @@ public:
 	PathfindCellInfo *m_pathParent;            // also the free-list link while the record is free
 	PathfindCell *m_cell;
 	std::uint16_t m_totalCost, m_costSoFar;    // 16 bit, like retail: a search that costs more than 65535 wraps
+	std::uint16_t m_viaPortal;                 // lane WALL-2: RW info + 0xC, the portal waypoint (its slot + 1, 0: none) the search crossed to reach the cell
 	ICoord2D m_pos;
 	PathfindObjectID m_obstacleID;             // RW info+0x28
 	PathfindOccupant *m_occupants[OCC_KIND_COUNT];
@@ -290,6 +358,8 @@ public:
 	void reset(PathfindCellInfoPool *pool);
 	bool setTypeAsObstacle(PathfindCellInfoPool &pool, const PathfindObject &obstacle, bool isFence, const ICoord2D &pos);
 	bool removeObstacle(PathfindCellInfoPool &pool, const PathfindObject &obstacle);
+	// lane WALL-1: removeObstacle by the obstacle's id (a wall piece clears the footprint of a wall piece from its wall top; the piece may be gone)
+	bool removeObstacleId(PathfindCellInfoPool &pool, PathfindObjectID id);
 	void setType(CellType type);
 	CellType getType() const { return (CellType)m_type; }
 	bool isObstaclePresent(PathfindObjectID objID) const { return m_info && m_info->m_obstacleID == objID && objID != PATHFIND_INVALID_ID; }
@@ -318,9 +388,17 @@ public:
 	unsigned getTotalCost() const { return m_info->m_totalCost; }
 	void setCostSoFar(unsigned cost) { if (m_info) m_info->m_costSoFar = (std::uint16_t)cost; }
 	void setTotalCost(unsigned cost) { if (m_info) m_info->m_totalCost = (std::uint16_t)cost; }
+	// RW 0x93442F (the parent only). lane WALL-2: every RW site that sets a parent without a portal clears info + 0xC first (a fresh record has none): the port
+	// clears it here
 	void setParentCell(PathfindCell *parent);
+	// lane WALL-2: RW 0x93443D, the parent and the portal waypoint crossed (slot + 1; 0: none)
+	void setParentCellViaPortal(PathfindCell *parent, std::uint16_t portalSlot);
+	std::uint16_t getViaPortal() const { return m_info ? m_info->m_viaPortal : 0; }
 	void clearParentCell() { m_info->m_pathParent = nullptr; }
 	PathfindCell *getParentCell() const { return m_info ? (m_info->m_pathParent ? m_info->m_pathParent->m_cell : nullptr) : nullptr; }
+	// lane WALL-2: RW cell + 4, the portal waypoint whose start is this cell (slot + 1; 0: none; PathfindCell::SetPortal RW 0x9343CE)
+	std::uint16_t getPortal() const { return m_portal; }
+	void setPortal(std::uint16_t slot) { m_portal = slot; }
 
 	bool startPathfind(PathfindCell *goalCell);
 	bool getPinched() const { return m_pinched; }
@@ -369,28 +447,52 @@ public:
 			m_bit18 == o.m_bit18 && m_bit22 == o.m_bit22;
 	}
 
+	// RW 0x9380BC (the zone joins) and the neighbour test of RW examineNeighboringCells (BFME2 0x6F83F5): a step between two cells is possible when they
+	// share the layer, one connects to the other's layer, or both connect to the ramp layer
+	static bool layersCompatible(const PathfindCell &a, const PathfindCell &b)
+	{
+		return a.m_layer == b.m_layer || a.m_layer == b.m_connectsToLayer || a.m_connectsToLayer == b.m_layer ||
+			(a.m_connectsToLayer == LAYER_RAMP && b.m_connectsToLayer == LAYER_RAMP);
+	}
+	// lane WALL-1: a unit on `layer` may stand on this cell (its layer, or the layer it connects to)
+	bool allowsLayer(PathfindLayerEnum layer) const { return m_layer == (unsigned)layer || m_connectsToLayer == (unsigned)layer; }
+
 private:
 	PathfindCellInfo *m_info;
 	zoneStorageType m_zone;
-	std::uint16_t m_pinched : 1;
-	std::uint8_t m_type : 4;
-	std::uint8_t m_connectsToLayer : 4;
-	std::uint8_t m_layer : 4;
-	std::uint8_t m_bit17 : 1;
-	std::uint8_t m_bit18 : 1;
-	std::uint8_t m_bit21 : 1;
-	std::uint8_t m_bit22 : 1;
-	std::uint8_t m_bit23 : 1;
+	std::uint16_t m_portal = 0; // lane WALL-2 (see getPortal)
+	// the RW cell dword's fields: type bits 0 .. 3, layer bits 4 .. 9, connect layer bits 10 .. 15, pinched bit 16. The port's layers are 7 bits: the
+	// wall layers run to LAYER_LAST 0x40, which 6 bits cannot hold (review #63: the 48th wall height read back as LAYER_INVALID); the fields are not
+	// a saved or hashed layout (the snapshot's class word and the state hash read them through the getters)
+	std::uint32_t m_type : 4;
+	std::uint32_t m_layer : 7;
+	std::uint32_t m_connectsToLayer : 7;
+	std::uint32_t m_pinched : 1;
+	std::uint32_t m_bit17 : 1;
+	std::uint32_t m_bit18 : 1;
+	std::uint32_t m_bit21 : 1;
+	std::uint32_t m_bit22 : 1;
+	std::uint32_t m_bit23 : 1;
 };
 
 // ---------------------------------------------------------------------------------------------------------
 // Zones (RotWK: RW PathfindZoneManager 0x93930C / 0x93894B / 0x938E42; block size 16: RW 0x939226)
 // ---------------------------------------------------------------------------------------------------------
+// lane WALL-2: the cells of one raised layer (PathfindLayer, RW pathfinder + 0x60 + layer * 0x40) the zone code gives the layer's one zone (RW 0x93A584 ..
+// 0x93A5BE, PathfindLayer::setZone RW 0x768336)
+struct PathfindRaisedView
+{
+	int layer = 0;
+	PathfindCell *cells = nullptr;
+	size_t count = 0;
+};
+
 // A view of the grid the zone code reads: cell (x, y) is cells[x * stride + y].
 struct PathfindGridView
 {
 	PathfindCell *cells = nullptr;
 	int stride = 0;
+	std::vector<PathfindRaisedView> raised; // lane WALL-2: the raised layers in use, in layer order (empty on a map without RaisedWallMesh)
 	PathfindCell &at(int x, int y) const { return cells[(size_t)x * (size_t)stride + (size_t)y]; }
 };
 
@@ -437,6 +539,12 @@ public:
 	void setAllPassable();
 	bool isPassable(int cellX, int cellY) const;
 	void setPassable(int cellX, int cellY, bool passable);
+	// lane WALL-2: PathfindZoneManager::Block::SetInteractsWithPortal (RW 0x937EC3 -> 0x937A97, BFME2 WB 0x12cd290): the block of cell (x, y) lists the portal
+	// (slot + 1) or drops it; at most 12 a block (MAX_PORTALS: a 13th is not listed); a dropped portal's place takes the list's last
+	void setInteractsWithPortal(int cellX, int cellY, bool on, std::uint16_t portal);
+	// RW 0x937F2D (InteractsWithPortal) / 0x937F7F (GetPortal(i), null past the count): the portals of the block of cell (x, y)
+	bool interactsWithPortal(int cellX, int cellY) const;
+	std::uint16_t getPortal(int cellX, int cellY, int i) const;
 	// the persistent zone state in canonical order (state hash, MOVE-1): block size, block flags, zone classes, adjacency; the table cache is derived and left out
 	void crc(StateHasher &hasher) const;
 	unsigned zoneCount() const { return (unsigned)m_zones.size(); }
@@ -455,7 +563,31 @@ private:
 	{
 		bool passable = true;
 		bool dirty = false;
+		std::vector<std::uint16_t> portals; // lane WALL-2: RW block + 0 (count) / + 4 (12 waypoint pointers)
 	};
+	bool m_anyPortal = false; // lane WALL-2: a block ever listed a portal (the state hash folds the lists only then: maps without portals hash as before)
+public:
+	// lane WALL-2 (the snapshot, AIPathfindSnapshotWalls.cpp): every block's portal list in block order, as a block holds it
+	std::vector<std::vector<std::uint16_t>> blockPortals() const
+	{
+		std::vector<std::vector<std::uint16_t>> out;
+		for (const Block &b : m_blocks)
+		{
+			out.push_back(b.portals);
+		}
+		return out;
+	}
+	bool anyPortal() const { return m_anyPortal; }
+	void setBlockPortals(std::vector<std::vector<std::uint16_t>> lists, bool any)
+	{
+		for (size_t i = 0; i < m_blocks.size(); ++i)
+		{
+			m_blocks[i].portals = i < lists.size() ? std::move(lists[i]) : std::vector<std::uint16_t>();
+		}
+		m_anyPortal = any;
+	}
+
+private:
 	Block &blockAt(int bx, int by) { return m_blocks[(size_t)bx * (size_t)m_zoneBlockExtent.y + (size_t)by]; }
 	const std::vector<zoneStorageType> &table(int profile, int kind, bool terrainVariant) const;
 	bool joins(const ZoneInfo &a, const ZoneInfo &b, int profile, int kind, bool terrainVariant) const;
@@ -621,7 +753,7 @@ struct PathfindCheckMovement
 	int terrainPenalty = 0;       // +0x34
 };
 
-class Pathfinder
+class Pathfinder : public PathfindWaypointSource
 {
 public:
 	Pathfinder(const PathfindConfig &config, const PathfindWorld *world);
@@ -643,13 +775,20 @@ public:
 
 	// ---- grid access ----
 	const ICoord2D *getExtent() const { return &m_extent.hi; }
-	// inline (lane PATHPERF-1: the search asks for every cell of every footprint it tests). Bridge / wall layers are not ported (S-161): every query reads
-	// the ground layer
+	// inline (lane PATHPERF-1: the search asks for every cell of every footprint it tests). Pathfinder::getCell (BFME2 WB 0xd35570, RW 0x5E2E9C): off the
+	// grid null; a raised layer (2 .. 15, lane WALL-2) answers its own cell when it has a passable one there (PathfindLayer::GetCell RW 0x7682E1: none outside
+	// its cells or of type 5), else the GROUND grid's cell; every other layer reads the ground grid (the wall tops and ramps live in it)
 	PathfindCell *getCell(PathfindLayerEnum layer, int x, int y)
 	{
-		(void)layer;
 		if (x >= m_extent.lo.x && x <= m_extent.hi.x && y >= m_extent.lo.y && y <= m_extent.hi.y)
 		{
+			if (m_anyRaised && isRaisedLayer(layer))
+			{
+				if (PathfindCell *c = raisedCell(layer, x, y))
+				{
+					return c;
+				}
+			}
 			return &m_blockOfMapCells[(size_t)x * (size_t)m_stride + (size_t)y];
 		}
 		return nullptr;
@@ -678,13 +817,15 @@ public:
 	const PathfindConfig &config() const { return m_config; }
 	PathfindZoneManager &zoneManager() { return m_zoneManager; }
 	const PathfindZoneManager &zoneManager() const { return m_zoneManager; }
-	PathfindGridView gridView() { PathfindGridView v; v.cells = m_blockOfMapCells.data(); v.stride = m_stride; return v; }
+	PathfindGridView gridView();
 	void setLogicalExtentFromTerrain();
 	void getLogicalExtent(ICoord2D &lo, ICoord2D &hi) const { lo = m_logicalExtent.lo; hi = m_logicalExtent.hi; }
 
 	// Acceptance-stop lines (docs/STOPS.md) for what this component did not do exactly; empty when none applied.
 	const std::vector<std::string> &stops() const { return m_stops; }
 	static std::vector<std::string> allStops();
+	// lane WALL-2: a stop of the pathfinder's portals raised by its world (RW 0x668AF8's horde branch, S-4852)
+	void noteStop(const char *stop) { note(stop); }
 
 	// ---- movement validity ----
 	static unsigned validLocomotorSurfacesForCellType(PathfindCell::CellType t);
@@ -719,8 +860,8 @@ public:
 	// weaponRange) away (RW 0xC041F8; i, j in -1 .. 1, not both 0; both ends to cells with centring 1, RW 0x6FA9EF -> 0x6E8CE6), the cells (Bresenham RW 0x6F807D)
 	// go to the callback RW 0x6F61BD. Its record (RW 0x6EAF14): + 0x1C found, + 0x1D `meleeWeapon` (the weapon template's MeleeWeapon, + 0x125 via RW 0x441B59),
 	// + 0x1E "no usable cell yet on this line" (1 at the start of each line), + 0x1F "a usable cell failed the path test" (0 at the start), + 0x20 `stopAtFirstMiss`
-	// (the caller's 4th argument; RW 0x7463E8 passes 0). See the callback in AIPathfindSearch.cpp. Only the ground layer exists (S-161): its raised-layer
-	// tests are ported but cannot fire.
+	// (the caller's 4th argument; RW 0x7463E8 passes 0). See the callback in AIPathfindSearch.cpp. Its layer tests (a cell above the ground: the wall
+	// tops, ramps and walkways; bit 17) fire on maps with walls (lanes WALL-1 / WALL-2); the line walks the target's layer (RW 0x680A75).
 	bool canApproachToTarget(const PathfindObject &obj, const PathfindLocomotorInfo &loco, const Coord3D &target, float weaponRange, bool meleeWeapon,
 		bool stopAtFirstMiss = false);
 	// lane PLAY-4 r1: RW 0x6ED843's unit branch (the melee reach of RW 0x6CC07C for a victim that is not a STRUCTURE): the unit's footprint box at `from` (its cell,
@@ -828,14 +969,89 @@ public:
 	int hierarchicalPositionOf(int cellX, int cellY) const;
 	// the corridor's last index (RW HierarchicalPath + 0x14 after RW 0x93B3D8), -1 when there is none
 	int hierarchicalLastIndex() const { return m_hierLast; }
-	// terrain-and-structure zone test, no search (ZH clientSafeQuickDoesPathExist)
-	bool clientSafeQuickDoesPathExist(const PathfindLocomotorInfo &loco, const Coord3D *from, const Coord3D *to);
+	// terrain-and-structure zone test, no search (ZH clientSafeQuickDoesPathExist). Lane WALL-2: with the unit (RW 0x6F5BB0 QuickDoesPathExist's first argument)
+	// different zones still pass when a portal chain joins them (RW 0x6F5EE7 -> 0x6F5547)
+	bool clientSafeQuickDoesPathExist(const PathfindLocomotorInfo &loco, const Coord3D *from, const Coord3D *to, const PathfindObject *obj = nullptr);
 	// RW 0x6F2FC3: the straight line is passable for the unit (the optimiser's test)
 	bool isLinePassable(const PathfindObject *obj, unsigned acceptableSurfaces, PathfindLayerEnum layer, const Coord3D &startWorld,
 		const Coord3D &endWorld, bool blocked, bool allowPinched = false);
 	// RW 0x6EE5E3: the cell line between two positions meets no non-ground-layer cell (Bresenham, layer 1)
 	bool isGroundLineClear(const Coord3D &a, const Coord3D &b);
 	void clip(Coord3D *from, Coord3D *to);
+
+	// ---- lane WALL-1: wall tops and ramps (AIPathfindWalls.cpp) ----
+	// Pathfinder::GetWallHeight (BFME2 WorldBuilder decomp 0xd3ed70): the height of `layer` at (x, y): a wall layer's height, a ramp's surface (raised to the
+	// wall under it), the terrain for the ground and every other layer
+	float getLayerHeight(float x, float y, PathfindLayerEnum layer) const;
+	// ZH TerrainLogic::getHighestLayerForDestination + getLayerHeight: the highest walkable surface at (x, y) (a wall top or a ramp over the terrain)
+	float getHighestLayerHeight(float x, float y) const;
+	// lane WALL-2 (review #63): the layer a search aims at for the point `to`: a raised walkway's when getLayerAt (RW 0x680A75) names one there, else the
+	// ground grid (wall tops and ramps are layers of the ground grid's cells, as before)
+	PathfindLayerEnum searchDestinationLayer(const Coord3D &to) const;
+	// the layer of the walkable surface a point stands on (TerrainLogic::getLayerForDestination RW 0x680A75 / BFME2 0x6802FE: a ramp under it first, then a
+	// raised layer whose passable cell is there and whose height is less than 25 above `z` (RW 0x6EE600), else the ground grid cell's layer). The form
+	// without `z` takes the terrain's height there
+	PathfindLayerEnum getLayerAt(float x, float y) const;
+	PathfindLayerEnum getLayerAt(float x, float y, float z) const;
+	// Pathfinder::IsPointOnRamp: (x, y) is on a ramp's surface; `z` its height there
+	bool isPointOnRamp(float x, float y, float *z = nullptr) const;
+	// Pathfinder::IsPointOnWall (BFME2 0x6E940F): the ground cell under `pos` has a wall layer (and is CLEAR when `requireClear`)
+	bool isPointOnWall(const Coord3D &pos, bool requireClear = false) const;
+	// Pathfinder::UpdateLayer (BFME2 0x6F11A1): the layer a unit at its position takes when the path node it follows is on `nodeLayer`
+	PathfindLayerEnum updateLayer(const PathfindObject &obj, PathfindLayerEnum nodeLayer) const;
+	// lane WALL-1: the layer of a unit that is not following a path node: a unit put on a wall top (a map's archers, a teleported horde member) takes the
+	// wall's layer, one whose wall is gone takes the ground (Pathfinder::AdjustLayer BFME2 0x6EF2A6 for the ground grid's layers; INFERENCE, S-4300)
+	PathfindLayerEnum settleLayer(const PathfindObject &obj) const;
+	// the wall heights by layer (index = layer - LAYER_WALL_FIRST) and the counts, for tests and reports
+	const std::vector<float> &wallHeights() const { return m_wallHeights; }
+	size_t wallPieceCount() const { return m_wallPieces.size(); }
+	// lane WALL-1: the wall piece whose wall top holds the ground grid cell under `pos` (PATHFIND_INVALID_ID when that cell is no wall-top cell). Retail
+	// keeps a wall's top in a layer of its own over the ground cells its footprint blocks; here the wall top replaces them (classifyWall), so a question
+	// for the obstacle under a wall (the horde wall scaling's RW 0x5E3CC9) asks this. INFERENCE: the first piece, in classification order, whose surfaces'
+	// cells hold the cell with that cell's layer
+	PathfindObjectID wallPieceAt(const Coord3D &pos);
+	size_t rampCount() const;
+	// ---- lane WALL-2: the raised layers (RaisedWallMesh walkways, AIPathfindRaised.cpp) ----
+	// the raised layer's cell at (x, y) (null outside its cells; type 5 cells included), and the layer's data for tests and reports
+	const PathfindCell *raisedCellAt(PathfindLayerEnum layer, int x, int y) const;
+	bool raisedLayerInUse(PathfindLayerEnum layer) const;
+	// PathfindLayer + 0x3C (Pathfinder::GetWallLayerHeight BFME2 WB 0xd3ec10: the int height as a float); 0 for a layer not in use
+	float raisedLayerHeight(PathfindLayerEnum layer) const;
+	size_t raisedLayerCount() const;
+
+	// ---- lane WALL-2: portal waypoints (AIPathfindPortals.cpp) ----
+	// THE PORTAL API (for DynamicPortalBehaviour, FakePathfindPortalBehaviour and the siege lane's ladders and towers, which plug in through the first of them):
+	//   1. createWaypoint(w): a dynamic waypoint (RW Waypoint ctor RW 0x6829B0 with id 0x7FFFFFFE): `w` is copied, its id becomes the next of the counter
+	//      (0x40000000 at each newMap); returns the id;
+	//   2. addWaypointLink(from, to) (RW 0x67262C Waypoint::addLink) and setWaypointNext(a, b) (the intermediate chain, `b`'s portal flag cleared);
+	//   3. addPortal(id) (RW 0x6EA42D): the waypoint's cell (centred, RW 0x6E8CE6) on the ground grid gets it when the cell has no portal yet, and the cell's
+	//      zone block lists it; the waypoint's portal flag is set either way;
+	//   4. removePortal(id) (RW 0x6EA48A) and destroyWaypoint(id) undo it; then pathsLostPortals() (RW 0x6E8454) asks every unit whose path crosses a
+	//      waypoint that is gone to react (PathfindWorld::onPathLostPortals).
+	// A search crosses a portal at its start cell to every link's cell (checkChangeLayers), the unit walks the link's intermediates (the path's waypoint nodes).
+	int createWaypoint(const PathfindWaypoint &w);
+	void destroyWaypoint(int id);
+	bool addWaypointLink(int from, int to);
+	void setWaypointNext(int a, int b);
+	void addPortal(int id);
+	void removePortal(int id);
+	void pathsLostPortals();
+	const PathfindWaypoint *findWaypoint(int id) const override; // PathfindWaypointSource
+	PathfindWaypoint *findWaypoint(int id);
+	size_t waypointCount() const { return m_waypointIds.size(); }
+	// RW 0x6822FC Waypoint::isValidUnitType: the waypoint lets `obj` through (see AIPathfindPortals.cpp)
+	bool waypointAllows(const PathfindWaypoint &w, const PathfindObject &obj) const;
+	// RW 0x6E82FD: a portal (the flag + 0x48) of type 1, 2, 3, 4, 7 or 8
+	static bool isPortalWaypoint(const PathfindWaypoint &w);
+	// RW 0x6F5547: a chain of portals the unit may take leads from zone `from` to zone `to` (the effective zones, terrain variant, of the portals' cells)
+	bool portalPathExists(const PathfindObject *obj, const PathfindLocomotorInfo &loco, zoneStorageType from, zoneStorageType to) const;
+	// RW 0x6F6286 Pathfinder::CheckChangeLayers: the cell's other layer and the cells its portal links to join the open list at the cell's costs
+	void checkChangeLayers(PathfindCell *cell, const PathfindObject *obj);
+	// RW 0x6F1F0D: the A* estimate from `cell` to `goal` through the corridor's remaining portal hops (+ 1400 each), 10 * max + 4 * min a leg
+	unsigned costToGoal(const PathfindCell *cell, const PathfindCell *goal) const;
+	const std::vector<PathfindPortalHop> &corridorPortals() const { return m_portalHops; }
+	// the waypoint of a slot (cell + 4 / info + 0xC hold slot + 1)
+	const PathfindWaypoint *waypointOfSlot(std::uint16_t slot) const;
 
 	// ---- queue ----
 	bool queueForPath(PathfindObjectID id);
@@ -925,6 +1141,52 @@ private:
 	void classifyObjectFootprint(PathfindObject &obj, bool insert);
 	void internal_classifyObjectFootprint(PathfindObject &obj, bool insert);
 	void classifyFence(PathfindObject &obj, bool insert);
+	// lane WALL-1: Pathfinder::ClassifyWall (BFME2 0x92F63F, pathfinder_classify.cpp): the wall tops and ramps of a wall piece into / out of the ground grid
+	void classifyWall(PathfindObject &obj, bool insert);
+	struct WallPiece
+	{
+		PathfindObjectID id = PATHFIND_INVALID_ID;
+		std::vector<PathfindWallSurface> walls;
+		std::vector<PathfindLayerEnum> wallLayers; // the layer of each wall surface
+		std::vector<PathfindWallSurface> ramps;
+		std::vector<PathfindWallSurface> raised;   // lane WALL-2: RaisedWallMesh
+		std::vector<PathfindLayerEnum> raisedLayers; // the raised layer of each (2 .. 15)
+		PathfindRegion cells;                      // every cell its surfaces touch, grown by 2 (RW: floor(lo / 10) - 2 .. ceil(hi / 10) + 2)
+	};
+	// lane WALL-2: a raised layer (RW PathfindLayer, 0x40 bytes at pathfinder + 0x60 + layer * 0x40, the wall kind: its area list + 0x38 set). The port keeps
+	// the areas' surfaces with the pieces they came from
+	struct RaisedLayer
+	{
+		std::vector<std::pair<PathfindObjectID, PathfindWallSurface>> areas; // + 0x38 (newest first in RW; insertion order here: the union is the same)
+		int height = 0;                 // + 0x3C
+		ICoord2D origin{ 0, 0 };        // + 0x10 / + 0x14
+		int width = 0, depth = 0;       // + 8 / + 0xC (cells)
+		std::vector<PathfindCell> cells; // + 0 / + 4, column-major: cells[x * depth + y]
+		bool used() const { return !areas.empty(); }
+	};
+	PathfindCell *raisedCell(PathfindLayerEnum layer, int x, int y)
+	{
+		RaisedLayer &l = m_raised[(size_t)layer];
+		const int dx = x - l.origin.x, dy = y - l.origin.y;
+		if (l.cells.empty() || dx < 0 || dy < 0 || dx >= l.width || dy >= l.depth)
+		{
+			return nullptr;
+		}
+		PathfindCell *c = &l.cells[(size_t)dx * (size_t)l.depth + (size_t)dy];
+		return c->getType() == PathfindCell::CELL_BRIDGE_IMPASSABLE ? nullptr : c;
+	}
+	PathfindLayerEnum raisedLayerFor(const PathfindWallSurface &s, PathfindObjectID owner);
+	void rebuildRaisedLayer(PathfindLayerEnum layer); // the cells (rebuildRaisedCells), then the units' slots on the layer registered again
+	void rebuildRaisedCells(PathfindLayerEnum layer);
+	void connectRampToRaised(int i, int j, PathfindCell *c, float rampHeight, int corners);
+	void crcRaised(StateHasher &h) const;
+	PathfindLayerEnum wallLayerFor(float height);
+	void stampWallSurface(const PathfindWallSurface &s, PathfindLayerEnum layer);
+	void stampRampSurface(const PathfindWallSurface &s);
+	void restampWalls(const PathfindRegion &region);
+	bool isWallPiece(PathfindObjectID id) const;
+	PathfindRegion surfaceCells(const PathfindWallSurface &s) const;
+	float wallHeightOf(PathfindLayerEnum layer) const;
 	void cleanOpenAndClosedLists();
 	// lane BACKLOG-8 r2 (AIPathfindGround.cpp): RW 0x6E8BBA's cell test, RW 0x6F0DA3 and RW 0x765BF6
 	bool groundCellClear(const PathfindCell *cell, unsigned crusher) const;
@@ -971,8 +1233,6 @@ private:
 	const OccupantFacts *occupantFacts(const PathfindObject *obj, PathfindObjectID id);
 	SearcherFacts searcherFacts(const PathfindObject *obj) const;
 	struct SearchMemoScope; // internalFindPath's activation of the memo
-	// lane BACKLOG5: RW 0x6F6286, the layer-change expansion of a closed cell (see AIPathfindPatch.cpp)
-	void checkChangeLayers(PathfindCell *parentCell, const PathfindObject *obj);
 	// lane MOVE-3: RW 0x6ED46C, the footprint cost of a patch step (-1: blocked); `parent` null counts every footprint cell
 	int patchCellCost(const PathfindObject &obj, const ICoord2D *parent, const ICoord2D &cell, PathfindLayerEnum layer, int r, int n, bool skipHordePositions);
 	// RW 0x6ECFC5: the footprint of RW 0x6ED071 is centred on a cell (its size is odd)
@@ -1041,4 +1301,74 @@ private:
 	bool m_lineMemoBlockedArg = false, m_lineMemoPinchedArg = false;
 	PathfindLayerEnum m_lineMemoLayer = LAYER_GROUND;
 	std::vector<std::string> m_stops;
+	// lane WALL-1: the wall-top heights (RW pathfinder + 0x1BEBC, index layer - 0x11, at most 0x30 of them) and the wall pieces in insertion order (RW keeps their
+	// ids in a set at + 0x1C1C0; the port keeps each piece's surfaces so overlapping pieces can be classified again)
+	std::vector<float> m_wallHeights;
+	std::vector<WallPiece> m_wallPieces;
+	// lane WALL-2: the raised layers by id (0, 1 unused), and whether any is in use (getCell's fast path)
+	std::array<RaisedLayer, 16> m_raised;
+	bool m_anyRaised = false;
+	// lane WALL-2: the dynamic waypoints (slot = index; a destroyed one leaves its slot empty until reused), their ids in creation order, the id counter
+	// (RW 0xDA0748), and the corridor's portal hops (RW + 0x1C1CC)
+	struct WaypointSlot
+	{
+		bool used = false;
+		PathfindWaypoint w;
+	};
+	std::vector<WaypointSlot> m_waypointSlots;
+	std::vector<int> m_waypointIds;
+	int m_waypointCounter = 0x40000000;
+	std::vector<PathfindPortalHop> m_portalHops;
+	int slotOfWaypoint(int id) const;
+	friend class PathfindPortalSearch;
+	// the hierarchical search's portal branch (RW 0x6F909A .. 0x6F936B); true: the goal was "found" (see AIPathfindPortals.cpp)
+	bool hierarchicalPortals(PathfindCell *c, PathfindCell *goal, zoneStorageType cz, zoneStorageType goalZone, const PathfindMovement &mv, const PathfindObject *obj,
+		int &cellCount);
+	void crcPortals(StateHasher &h) const;
+
+public:
+	// lane WALL-1 / WALL-2: the snapshot's walls (version 2 of the pathfinder's xfer, AIPathfindSnapshotWalls.cpp): read whole and checked, then applied
+	struct WallState
+	{
+		struct Info
+		{
+			std::uint32_t index = 0;
+			PathfindObjectID obstacle = PATHFIND_INVALID_ID;
+			std::uint8_t flags = 0;
+			std::vector<std::uint32_t> owners[OCC_KIND_COUNT];
+		};
+		struct Raised
+		{
+			bool used = false;
+			std::vector<std::pair<PathfindObjectID, PathfindWallSurface>> areas;
+			int height = 0, width = 0, depth = 0;
+			ICoord2D origin{ 0, 0 };
+			std::vector<std::uint32_t> words;
+			std::vector<std::uint16_t> zones, portals;
+			std::vector<Info> infos;
+		};
+		struct Slot
+		{
+			bool used = false, filtered = false;
+			PathfindWaypoint w;
+		};
+		bool loaded = false;
+		std::vector<float> wallHeights;
+		std::vector<WallPiece> wallPieces;
+		bool anyRaised = false;
+		std::array<Raised, 16> raised;
+		std::vector<std::pair<std::uint32_t, std::uint16_t>> portalCells;
+		std::vector<Slot> slots;
+		int waypointCounter = 0;
+		std::vector<int> ids;
+		std::vector<PathfindPortalHop> hops;
+		std::vector<std::vector<std::uint16_t>> blockPortals;
+		bool anyPortal = false;
+	};
+
+private:
+	void xferWalls(Xfer &x, WallState &w);
+	void applyWalls(WallState &w, bool loaded);
+	static std::uint32_t classWord(const PathfindCell &c);
+	static void setClassWordWide(PathfindCell &c, std::uint32_t w);
 };

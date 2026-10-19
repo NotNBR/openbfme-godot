@@ -51,6 +51,17 @@ class ThingTemplate;
 struct INIEnvironment;
 class INIMacroTable;
 
+// lane WALL-1: the wall tops and ramps of a wall piece (RW 0x936B7D -> Pathfinder::ClassifyWall asks the object's drawable for its WallBoundsMesh / RampMesh1 /
+// RampMesh2). The simulation never holds a drawable (SMOOTH-1, S-810): the answer is computed from the template's draw module data and the W3D files, like
+// the launch bones (GameClient/DrawableWallMeshes.h implements it). Without a source no wall piece has walkable surfaces.
+class PathfindWallMeshSource
+{
+public:
+	virtual ~PathfindWallMeshSource() {}
+	// the object's surfaces at its transform; false when its draw modules name none (answered from a per-template cache)
+	virtual bool wallGeometry(const Object &obj, PathfindWallGeometry &out) = 0;
+};
+
 // What the pathfinder and the movement code read of a template, parsed once (the retail ThingTemplate has typed fields for all of it).
 struct ObjectMovementInfo
 {
@@ -59,7 +70,7 @@ struct ObjectMovementInfo
 	float fenceWidth = 0.0f, fenceXOffset = 0.0f;
 	float pathfindDiameter = -1.0f;  // RW +0x53C: <= 0 when unset
 	int slopeLimitIndex = 0;         // RW +0x57C
-	bool canPathThroughGates = false; // RW +0x644
+	bool canPathThroughGates = true; // RW +0x644 (lane WALL-2: the template constructor's default is 1, RW 0x74004B; 2.01's INI only ever writes No)
 	// lane BACKLOG-8: FormationWidth (RW + 0x578, row RW 0xDA4658) / FormationDepth (+ 0x574, row RW 0xDA4668), parseInt; both 1 from the constructor (RW 0x740057)
 	int formationWidth = 1, formationDepth = 1;
 	unsigned crusherLevel = 0, crushableLevel = 0;
@@ -116,6 +127,9 @@ public:
 	void onHordeGoalChanged() override;    // lane MOVE-3: RW 0x86EF13 through the horde contain
 	bool isEffectivelyDead() const override; // lane MOVE-3: Object + 0x458 bit 0
 	bool hordeFill(int &count, int &slots) const override; // lane MOVE-3: RW 0x6F1584's contain slots 0x7C / 0x70 / 0x114
+	const PathfindWallGeometry *getWallGeometry() const override; // lane WALL-1: from the world's PathfindWallMeshSource, kept while the transform holds
+	bool isSkirmishAIControlled() const override; // lane WALL-2: Waypoint::isValidUnitType's AllowNonSkirmishAI test
+	bool inMoveAwaySearch() const override;       // lane WALL-2: RW AI + 0x3CF (Waypoint::isValidUnitType's type 7 test)
 
 private:
 	// AIWorld::movementInfo of the object's template, remembered with the template it was looked up for (lane PERF-1: the pathfinder and the
@@ -131,6 +145,13 @@ private:
 	// lane HUD-5: the template's geometry with the object's own shape flags (Object::setGeometryActive, RW 0xAD3520: a gate's open / closed shapes)
 	mutable PathfindGeometry m_ownGeometry;
 	mutable std::uint32_t m_ownGeometryVersion = 0xFFFFFFFFu;
+	// lane WALL-1: the wall surfaces at the transform they were computed for
+	mutable PathfindWallGeometry m_wallGeometry;
+	mutable bool m_wallLooked = false, m_hasWall = false;
+	mutable Coord3D m_wallPos{ 0.0f, 0.0f, 0.0f };
+	mutable float m_wallAngle = 0.0f, m_wallScale = 0.0f;
+	mutable std::array<std::uint32_t, 19> m_wallBits{}; // lane WALL-2: the model condition the geometry was taken for (the model of the current state)
+	mutable const ThingTemplate *m_wallTemplate = nullptr;
 };
 
 // Values read from GameData / AIData (never defaulted).
@@ -159,7 +180,11 @@ public:
 	GameLogic &logic() const { return m_logic; }
 	const AIWorldConfig &config() const { return m_config; }
 	Pathfinder &pathfinder() { return *m_pathfinder; }
+	const Pathfinder &pathfinder() const { return *m_pathfinder; }
 	AIMoveWorld &moveWorld() { return *m_moveWorld; }
+	// lane WALL-1: where wall pieces' walkable surfaces come from (null: none, no wall piece is walkable); install before the map's objects enter
+	void setWallMeshes(PathfindWallMeshSource *source) { m_wallMeshes = source; }
+	PathfindWallMeshSource *wallMeshes() const { return m_wallMeshes; }
 
 	// Installs the world's two rows into the logic's phase work table (pathfinderQueue, partitionAndCollision), the object world hooks
 	// and GameLogic::setAIWorld. Call once; the world must outlive the logic's updates (and its objects' destruction).
@@ -213,6 +238,9 @@ public:
 	// ---- PathfindWorld ----
 	PathfindObject *findObjectByID(PathfindObjectID id) const override;
 	unsigned getFrame() const override;
+	// lane WALL-2: RW 0x6E8454 (see PathfindWorld): the logic's objects in list order, each AI whose path names a waypoint that is gone is told
+	void onPathsLostPortals() const override; // const: the pathfinder holds its world const
+	std::function<bool(const PathfindObject &)> portalFilterOf(PathfindObjectID owner) const override; // lane WALL-2: the owner's DynamicPortalBehaviour's
 
 	// ---- state hash (MOVE-1: logic state that lives outside the objects) ----
 	// the pathfinder's queues and pools: a summary, O(1) (the grid itself follows from the units' hashed state)
@@ -278,6 +306,7 @@ private:
 	std::vector<ObjectCollide::PairFacts> m_collisionFacts;
 	std::vector<std::uint8_t> m_collisionFactState; ///< 0: not taken yet, 1: taken, 2: taken and AIUpdateInterface::isContained
 	unsigned long long m_collisionPairsSkipped = 0;
+	PathfindWallMeshSource *m_wallMeshes = nullptr; // lane WALL-1
 	int m_moveAlliesDepth = 0; // lane PHYS-1: RW pathfinder + 0x1C1BC, the recursion guard of moveAllies
 	int m_peakTickCells = 0;
 	size_t m_peakQueued = 0;

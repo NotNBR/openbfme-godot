@@ -203,7 +203,7 @@ public:
 	//   * a STRUCTURE target (RW 0x6ED8D5): INFERENCE (S-320): the edge-to-edge distance within the weapon's reach (set by the caller) stands for the ring of cells
 	//     around the unit's footprint that RW walks for the structure's obstacle id (RW 0x6ED937 .. 0x6EDA52) and its WALK_ON_TOP_OF_WALL tail (RW 0x6EDA58);
 	//   * any other target (lane PLAY-4 r1): the footprint boxes (Pathfinder::meleeReachCells, RW 0x6EDB0C .. 0x6EDB69); a CAN_CLIMB_WALLS target on a wall
-	//     (RW 0x6EDAD4 -> 0x696057) cannot occur (only the ground layer exists, S-161); a SIEGE_TOWER target outside the boxes takes the ramp branch
+	//     (RW 0x6EDAD4 -> 0x696057) is not ported (wall climbing is S-084: no unit climbs); a SIEGE_TOWER target outside the boxes takes the ramp branch
 	//     (RW 0x6EDB6F .. 0x6EDC74), not ported (stop S-3806: false).
 	bool meleeReach(const RangeSubject &source, const Coord3D &sourcePos, const RangeSubject &victim) override
 	{

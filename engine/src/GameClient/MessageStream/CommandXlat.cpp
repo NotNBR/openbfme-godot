@@ -448,7 +448,10 @@ int CommandTranslator::evaluateContextCommand(Object *obj, const Coord3D *pos, E
 		return msgType;
 	}
 	// everything else: move to the location (ZH's final else branch, CommandXlat.cpp:2252). A click on an object of ours that has nothing more specific to do is
-	// no command (it is a selection): only a location click moves.
+	// no command (it is a selection): only a location click moves. Lane WALL-1 (INFERENCE, S-4840): a wall piece units walk on (KindOf WALK_ON_TOP_OF_WALL: RotWK
+	// gives it the selectable pick type, RW 0x4B583C, so the order click picks the wall section under the cursor) is ground to walk on, like ZH's own mine
+	// (CommandXlat.cpp:1448): the click moves onto the wall top it lands on. RotWK's evaluateContextCommand (RW 0x81E60B) was not read for this case
+	const bool walkOn = obj && obj->isKindOfName("WALK_ON_TOP_OF_WALL");
 	if (pos)
 	{
 		if (type == EvaluateType::DoHint)
@@ -459,7 +462,7 @@ int CommandTranslator::evaluateContextCommand(Object *obj, const Coord3D *pos, E
 				hint(msgType == MSG_DO_ATTACKMOVETO ? MouseCursorName::AttackMove : MouseCursorName::Move);
 			}
 		}
-		else if (!obj)
+		else if (!obj || walkOn)
 		{
 			msgType = issueMove(obj, pos, type);
 		}

@@ -25,6 +25,7 @@
 #include "GameLogic/Module/EmotionModules.h"
 #include "GameLogic/Module/HitReactionBehavior.h"
 #include "GameLogic/Module/InvisibilityModules.h"
+#include "GameLogic/Module/PortalModules.h"
 
 #include "Common/Thing/ModuleFactory.h"
 #include "GameClient/MapHordeSpawn.h"
@@ -99,6 +100,7 @@ void LogicModules::registerAll(ModuleFactory &modules)
 	SpecialAbilityModules::registerAll(modules); // lane HERO-1: the SpecialAbilityUpdate family
 	ExtraModules::registerAll(modules); // lane MODULES-1: the remaining behaviour modules the base game uses
 	GateModules::registerAll(modules); // lane HUD-5: GateOpenAndCloseBehavior, AIGateUpdate
+	PortalModules::registerAll(modules); // lane WALL-2: DynamicPortalBehaviour, FakePathfindPortalBehaviour
 	EmotionModules::registerAll(modules); // lane MODULES-2: EmotionTrackerUpdate, RadiateFearUpdate
 	AreaScanModules::registerAll(modules); // lane MODULES-2: LargeGroupBonusUpdate, PassiveAreaEffectBehavior
 	NotifyCrushModules::registerAll(modules); // lane MODULES-3: (Horde)NotifyTargetsOfImminentProbableCrushingUpdate
