@@ -2,10 +2,12 @@
 // See GameLogic/Combat/WeaponDelivery.h for the target facts.
 
 #include "GameLogic/Combat/WeaponDelivery.h"
+#include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/Module/GiantBirdAIUpdate.h"
 #include "GameLogic/LegendaryHeroesGame.h"
 
 #include "Common/Player.h"
+#include "Common/Thing/ThingFactory.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/Combat/CombatNames.h"
 #include "GameLogic/Combat/CombatQueries.h"
@@ -165,7 +167,7 @@ const char *const kNestedHordeStop =
 	"[S-1790] shockwaves (COMBAT-4): NOT ported: MetaImpactNugget's hit on a member of a horde that is itself inside a container (RW 0x910764 .. 0x9107AF: the source scores the member, the outer "
 	"container's contain slots 4 / 0x3C / 0x7C act on it; counted, nothing applied); the handler's audio event (RW 0x696947 .. 0x696A0E, TheAudio slot 0x64) and the drawable's "
 	"projectile type (client); FlipDirection is read by no 2.01 nugget code found; INFERENCE: a horde's member list is its contain list (horde interface slot 0x108 not read), the "
-	"clear-radius landing height is the ground (layer heights S-161), the AI state of RW 0x662D70 is the port's current state";
+	"clear-radius landing height is the layer's (RW 0x680A75) at the shock wave centre's z (lane WALL-2), the AI state of RW 0x662D70 is the port's current state";
 
 // RW 0x68D91A Object::estimateDamage: a TREE (template + 0x113 bit 6) answers 1.0 for FLAME (6) and 0 for anything else; else the body's estimate (body vslot 2);
 // no body: 0 (lane DECOMP-1)
@@ -952,6 +954,49 @@ void deliver(GameLogic &logic, const ParalyzeNugget &n, const WeaponTemplate &w,
 	}
 }
 } // namespace Paralyze
+
+// lane WALL-1: SpawnAndFadeNugget's slot 6, RW 0x911C46 (read in RotWK): the source (the context's + 8, by id) makes SpawnedObjectName (+ 0x14C, the thing
+// factory's template; none: nothing) for its own team (Object + 0x31C, ThingFactory::newObject RW 0x6D165E with a clear status); at the source's position plus
+// SpawnOffset (+ 0x150, + 0x154; its Z is not read) turned by the source's orientation (Object + 0x44: x' = x + (cos * ox - sin * oy), y' = y + (sin * ox +
+// cos * oy), the sine and cosine of the float widened to double, RW 0xA3CF90 / 0xA3CF84), the height TheTerrainLogic gives there at the source's layer
+// (RW 0x68BBE0, vslot 0x1C) and the source's orientation (RW 0x70C201, 0x70C31E); then the source dies (RW 0x698EC3: UNRESISTABLE, DEATH_FADED = 0x16:
+// the mine carrier's DeployedDeath fades it); a DEPLOYED_MINE (template + 0x11D & 0x10) enters the pathfinder's map (RW 0x6E85E9)
+namespace SpawnAndFade
+{
+void deliver(GameLogic &logic, const SpawnAndFadeNugget &n, Object &source)
+{
+	const ThingTemplate *tt = n.m_spawnedObjectName.empty() ? nullptr : logic.things().findTemplate(n.m_spawnedObjectName);
+	if (!tt)
+	{
+		return;
+	}
+	Object *spawned = logic.newObject(tt, source.getTeam(), ObjectStatusMaskType{});
+	if (!spawned)
+	{
+		return;
+	}
+	const Coord3D &sp = *source.getPosition();
+	const float angle = source.getOrientation();
+	const float s = (float)SimMath::sind(angle), c = (float)SimMath::cosd(angle);
+	const float ox = n.m_spawnOffset.x, oy = n.m_spawnOffset.y;
+	Coord3D p;
+	p.x = SimMath::addf32(sp.x, SimMath::subf32(SimMath::mulf32(c, ox), SimMath::mulf32(s, oy)));
+	p.y = SimMath::addf32(sp.y, SimMath::addf32(SimMath::mulf32(ox, s), SimMath::mulf32(c, oy)));
+	const AIUpdateInterface *ai = source.getAIUpdateInterface();
+	p.z = ai ? ai->layerHeightAt(p.x, p.y) : logic.getGroundHeight(p.x, p.y);
+	spawned->setPosition(&p);
+	spawned->setOrientation(angle);
+	source.kill(DEATH_FADED);
+	static const int kDeployedMine = ObjectTemplateInfoBuilder::kindOfIndex("DEPLOYED_MINE");
+	if (kDeployedMine >= 0 && spawned->isKindOf((unsigned)kDeployedMine))
+	{
+		if (AIWorld *world = logic.aiWorld())
+		{
+			world->addObjectToPathfindMap(*spawned);
+		}
+	}
+}
+} // namespace SpawnAndFade
 } // namespace
 
 // RW 0x6CB779 (lane DECOMP-1): any nugget of the template whose slot 1 (isApplicable(weapon, victim)) answers true; false without a victim. The slot 1 bodies
@@ -1372,6 +1417,20 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 			if (ocl)
 			{
 				ocl->create(logic, m_source, victim ? *victim->getPosition() : pos);
+			}
+			break;
+		}
+		case NUGGET_SPAWN_AND_FADE:
+		{
+			// lane WALL-1 (the mine carrier's IsengardExplosiveMineDroppingWeapon): SpawnAndFadeNugget (vtable RW 0xC7BD60): with a victim slot 1 (RW 0x911BCF,
+			// the base test and ObjectTargetFilter) gates slot 5 (RW 0x911C32: slot 6 at the victim's position), without one slot 2 (RW 0x911BFD, the upgrade
+			// test) gates slot 6 (RW 0x911C46); slot 6 does not read the position (SpawnAndFade::deliver)
+			const SpawnAndFadeNugget &sn = static_cast<const SpawnAndFadeNugget &>(n);
+			const bool go = victim ? shouldDeliver(n, t, m_source, *victim, logic) && ObjectFilterMatch::allows(logic, sn.m_objectTargetFilter, *victim, nullptr)
+								   : upgradeTest(n, m_source);
+			if (go)
+			{
+				SpawnAndFade::deliver(logic, sn, *m_source);
 			}
 			break;
 		}

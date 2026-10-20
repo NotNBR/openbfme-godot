@@ -89,17 +89,7 @@ void ClientEventRecorder::objectDestroyed(Object &obj)
 	{
 		return; // never bound (the object died before it was announced)
 	}
-	if (m_dirtySet.erase(obj.getID()) != 0) // lane ANIM-1: a drawable that goes needs no flush
-	{
-		for (size_t i = 0; i < m_dirty.size(); ++i)
-		{
-			if (m_dirty[i] == obj.getID())
-			{
-				m_dirty.erase(m_dirty.begin() + (std::ptrdiff_t)i);
-				break;
-			}
-		}
-	}
+	undirty(obj.getID()); // lane ANIM-1: a drawable that goes needs no flush
 	push(ClientEvent::DESTROYED, obj);
 }
 
@@ -173,26 +163,29 @@ void ClientEventRecorder::modelConditionChanged(Object &obj, int bit, bool on)
 	ClientEvent &e = push(ClientEvent::MODEL_CONDITION, obj);
 	e.bit = bit;
 	e.on = on;
-	if (m_dirtySet.insert(obj.getID()).second) // lane ANIM-1: RW 0x679612 .. 0x67961F, the drawable is dirty until its flags are flushed
+	if (m_dirtyMark.try_emplace(obj.getID(), m_nextDirtyMark).second) // lane ANIM-1: RW 0x679612 .. 0x67961F, the drawable is dirty until its flags are flushed
 	{
-		m_dirty.push_back(obj.getID());
+		m_dirty.push_back({ obj.getID(), m_nextDirtyMark++ });
 	}
+}
+
+bool ClientEventRecorder::undirty(ObjectID id)
+{
+	const auto it = m_dirtyMark.find(id);
+	if (it == m_dirtyMark.end())
+	{
+		return false;
+	}
+	m_dirtyMark.erase(it); // its m_dirty entry is stale from here
+	return true;
 }
 
 // lane ANIM-1: the flush of one drawable (RW 0x67449C with force 0: nothing when it is not dirty)
 void ClientEventRecorder::flushModelConditions(Object &obj)
 {
-	if (m_dirtySet.erase(obj.getID()) == 0)
+	if (!undirty(obj.getID()))
 	{
 		return;
-	}
-	for (size_t i = 0; i < m_dirty.size(); ++i)
-	{
-		if (m_dirty[i] == obj.getID())
-		{
-			m_dirty.erase(m_dirty.begin() + (std::ptrdiff_t)i);
-			break;
-		}
 	}
 	pushFlush(obj);
 }
@@ -211,17 +204,7 @@ void ClientEventRecorder::loadedObject(Object &obj)
 			e.flags.set(bit);
 		}
 	}
-	if (m_dirtySet.erase(obj.getID()) != 0) // the flush below covers the changes recorded before
-	{
-		for (size_t i = 0; i < m_dirty.size(); ++i)
-		{
-			if (m_dirty[i] == obj.getID())
-			{
-				m_dirty.erase(m_dirty.begin() + (std::ptrdiff_t)i);
-				break;
-			}
-		}
-	}
+	undirty(obj.getID()); // the flush below covers the changes recorded before (the O(1) dirty marks, lane BIGBATTLE-1)
 	pushFlush(obj);
 }
 
@@ -289,15 +272,21 @@ std::vector<ClientEvent> ClientEventRecorder::take(bool endOfFrame)
 	// lane ANIM-1: the end of the logic frame, RW 0x6759C4: every dirty drawable's flags reach its draw modules once
 	if (endOfFrame)
 	{
-		for (ObjectID id : m_dirty)
+		for (const DirtyEntry &d : m_dirty)
 		{
-			if (const Object *o = m_logic.findObjectByID(id))
+			const auto live = m_dirtyMark.find(d.id);
+			if (live == m_dirtyMark.end() || live->second != d.mark)
+			{
+				continue; // flushed or destroyed since (a later entry, if any, is its live one)
+			}
+			if (const Object *o = m_logic.findObjectByID(d.id))
 			{
 				pushFlush(*o);
 			}
 		}
 		m_dirty.clear();
-		m_dirtySet.clear();
+		m_dirtyMark.clear();
+		m_nextDirtyMark = 0;
 	}
 	std::vector<ClientEvent> out;
 	out.swap(m_events);

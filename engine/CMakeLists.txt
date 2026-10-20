@@ -235,6 +235,9 @@ include(cmake/Ownerfix1.cmake)  # OWNERFIX-1: problems the owner hit playing (OP
 include(cmake/Visual2.cmake)    # VISUAL-2: the owner's fog leak, tree sway and colouring (OPENBFME_VISUAL2_SOURCES / _TESTS)
 include(cmake/Ownerfix2.cmake)  # OWNERFIX-2: the owner's playtest of 2026-10-17 (OPENBFME_OWNERFIX2_CLIENT_SOURCES / _TESTS)
 include(cmake/Backlog8.cmake)   # BACKLOG-8: formations, horde wall scaling, auto ability melee position (appends to OPENBFME_SIM_SOURCES)
+include(cmake/Wall1.cmake)      # WALL-1: walkable wall tops and ramps (appends to OPENBFME_SIM_SOURCES; OPENBFME_WALL1_TESTS)
+include(cmake/Wall2.cmake)      # WALL-2: portals, portal modules, raised walkways (appends to OPENBFME_SIM_SOURCES; OPENBFME_WALL2_TESTS)
+include(cmake/Siege1.cmake)     # SIEGE-1: the siege units (appends to OPENBFME_SIM_SOURCES; OPENBFME_SIEGE1_TESTS)
 add_library(openbfme_core STATIC
     ${OPENBFME_PLAY2_SOURCES}
     ${OPENBFME_APT_SOURCES}
@@ -718,6 +721,9 @@ add_executable(openbfme_tests
     ${OPENBFME_OWNERFIX1_TESTS}
     ${OPENBFME_VISUAL2_TESTS}
     ${OPENBFME_OWNERFIX2_TESTS}
+    ${OPENBFME_WALL1_TESTS}
+    ${OPENBFME_WALL2_TESTS}
+    ${OPENBFME_SIEGE1_TESTS}
     tests/test_main.cpp
     tests/test_big_archive.cpp
     tests/test_archive_order.cpp

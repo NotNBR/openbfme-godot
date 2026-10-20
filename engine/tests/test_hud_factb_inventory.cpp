@@ -64,12 +64,12 @@ TEST_CASE("factb inventory: Isengard and Mordor reach every structure, unit, her
 		}
 		const std::set<std::string> isengard = { "AnnounceBirthAndDeathBehavior", "AudioLoopUpgrade", "BaseUpgrade",
 			"CitadelSlaughterHordeContain", "EvacuateDamage", "FlingPassengerSpecialAbilityUpdate", "GeometryUpgrade",
-			"PickupStuffUpdate", "SiegeDeployHordeSpecialPower", "SlaveWatcherBehavior", "SupplyCenterCreate", "SupplyCenterDockUpdate",
-			"TransitionDamageFX" };
+			"PickupStuffUpdate", "SlaveWatcherBehavior", "SupplyCenterCreate", "SupplyCenterDockUpdate",
+			"TransitionDamageFX" }; // lane SIEGE-1 ported SiegeDeployHordeSpecialPower
 		const std::set<std::string> mordor = { "AimWeaponBehavior", "AnnounceBirthAndDeathBehavior", "AudioLoopUpgrade", "AutoPickUpUpdate", "BaseUpgrade",
 			"BoredUpdate", "CitadelSlaughterHordeContain", "ClickReactionBehavior", "DoCommandUpgrade", "EvacuateDamage",
 			"FlingPassengerSpecialAbilityUpdate", "GeometryUpgrade", "GrabPassengerSpecialPower", "HordeTransportContainDamage",
-			"PickupStuffUpdate", "RunOffMapBehavior", "SiegeDeployHordeSpecialPower", "SlaughterHordeContain", "SlaveWatcherBehavior",
+			"PickupStuffUpdate", "RunOffMapBehavior", "SlaughterHordeContain", "SlaveWatcherBehavior",
 			"SupplyCenterCreate", "SupplyCenterDockUpdate", "TransitionDamageFX" };
 		CHECK(classes == (std::string(f) == "FactionIsengard" ? isengard : mordor));
 	}
