@@ -21,6 +21,8 @@
 #include <godot_cpp/classes/os.hpp>
 #include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
 
+#include <cstdlib>
+
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/array.hpp>
@@ -536,6 +538,40 @@ Dictionary RetailFileSystem::mountFrom(const std::string &rotwkRoot, const std::
 			{
 				report.ok = false; // the mod the player asked for, or nothing (never retail instead)
 			}
+		}
+		// Local, not retail: OPENBFME_EXTRA_ARCHIVES lists .big files (';'-separated) mounted over the retail archives, their
+		// files taking precedence (a user map, and a maps\mapcache.ini that names it). Unset, nothing changes.
+		const char *extra = std::getenv("OPENBFME_EXTRA_ARCHIVES");
+		if (report.ok && extra != nullptr && extra[0] != 0)
+		{
+			const std::string list = extra;
+			size_t start = 0;
+			while (start <= list.size())
+			{
+				size_t end = list.find(';', start);
+				if (end == std::string::npos)
+				{
+					end = list.size();
+				}
+				const std::string path = list.substr(start, end - start);
+				start = end + 1;
+				if (path.empty())
+				{
+					continue;
+				}
+				std::string openError;
+				std::unique_ptr<ArchiveFile> archive = fs->openArchiveFile(path, &openError);
+				if (!archive)
+				{
+					errors.push_back(toGodot("OPENBFME_EXTRA_ARCHIVES: " + openError));
+					report.ok = false;
+					break;
+				}
+				fs->mountArchive(std::move(archive), path, true);
+				warnings.push_back(toGodot("extra archive mounted over retail: " + path));
+				UtilityFunctions::push_warning("RetailFileSystem: extra archive mounted over retail: ", toGodot(path));
+			}
+			result["warnings"] = warnings;
 		}
 		if (report.ok)
 		{
