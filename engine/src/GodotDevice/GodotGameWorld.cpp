@@ -868,6 +868,7 @@ Dictionary GameWorld::load_map(const String &map_name, const Dictionary &options
 		UtilityFunctions::push_warning("CRASH a crash handler was replaced; restored OpenBFME handlers before match loading");
 	LiveGame::Options lo;
 	lo.mapName = toNative(map_name);
+	lo.simulationProfile = m_choice.current;
 	lo.seed = (std::uint32_t)optInt(options, "seed", 1);
 	lo.defaultStartingCash = (std::uint32_t)optInt(options, "default_cash", 0); // 0: the game's DefaultStartingCash
 	lo.maxFramesPerAdvance = (int)optInt(options, "max_frames_per_advance", 10);
