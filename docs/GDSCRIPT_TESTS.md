@@ -183,6 +183,7 @@ runner is claimed. All paths below are relative to the repository root.
 | `godot/tests/play3_test.gd` | Manual only; no generic pytest runner | Denied here: needs private RotWK/BFME2 assets and game/frame setup. |
 | `godot/tests/player_house_color_test.gd` | Manual only; no generic pytest runner | Denied here: needs private RotWK/BFME2 assets and game/frame setup. |
 | `godot/tests/player_message_log_test.gd` | Manual only; no generic pytest runner | Denied here: needs private RotWK/BFME2 assets and game/frame setup. |
+| `godot/tests/pro_camera_bokeh_test.gd` | Manual only; no generic pytest runner | Denied here: generated bokeh scene requires a GPU, window and render readback. |
 | `godot/tests/pro_camera_test.gd` | Manual only; no generic pytest runner | Denied here: GPU/window/render readback required (some also need retail assets). |
 | `godot/tests/radial_background_test.gd` | Manual only; no generic pytest runner | Denied here: GPU/window/render readback required (some also need retail assets). |
 | `godot/tests/rejoin_watch_test.gd` | `tools/net/test_rejoin_watchdog.py` | Existing argument-aware fixture runner; its prerequisites still apply. |
