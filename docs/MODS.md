@@ -150,7 +150,12 @@ or start OpenBFME with `--asset-pack=<folder>`.
   asset is an error that names both.
 - **Packs are cosmetic and allowed online.** Only drawing reads them. The game logic, which uses model bones for where arrows and
   projectiles start, keeps reading the original files, so a pack never changes a game result and never stops you joining a game.
-- Not replaced yet: particle, terrain, menu (Apt) and decal textures, and model formats other than W3D (glTF is planned, with automatic
+- Terrain albedo and normal textures also replace by name. Use square images at the original resolution, 2x or 4x it; the physical atlas
+  grows while the map's logical tiles, UVs, blend masks and gameplay remain unchanged. Atlas dimensions are capped at 8192 pixels, so
+  particularly large palettes may use a lower scale. Missing replacements retain retail art. Bad images stop loading with their names.
+  Replacement normal-map strength defaults to 0.25 to keep ground relief subtle; `openbfme/rendering/terrain_pack_normal_strength`
+  accepts 0..1 in Godot project settings. Original normal maps retain their authored strength.
+- Not replaced yet: particle, menu (Apt) and decal textures, and model formats other than W3D (glTF is planned, with automatic
   skeleton mapping and LODs).
 
 ## The modding SDK (planned)
