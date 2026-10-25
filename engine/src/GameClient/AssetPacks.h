@@ -17,7 +17,9 @@
 // with or without packs, and a pack may be used online. (Picking uses the drawn model, so a pack can change what a click hits: input, sent
 // as ordinary commands, never a desync.)
 //
-// Not covered yet (reported in AssetPacks::notCovered()): particle, terrain, UI (Apt) and decal textures, and model formats other than W3D.
+// Terrain albedo and normal textures also reach the renderer's atlas, at 1x, 2x or 4x their retail class resolution.
+// This retains logical tile coordinates and never changes the simulation's asset source.
+// Not covered yet (reported in AssetPacks::notCovered()): particle, UI (Apt) and decal textures, and model formats other than W3D.
 
 #pragma once
 
