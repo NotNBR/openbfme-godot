@@ -1,13 +1,13 @@
 # combo/studio: the engine bfme2-map-studio runs (its submodule native/openbfme-godot follows this branch).
 base upstream/main
 
-studio/extra-archives   # OPENBFME_EXTRA_ARCHIVES: the studio's map archives over retail (until games on user maps are ported, S-5160)
-studio/no-shroud        # --no-shroud
-studio/peer-battle-log  # openbfme_peer: headless battle log, studio maps
-studio/object-path      # GameWorld.get_object_path
-studio/map-profile      # honor the selected simulation profile when loading maps
-feat/natural-grass      # camera-local grass and natural ground
-feat/hd-terrain-packs   # HD terrain textures from asset packs (stacked on feat/natural-grass)
+feat/extra-archives     # fork only: OPENBFME_EXTRA_ARCHIVES, the studio's map archives over retail (until games on user maps, S-5160)
+feat/no-shroud          # fork only: --no-shroud
+feat/peer-battle-log    # fork only: openbfme_peer's headless battle log, studio maps in the peer
+feat/object-path        # fork only: GameWorld.get_object_path
+fix/map-profile         # fork only: honor the selected simulation profile when loading maps
+feat/natural-grass      # fork only: camera-local grass and natural ground
+feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
 
 # Available, not in this combo:
 # fix/ai-neutral-building-capture   # PR #113

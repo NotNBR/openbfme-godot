@@ -8,13 +8,13 @@ own branches, and the tool that builds them.
 | Branch | What it is | Commit on it? |
 |---|---|---|
 | `main` | Open-BFME/openbfme-godot's `main`, mirrored | never |
-| `feat/*`, `fix/*` | one change each, for an upstream pull request | yes |
-| `studio/*` | one change each, kept in the fork (not for upstream) | yes |
+| `feat/*`, `fix/*` | topic branches: one change each | yes |
 | `combo/<name>` | generated from `recipes/<name>.txt` | never: it is rebuilt and force-pushed |
 | `combos` | this branch: recipes and `combine.py` | yes |
 
 A topic branch starts from the upstream commit it is written against and holds one change. Stacking one topic on
-another is fine when it needs it (the recipe then lists the lower one first).
+another is fine when it needs it (the recipe then lists the lower one first). Whether a topic is an upstream pull
+request or stays in the fork is noted beside it in the recipe (`# PR #113`, `# fork only`), not in its name.
 
 ## Building a combo
 
