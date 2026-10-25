@@ -1216,7 +1216,8 @@ void spawnAndFade(GameLogic &logic, const SpawnAndFadeNugget &n, ObjectID source
 	Coord3D p;
 	p.x = SimMath::addf32(sp.x, SimMath::subf32(SimMath::mulf32(c, ox), SimMath::mulf32(s, oy)));
 	p.y = SimMath::addf32(sp.y, SimMath::addf32(SimMath::mulf32(ox, s), SimMath::mulf32(c, oy)));
-	p.z = logic.getGroundHeight(p.x, p.y);
+	const AIUpdateInterface *sourceAI = source->getAIUpdateInterface();
+	p.z = sourceAI ? sourceAI->layerHeightAt(p.x, p.y) : logic.getGroundHeight(p.x, p.y);
 	o->setPosition(&p);
 	o->setOrientation(angle);
 	source->kill(DEATH_FADED);

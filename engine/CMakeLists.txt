@@ -260,6 +260,7 @@ include(cmake/Campui1.cmake)    # CAMPUI-1: the campaign presentation, the missi
 include(cmake/Offmap1.cmake)    # OFFMAP-1: off-map map objects and horde members (OPENBFME_OFFMAP1_TESTS)
 include(cmake/Wall1.cmake)      # WALL-1: walkable wall tops and ramps (appends to OPENBFME_SIM_SOURCES; OPENBFME_WALL1_TESTS)
 include(cmake/Wall2.cmake)      # WALL-2: portals, portal modules, raised walkways (appends to OPENBFME_SIM_SOURCES; OPENBFME_WALL2_TESTS)
+include(cmake/Siege1.cmake)     # SIEGE-1: the siege units (appends to OPENBFME_SIM_SOURCES; OPENBFME_SIEGE1_TESTS)
 include(cmake/Bridge1.cmake)    # BRIDGE-1: retail bridges crossed and destroyed (OPENBFME_BRIDGE1_TESTS)
 add_library(openbfme_core STATIC
     ${OPENBFME_PLAY2_SOURCES}
@@ -764,6 +765,7 @@ add_executable(openbfme_tests
     ${OPENBFME_CHAT1_TESTS}
     ${OPENBFME_WALL1_TESTS}
     ${OPENBFME_WALL2_TESTS}
+    ${OPENBFME_SIEGE1_TESTS}
     ${OPENBFME_BRIDGE1_TESTS}
     tests/test_main.cpp
     tests/test_big_archive.cpp

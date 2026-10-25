@@ -104,6 +104,7 @@ void storeUberHashes(const char *name, const std::vector<std::uint32_t> &hashes)
 // its hash, said in the commit; lane TARGET-1 re-measured it: RotWK's target choice and mood-check timing). The state hash's own dispatches are counted
 // apart from the frame's (PERF-2's collision jobs): with more than one
 // thread the hash itself ran chunks on workers. The Uber hash is not the Faithful one, and a Faithful hash dispatches nothing.
+// The studio's 16-player integration re-measured the pin with SIEGE-1's runtime modules retained on that upstream base.
 TEST_CASE("uber1: the Uber battle hashes as its pin vector in every frame with 1, 4 and 16 logic threads and in a repeated run; the hash's own jobs run on "
 		  "workers; Faithful hashes differently and serially")
 {

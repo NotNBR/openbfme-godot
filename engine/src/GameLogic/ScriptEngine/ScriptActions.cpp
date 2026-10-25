@@ -640,7 +640,7 @@ void ScriptActions::execute(ScriptEngine &engine, const ScriptActionRec &a)
 		}
 		return;
 	}
-	if (executeUnitAction(engine, a, name) || executeOrderAction(engine, a, name) || executeCampaignAction(engine, a, name))
+	if (executeUnitAction(engine, a, name) || executeOrderAction(engine, a, name) || executeCampaignAction(engine, a, name) || executeSiegeAction(engine, a, name))
 	{
 		return;
 	}

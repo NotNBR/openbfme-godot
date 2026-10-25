@@ -160,7 +160,8 @@ struct AttackResult
 };
 
 // `targetName` empty: the map object named `gateName`; else the WALK_ON_TOP_OF_WALL piece nearest it that is no gate
-inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, const std::string &gateName, const std::string &unit, bool wall, float d, int frames)
+inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, const std::string &gateName, const std::string &unit, bool wall, float d, int frames,
+	bool fromFront = false)
 {
 	AttackResult res;
 	FortressGame g(s, map, false);
@@ -195,6 +196,16 @@ inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, co
 	const float len = std::sqrt(dx * dx + dy * dy);
 	dx /= len;
 	dy /= len;
+	if (fromFront)
+	{
+		dx = std::cos(target->getOrientation());
+		dy = std::sin(target->getOrientation());
+		if (dx * (w->location.x - tp.x) + dy * (w->location.y - tp.y) < 0.0f)
+		{
+			dx = -dx;
+			dy = -dy;
+		}
+	}
 	std::string error;
 	Object *o = g.game->createObject(unit, me->getPlayerIndex(), Coord3D{ tp.x + dx * d, tp.y + dy * d, 0.0f }, 0.0f, &error);
 	REQUIRE_MESSAGE(o, error);
