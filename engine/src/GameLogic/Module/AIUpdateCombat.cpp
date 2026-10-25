@@ -264,6 +264,7 @@ bool AIUpdateInterface::aiAttackObject(Object *victim, CommandSourceType source,
 	{
 		RoutedCommand c; // lane FLY-1
 		c.type = 0xB;
+		c.maxShots = maxShotsToFire;
 		c.target = victim;
 		c.source = source;
 		if (routeCommand(c))
@@ -361,6 +362,7 @@ bool AIUpdateInterface::aiAttackPosition(const Coord3D &pos, int maxShotsToFire,
 	{
 		RoutedCommand c; // lane FLY-1
 		c.type = 0xE;
+		c.maxShots = maxShotsToFire;
 		c.position = pos;
 		c.source = source;
 		if (routeCommand(c))

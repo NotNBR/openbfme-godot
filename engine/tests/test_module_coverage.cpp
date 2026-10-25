@@ -114,11 +114,11 @@ TEST_CASE("module coverage: every registry class is ported, base AI, parsed only
 	// FX-4: TransitionDamageFX missing -> ported: 149 / 158. LUMBER1 (SupplyCenterCreate, SupplyCenterDockUpdate): +2 -> 151 / 156.
 	// MODS-3: FireWeaponWhenDamagedBehavior missing -> ported (its DoCommandUpgrade is SUMMON-1's): +1 -> 152 / 155 (merge queue q24).
 	// WALL-2 (DynamicPortalBehaviour, FakePathfindPortalBehaviour): +2 -> 154 / 153 (merge queue q25). CHAT-1: BeaconClientUpdate missing -> ported: 155 / 152.
-	CHECK(c.ported == 155); // + WALL-2's DynamicPortalBehaviour and FakePathfindPortalBehaviour, + CHAT-1's BeaconClientUpdate
-	CHECK(c.baseAi == 8);
+	CHECK(c.ported == 162); // upstream's 155 plus SIEGE-1's seven modules (two were base AI)
+	CHECK(c.baseAi == 6);
 	// S-207: SpawnUnitBehavior data is parsed-only; its runtime remains unported (S-140).
 	CHECK(c.parsedOnly == 14);
-	CHECK(c.missing == 152); // CHAT-1 (BeaconClientUpdate) 153 -> 152; WALL-2 (DynamicPortalBehaviour, FakePathfindPortalBehaviour) 155 -> 153; MODS-3 (FireWeaponWhenDamagedBehavior) 156 -> 155; LUMBER1 (SupplyCenterCreate, SupplyCenterDockUpdate) 158 -> 156
+	CHECK(c.missing == 147); // upstream's 152 minus SIEGE-1's five formerly missing modules
 
 	if (const char *out = std::getenv("OPENBFME_MODULE_COVERAGE_OUT"))
 	{
