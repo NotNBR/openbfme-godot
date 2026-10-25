@@ -153,33 +153,44 @@ Node3D *buildGroundCover(const WorldHeightMap &map, const MapChunks &chunks,
 			color.a = weight; guide->set_pixel(x * 2 + sx, y * 2 + sy, color);
 		}
 	}
-	material->set_shader_parameter("terrain_guide", ImageTexture::create_from_image(guide));
+	guide->generate_mipmaps();
+	Ref<ImageTexture> guideTexture = ImageTexture::create_from_image(guide);
+	material->set_shader_parameter("terrain_guide", guideTexture);
+	// Grass fades in the transparent pass, like roads and rivers on the map GammaCompositeHost.
+	material->set_shader_parameter("output_gamma", 1.0f);
+	terrainMaterial->set_shader_parameter("terrain_guide", guideTexture);
 	material->set_shader_parameter("height_map", ImageTexture::create_from_image(heights));
 	material->set_shader_parameter("flip_map", ImageTexture::create_from_image(flips));
 	Vector2 origin(-map.m_borderSize * MAP_XY_FACTOR, -map.m_borderSize * MAP_XY_FACTOR);
 	material->set_shader_parameter("world_origin", origin);
 	material->set_shader_parameter("grid_size", Vector2(map.m_width, map.m_height));
+	terrainMaterial->set_shader_parameter("world_origin", origin);
+	terrainMaterial->set_shader_parameter("grid_size", Vector2(map.m_width, map.m_height));
 	uint8_t rgb[3] = {128, 128, 128};
 	if (lighting) HeightMapMesh::staticDiffuseAt(map, lighting, VERTEX_COLOR_AMBIENT_PLUS_ACCENT_LIGHTS, map.m_width/2, map.m_height/2, rgb);
 	material->set_shader_parameter("ambient_color", Vector3(rgb[0]/255.0f, rgb[1]/255.0f, rgb[2]/255.0f));
 	Node3D *root = memnew(Node3D);
 	root->set_name("GroundCover"); root->set_script(script);
-	root->set("height_image", heights); root->set("world_origin", origin); root->set("enabled", enabled);
+	root->set("terrain_material", terrainMaterial); root->set("height_image", heights); root->set("world_origin", origin); root->set("enabled", enabled);
 	root->set_meta("ground_cover", true);
 	Ref<ArrayMesh> mesh = makeBlade();
-	// A fixed reusable pool, independent of map area. GPU hashes world positions to keep blades anchored.
+	// Share two immutable instance buffers across the frustum-driven patch pool.
 	const int side = 16, count = 4096;
-	for (int i = 0; i < side * side * 2; ++i) {
+	Ref<MultiMesh> batches[2];
+	for (int layer = 0; layer < 2; ++layer) {
 		Ref<MultiMesh> batch; batch.instantiate(); batch->set_transform_format(MultiMesh::TRANSFORM_3D);
 		batch->set_mesh(mesh); batch->set_instance_count(count); batch->set_visible_instance_count(0);
 		for (int j = 0; j < count; ++j) batch->set_instance_transform(j, Transform3D());
-		batch->set_custom_aabb(AABB(Vector3(-5, minHeight-1, -5), Vector3(i < side*side ? 42 : 138, maxHeight-minHeight+12, i < side*side ? 42 : 138)));
-		MultiMeshInstance3D *node = memnew(MultiMeshInstance3D); node->set_multimesh(batch);
+		batch->set_custom_aabb(AABB(Vector3(-5, minHeight-1, -5), Vector3(layer == 0 ? 42 : 138, maxHeight-minHeight+12, layer == 0 ? 42 : 138)));
+		batches[layer] = batch;
+	}
+	for (int i = 0; i < side * side * 2; ++i) {
+		MultiMeshInstance3D *node = memnew(MultiMeshInstance3D); node->set_multimesh(batches[i / (side*side)]);
 		node->set_material_override(material); node->set_cast_shadows_setting(GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
 		node->set_name(String("GrassPatch_") + String::num_int64(i)); root->add_child(node);
 	}
 	report["enabled"] = enabled; report["instances"] = side*side*2*count; report["patches"] = side*side*2;
-	report["field_radius"] = 880;
+	report["shared_instance_slots"] = count*2; report["screen_size_lod"] = true;
 	report["camera_local"] = true; report["triangles_per_blade"] = 3;
 	report["rejected_road_water"] = rejectedRoadWater; report["rejected_slope"] = rejectedSlope;
 	return root;
