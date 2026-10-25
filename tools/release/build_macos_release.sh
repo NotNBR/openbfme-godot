@@ -9,7 +9,8 @@
 #       official 4.7.2 export templates with package_macos_preview.py's pinned SHA-256, the CI repository and the godot-cpp mirror.
 #       Prints "MAC READY <host> ..." and exits 0, or names what is missing and exits 1 (2 when the host does not answer).
 #   tools/release/build_macos_release.sh <checkout at the release tag> <version> <out dir>
-#       pushes the tag to the host's private CI repository (~/<root>/repo.git), clones it there at the tag (godot-cpp from the host's
+#       pushes the tag to the host's private CI repository (~/<root>/repo.git), fetches it there into a fresh repository (git's
+#       transport, never a local clone that copies repo.git's files: RELCAND-1) and checks it out (godot-cpp from the host's
 #       mirror) and runs tools/release/package_macos.py in the host's slot 0 (as a lane job: a fresh arm64 build, macOS 13 minimum, the
 #       Godot export, ad-hoc signing, the strict audit), then fetches the package folder into <out dir>: <stem>.zip, <stem>.zip.sha256,
 #       <stem>.inventory.txt and README-MAC.txt (autorelease.sh checks that set exactly). The clone and the tag are removed from the host
@@ -58,7 +59,7 @@ fi
 
 [ $# = 3 ] || fail "usage: build_macos_release.sh --check | <checkout at the release tag> <version> <out dir>"
 WT=$1; VERSION=$2; OUT=$3
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|preview)\.[0-9]+)?$ ]] || fail "$VERSION is not a release version"
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|nightly|preview)\.[0-9]+)?$ ]] || fail "$VERSION is not a release version"
 COMMIT=$(git -C "$WT" rev-parse -q --verify "refs/tags/$VERSION^{commit}") || fail "$WT has no tag $VERSION"
 [ "$(git -C "$WT" rev-parse HEAD)" = "$COMMIT" ] || fail "$WT is not checked out at $VERSION"
 [ -d "$OUT" ] && [ -z "$(ls -A "$OUT")" ] || fail "$OUT must be an empty folder"
@@ -80,9 +81,12 @@ R=\$C/release/$VERSION
 # the Mac's slot 0, as a lane job takes it (ci_heavy): a gate or measurement there finishes first
 exec 6>\$C/verify.lock.0; flock -n 6 || { echo "MAC BUILD: waiting for the Mac's slot 0 (a gate or lane job holds it)"; flock 6; }
 rm -rf "\$R"; mkdir -p "\$R/out"
-git clone -q --no-checkout "\$C/repo.git" "\$R/src"
+# RELCAND-1: an empty repository that fetches the tag alone over git's transport (file://), never a local clone: a local clone copies or
+# hardlinks repo.git's object files and died with "hardlink different from source at .../objects/pack/tmp_pack_..." (v0.4.11) while
+# another job was writing a pack there; the transport reads objects through git and never sees a pack being written
+git init -q "\$R/src"
 cd "\$R/src"
-git fetch -q -f "\$C/repo.git" "refs/tags/$VERSION:refs/tags/$VERSION"
+git fetch -q --no-tags "file://\$C/repo.git" "refs/tags/$VERSION:refs/tags/$VERSION"
 git checkout -q --detach "$VERSION"
 [ "\$(git rev-parse HEAD)" = $COMMIT ] || { echo "MAC BUILD: the clone is not at $COMMIT"; exit 1; }
 d=\$(git describe --tags --match 'v[0-9]*' --exclude '*-playtest.*' --always --dirty --abbrev=10)

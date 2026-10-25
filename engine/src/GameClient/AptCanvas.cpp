@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // stage <-> window
@@ -189,6 +190,108 @@ std::size_t AptCanvasList::count(AptCanvasOp::Kind kind) const
 	return n;
 }
 
+std::vector<AptCanvasSegment> AptCanvasSegments(const AptCanvasList &list)
+{
+	std::vector<AptCanvasSegment> out;
+	std::size_t depth = 0; // open masks, counted as the device's drawCanvas nests them (a MaskEnd with none open is ignored)
+	for (std::size_t i = 0; i < list.ops.size(); ++i)
+	{
+		const AptCanvasOp &op = list.ops[i];
+		if (depth == 0)
+		{
+			out.push_back(AptCanvasSegment{ op.level, op.level, i, i + 1 });
+		}
+		else
+		{
+			out.back().lastLevel = op.level;
+			out.back().end = i + 1;
+		}
+		if (op.kind == AptCanvasOp::Kind::MaskBegin)
+		{
+			++depth;
+		}
+		else if (op.kind == AptCanvasOp::Kind::MaskEnd && depth > 0)
+		{
+			--depth;
+		}
+	}
+	return out;
+}
+
+AptCanvasRedrawPlan AptCanvasPlanRedraw(const AptCanvasList &now, const std::vector<AptCanvasSegment> &nowSegments, const AptCanvasList &drawn,
+	const std::vector<AptCanvasSegment> &drawnSegments)
+{
+	AptCanvasRedrawPlan plan;
+	plan.old.assign(nowSegments.size(), -1);
+	plan.same.assign(nowSegments.size(), false);
+	std::size_t i = 0, k = 0; // the next segment of `now` / `drawn`
+	while (i < nowSegments.size() || k < drawnSegments.size())
+	{
+		if (i == nowSegments.size() || k == drawnSegments.size() || nowSegments[i].firstLevel != drawnSegments[k].firstLevel)
+		{
+			plan.full = true; // another level, or a level more or less
+			return plan;
+		}
+		const int level = nowSegments[i].firstLevel;
+		std::size_t i1 = i, k1 = k;
+		while (i1 < nowSegments.size() && nowSegments[i1].firstLevel == level)
+		{
+			++i1;
+		}
+		while (k1 < drawnSegments.size() && drawnSegments[k1].firstLevel == level)
+		{
+			++k1;
+		}
+		if (i1 - i == k1 - k)
+		{
+			for (std::size_t j = 0; j < i1 - i; ++j)
+			{
+				const AptCanvasSegment &a = nowSegments[i + j], &b = drawnSegments[k + j];
+				if (a.lastLevel == b.lastLevel)
+				{
+					plan.old[i + j] = (std::ptrdiff_t)(k + j);
+					plan.same[i + j] = AptCanvasSameOps(now, a.begin, a.end, drawn, b.begin, b.end);
+				}
+			}
+		}
+		i = i1;
+		k = k1;
+	}
+	return plan;
+}
+
+bool AptCanvasSameOp(const AptCanvasOp &x, const AptCanvasOp &y)
+{
+	auto sameFloats = [](const float *a, const float *b, std::size_t n) { return n == 0 || std::memcmp(a, b, n * sizeof(float)) == 0; };
+	auto sameVec = [&](const std::vector<float> &a, const std::vector<float> &b) { return a.size() == b.size() && sameFloats(a.data(), b.data(), a.size()); };
+	const float mx[6] = { x.matrix.a, x.matrix.b, x.matrix.c, x.matrix.d, x.matrix.tx, x.matrix.ty };
+	const float my[6] = { y.matrix.a, y.matrix.b, y.matrix.c, y.matrix.d, y.matrix.tx, y.matrix.ty };
+	const float tx[6] = { x.fontHeight, x.drawSize, x.scaleX, x.scaleY, x.offsetX, x.offsetY };
+	const float ty[6] = { y.fontHeight, y.drawSize, y.scaleX, y.scaleY, y.offsetX, y.offsetY };
+	return x.kind == y.kind && x.level == y.level && x.maskShape == y.maskShape && x.bold == y.bold && x.alignment == y.alignment && x.wordWrap == y.wordWrap &&
+		x.multiline == y.multiline && x.readOnly == y.readOnly && x.dropShadow == y.dropShadow && x.nativeTag == y.nativeTag && sameFloats(x.shadowColor, y.shadowColor, 4) &&
+		sameFloats(x.textColor, y.textColor, 4) && sameFloats(x.bounds, y.bounds, 4) && sameFloats(mx, my, 6) && sameFloats(tx, ty, 6) && sameVec(x.positions, y.positions) &&
+		sameVec(x.colors, y.colors) && sameVec(x.uvs, y.uvs) && x.texture == y.texture && x.text == y.text && x.fontName == y.fontName && x.drawFont == y.drawFont &&
+		x.path == y.path && x.symbolMovie == y.symbolMovie && x.symbolName == y.symbolName && x.renderObject == y.renderObject && x.nativeVars == y.nativeVars &&
+		sameFloats(x.placeholderColor, y.placeholderColor, 4); // Sol r1: a native component's colour (the HUD hook tints its image with it)
+}
+
+bool AptCanvasSameOps(const AptCanvasList &a, std::size_t aBegin, std::size_t aEnd, const AptCanvasList &b, std::size_t bBegin, std::size_t bEnd)
+{
+	if (aEnd - aBegin != bEnd - bBegin)
+	{
+		return false;
+	}
+	for (std::size_t i = 0; i < aEnd - aBegin; ++i)
+	{
+		if (!AptCanvasSameOp(a.ops[aBegin + i], b.ops[bBegin + i]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 namespace
 {
 
@@ -273,9 +376,11 @@ void BuildAptCanvas(const AptRenderList &list, const AptCanvasInputs &in, AptCan
 	std::set<std::string> missing, substitutions, textureErrors;
 	std::vector<bool> maskShapePhase; // one entry per open mask: still defining the mask shape
 	AptCanvasOp *last = nullptr;
+	int cmdLevel = 0; // lane HUDREDRAW-1: the level of the command being translated: ops of two levels are never merged (the device redraws per level)
 
 	auto push = [&](AptCanvasOp &&op) {
-		if (merge && last && sameState(*last, op))
+		op.level = cmdLevel; // now, not at the command's end (LevelStamp): the next fill of the same shape command merges into it
+		if (merge && last && last->level == cmdLevel && sameState(*last, op))
 		{
 			AptCanvasOp &t = *last;
 			t.positions.insert(t.positions.end(), op.positions.begin(), op.positions.end());
@@ -289,6 +394,21 @@ void BuildAptCanvas(const AptRenderList &list, const AptCanvasInputs &in, AptCan
 
 	for (const AptRenderCommand &cmd : list.commands)
 	{
+		cmdLevel = cmd.level;
+		const std::size_t firstNew = out.ops.size();
+		struct LevelStamp
+		{
+			AptCanvasList &out;
+			std::size_t first;
+			int level;
+			~LevelStamp()
+			{
+				for (std::size_t i = first; i < out.ops.size(); ++i)
+				{
+					out.ops[i].level = level;
+				}
+			}
+		} stamp{ out, firstNew, cmd.level };
 		switch (cmd.kind)
 		{
 			case AptRenderCommand::Kind::MaskBegin:
@@ -576,6 +696,12 @@ void BuildAptCanvas(const AptRenderList &list, const AptCanvasInputs &in, AptCan
 	out.unverified.assign(unverified.begin(), unverified.end());
 	out.missingLabels.assign(missing.begin(), missing.end());
 	out.fontSubstitutions.assign(substitutions.begin(), substitutions.end());
+}
+
+float AptTextFontScale(const AptMatrix &matrix)
+{
+	// see AptCanvas.h (lane MENUFIX-1)
+	return std::sqrt(matrix.c * matrix.c + matrix.d * matrix.d);
 }
 
 AptTextPlacement PlaceAptText(float boxX0, float boxY0, float boxX1, float boxY1, float textWidth, float textHeight, std::uint32_t alignment, bool multiline, bool wordWrap)

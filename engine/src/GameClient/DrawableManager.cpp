@@ -240,6 +240,7 @@ void DrawableManager::applyEvents(const std::vector<ClientEvent> &events)
 		case ClientEvent::MODEL_FLUSH:
 			if (Drawable *d = findByObject(ev.object))
 			{
+				if (ev.hasHouseColor) d->setHouseColor(ev.houseColor);
 				d->setScriptTarget(ev.scriptTarget); // lane FX-3: before the flush runs the state scripts
 				d->flushModelConditions(ev.hasWeaponTiming, ev.weaponTimingFrames);
 			}
@@ -281,6 +282,8 @@ void DrawableManager::applyEvents(const std::vector<ClientEvent> &events)
 				}
 				d->setDrawsInMirror(ev.mirror);
 			}
+			break;
+		case ClientEvent::CAH_STATISTICS: // consumed by LiveGame profile statistics, not a drawable event
 			break;
 		case ClientEvent::HERO_ATTACKED:
 			if (m_heroAttackedHandler)

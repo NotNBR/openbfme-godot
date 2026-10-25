@@ -116,6 +116,7 @@ struct AptCanvasOp
 	};
 	Kind kind = Kind::Mesh;
 	std::string path; // the instance path (diagnostics)
+	int level = 0;    // lane HUDREDRAW-1: the Apt level of the command it comes from (ops of two levels are never merged)
 
 	// Mesh: three vertices per triangle, no sharing
 	std::string texture;           // empty: untextured
@@ -169,6 +170,32 @@ public:
 	std::size_t count(AptCanvasOp::Kind kind) const;
 };
 
+// lane HUDREDRAW-1: the device keeps the canvas items of the ops that draw the same as last frame and draws again only the ones that changed (a movie that
+// loops a state, the spell store's `_active` buttons or the Palantir's pulsing powers button, no longer redraws the whole HUD).  The unit is a segment: one
+// op, or a mask bracket with everything it clips (MaskBegin up to its MaskEnd; a mask left open runs to the list's end, as the device nests the ops after it
+// under the mask).  Each segment is drawn under a canvas item of its own, in list order.
+struct AptCanvasSegment
+{
+	int firstLevel = 0, lastLevel = 0; // the levels of its first and last op
+	std::size_t begin = 0, end = 0;    // [begin, end) in the list's ops
+};
+std::vector<AptCanvasSegment> AptCanvasSegments(const AptCanvasList &list);
+// Which segments of `now` can keep what is on screen for `drawn`. The two lists are matched level by level (by each segment's first level): the same levels
+// in the same order, else `full` (everything drawn again). In a level with as many segments as before, segment by segment: `old[j]` is the drawn segment it
+// replaces and `same[j]` whether its ops draw the same (kept); a level whose segment count changed has all its segments drawn anew (`old[j]` = -1).
+struct AptCanvasRedrawPlan
+{
+	bool full = false;
+	std::vector<std::ptrdiff_t> old;
+	std::vector<bool> same;
+};
+AptCanvasRedrawPlan AptCanvasPlanRedraw(const AptCanvasList &now, const std::vector<AptCanvasSegment> &nowSegments, const AptCanvasList &drawn,
+	const std::vector<AptCanvasSegment> &drawnSegments);
+// Whether two ops draw the same: every field the device or its native hook reads, compared bit for bit (floats too: the same bits draw the same)
+bool AptCanvasSameOp(const AptCanvasOp &x, const AptCanvasOp &y);
+// Whether a's ops [aBegin, aEnd) draw the same as b's ops [bBegin, bEnd)
+bool AptCanvasSameOps(const AptCanvasList &a, std::size_t aBegin, std::size_t aEnd, const AptCanvasList &b, std::size_t bBegin, std::size_t bEnd);
+
 struct AptImageReplacement
 {
 	std::string texture;
@@ -208,6 +235,15 @@ struct AptTextPlacement
 };
 // box: the window rectangle of the field's two corners (x0, y0) and (x1, y1) through the instance matrix and the stage mapping (axis-aligned, as retail)
 AptTextPlacement PlaceAptText(float boxX0, float boxY0, float boxX1, float boxY1, float textWidth, float textHeight, std::uint32_t alignment, bool multiline, bool wordWrap);
+
+// Lane MENUFIX-1: how much an edit-text instance's stage matrix grows its font: the length of the matrix's transformed vertical unit vector
+// (sqrt(c^2 + d^2): the field's vertical scale, rotation-invariant). TARGET FACT (donor, BFME1 AptDisplayStringAllocation_ctor.cpp:105-110 for RW
+// 0x4AA369): the display string's font size is the source's size times min(screen scale x, y); the box comes from the field's corners through the
+// matrix. INFERENCE (S-132): which matrix factor RotWK folds into the source's size was not read; the vertical scale is the one that keeps the movies'
+// designs: LoadScreen.apt widens each row's 47-unit, 14-pixel TheString field with `_width = stringWidth` (160 for PlayerName, 70 for ArmyName, a
+// horizontal stretch only), so the names keep the 14-pixel font of the other columns in a wider box. The earlier sqrt(|det|) grew the player names
+// to 1.84 times (26 pixels at 1024 x 768), over the next row. Equal to sqrt(|det|) for every uniformly scaled field.
+float AptTextFontScale(const AptMatrix &matrix);
 
 // Translate a render list.  `merge` joins consecutive meshes of equal state into one op (fewer device calls, same pixels).
 void BuildAptCanvas(const AptRenderList &list, const AptCanvasInputs &in, AptCanvasList &out, bool merge = true);

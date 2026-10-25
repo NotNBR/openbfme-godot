@@ -40,8 +40,8 @@ const char *const kStopRequirements =
 const char *const kStopTypeTest =
 	"[S-1874] ActionManager RW 0x82DFB7: the per-power-type tests of the building powers (0x52, 0x61, 0x67, 0x6A: RW 0x82E2DE), 0x27 (RW 0x67F52B), 0x38 "
 	"(RW 0x76A247), 0x41 (RW 0x82E252), 0x49 (RW 0x680A75 layer) and 0x57 (the rebuild scan RW 0x82E93C) are not ported, and the summons' spot test (0x55, 0x56, "
-	"0x5B, 0x5D .. 0x5F, 0x73, 0x76, 0x78, 0x7B, 0x7C, 0x7E, 0x96, 0x9A: RW 0x82E586, ported) cannot run before the partition's geometry overlap query "
-	"(distance type 4, S-1020): they answer no (counted per type)";
+	"0x5B, 0x5D .. 0x5F, 0x73, 0x76, 0x78, 0x7B, 0x7C, 0x7E, 0x96, 0x9A: RW 0x82E586) is ported (lane SUMMONLOC-1: the partition's geometry overlap, distance "
+	"type 4, on the template's shapes, S-1020): the unported types answer no (counted per type)";
 
 int kindBit(const char *name)
 {
@@ -273,9 +273,6 @@ FinalTest finalTestOf(int type)
 		return FINAL_NO;
 	}
 }
-
-// the partition's FROM_GEOMETRY_OVERLAP range query (RW 0xA3C7D0 -> RW 0xAD2CE0) is stop S-1020
-constexpr bool kSummonOverlapPorted = false;
 
 // the integer grid walks of RW 0x82EC27 / 0x82EA58 / 0x82EB77 / 0x82E753: x and y from cvttss2si(l - h) to cvttss2si(l + h) (SSE) in steps; each point
 // (cvtsi2ss x, cvtsi2ss y) is refused by TheTerrainLogic vslot 0x54 (the third plane) or, with `cliffToo`, vslot 0x50 (cliff). A zero step would loop for
@@ -601,12 +598,7 @@ bool canDoSpecialPowerAtLocation(Object &obj, const Coord3D &loc, const SpecialP
 	case 0x52: case 0x61: case 0x67: case 0x6A: // RW 0x82E2DE (the building powers)
 		return unportedAnswer(unported, logic, type);
 	case 0x55: case 0x56: case 0x5B: case 0x5D: case 0x5E: case 0x5F: case 0x73: case 0x76: case 0x78: case 0x7B: case 0x7C: case 0x7E: case 0x96: case 0x9A:
-		// RW 0x82E586 (the final switch is not reached): its first scan is the partition's geometry overlap (distance type 4, RW 0xA3C7D0), which needs the shape
-		// overlap test RW 0xAD2CE0 (stop S-1020): the spot test below is ported but cannot run; the type answers no (counted)
-		if (!kSummonOverlapPorted)
-		{
-			return unportedAnswer(unported, logic, type);
-		}
+		// RW 0x82E586 (the final switch is not reached): its first scan is the partition's geometry overlap (distance type 4, RW 0xA3C7D0 -> RW 0xAD2CE0)
 		return summonSpotClear(obj, loc, t);
 	case 0x41:                                                                          // RW 0x82E252
 	case 0x49:                                                                          // RW 0x82E21A

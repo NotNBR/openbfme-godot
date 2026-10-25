@@ -2,17 +2,15 @@
 ## after the factor is chosen) is in game.gd's lobby step; here, in the game: the same hero for the local player (the rule applies: a playable side) and for
 ## the neutral player (it does not), side by side, the same 1400 damage dealt to both through the test hook, the local one selected and the pointer over
 ## the other so both health bars show. Prints "RULES1 <what>: ok / FAIL <why>" and "RULES1 RESULT: <n> ok, <m> failed"; screenshot rules1-heroes.png.
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
 var helper # scripts/hud5_player.gd: the camera and selection helpers
-var ok_count := 0
-var fail_count := 0
 
 
-func run(p_game: Node, hero_template: String) -> void:
+func _run(p_game: Node, hero_template: String) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -20,14 +18,11 @@ func run(p_game: Node, hero_template: String) -> void:
 	helper.game = game
 	helper.hud = hud
 	helper.world = world
-	var r: String = await _heroes(hero_template)
-	if r == "":
-		ok_count += 1
-		print("RULES1 heroes: ok")
-	else:
-		fail_count += 1
-		print("RULES1 heroes: FAIL %s" % r)
-	print("RULES1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(PackedStringArray(["heroes"]), [_heroes.bind(hero_template)])
+
+
+func _scenario_names(_request: Variant) -> PackedStringArray:
+	return PackedStringArray(["heroes"])
 
 
 func _heroes(template: String) -> String:

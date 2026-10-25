@@ -53,10 +53,6 @@ bool isStructure(const Object &o)
 
 bool FindPosition::tryPosition(GameLogic &logic, const Coord3D &center, float dist, float angle, const FindPositionOptions &options, Coord3D &result)
 {
-	if (options.flags & FPF_USE_HIGHEST_LAYER)
-	{
-		throw std::logic_error("TryPosition (RW 0x6851F1): FPF_USE_HIGHEST_LAYER asks the layer at the spot (RW 0x680B70), not ported [S-1280]");
-	}
 	const PathfindTerrain &terrain = terrainOf(logic);
 	// RW 0x685201 .. 0x68523C: fcos / fsin of the float angle, * dist, + centre, one fstp each (x87 PC24)
 	double s = 0.0, c = 0.0;
@@ -64,8 +60,10 @@ bool FindPosition::tryPosition(GameLogic &logic, const Coord3D &center, float di
 	Coord3D pos;
 	pos.x = SimMath::fstpDword(SimMath::pc24AddW(SimMath::pc24MulW(c, (double)dist), (double)center.x));
 	pos.y = SimMath::fstpDword(SimMath::pc24AddW(SimMath::pc24MulW(s, (double)dist), (double)center.y));
-	const int layer = LAYER_GROUND; // ebx = 1 without FPF_USE_HIGHEST_LAYER
-	pos.z = logic.getGroundHeight(pos.x, pos.y); // vslot 0x18
+	// ebx = 1 without FPF_USE_HIGHEST_LAYER: the ground height (vslot 0x18). Lane SUMMON-1: with it (RW 0x685243) z = 99999 (RW 0xBDF350), the layer for the
+	// spot (RW 0x680B70: the ground, S-161), that layer's height (vslot 0x1C(x, y, layer, 0, 1): the ground's, getGroundHeight) and + 1.0 off the ground
+	const int layer = LAYER_GROUND;
+	pos.z = logic.getGroundHeight(pos.x, pos.y);
 	// RW 0x6852AD: fabs((double)(z - center.z)) > maxZDelta fails (a NaN passes: fcompi unordered, ja not taken)
 	const double dz = SimMath::absD((double)SimMath::pc24Sub(pos.z, center.z));
 	if (dz > (double)options.maxZDelta)
@@ -199,5 +197,5 @@ std::vector<std::string> FindPosition::stopLines()
 {
 	return { "[S-1280] TerrainLogic::FindPositionAround / TryPosition (RW 0x68592D / 0x6851F1) are ported; INFERENCE: the overlap test uses the template's shape list "
 	         "(retail: the object's own GeometryInfo, S-1020), the path test of a sourceToPathToDest is the port's clientSafeQuickDoesPathExist with the source's "
-	         "locomotor (RW 0x6F5BB0), fcos / fsin are the deterministic sinCosDet (S-167); not ported: FPF_USE_HIGHEST_LAYER (the layer lookup RW 0x680B70, refused)" };
+	         "locomotor (RW 0x6F5BB0), fcos / fsin are the deterministic sinCosDet (S-167); FPF_USE_HIGHEST_LAYER (lane SUMMON-1) takes the ground layer as the spot's layer (RW 0x680B70: S-161)" };
 }

@@ -289,7 +289,7 @@ public:
 	DamageModuleInterface *getDamage() override { return this; }
 	UpdateSleepTime update() override;                                    ///< RW 0x8558C0
 	void onDamage(const DamageInfo &info) override;                       ///< RW 0x855706
-	void onBodyDamageStateChange(BodyDamageType, BodyDamageType) override {}
+	void onBodyDamageStateChange(const DamageInfo *, BodyDamageType, BodyDamageType) override {}
 	DisabledMaskType getDisabledTypesToProcess() const override { return (DisabledMaskType)(1u << 3); } ///< RW 0x855830: DISABLED_HELD
 	void triggerByButton();                                               ///< RW 0x855431 (SpecialAbilityUpdate's AutoHeal ability)
 	void waitForButton();                                                 ///< RW 0x85541B (SpecialAbilityUpdate's finish of the AutoHeal ability)

@@ -163,8 +163,7 @@ std::vector<std::string> HeroSystem::stopLines()
 		"[S-850] hero recruiting UI: the control bar's REVIVE buttons show RW 0x943D6F's first pass (the jth REVIVE slot stands for the jth template of "
 		"BuildableRingHeroesMP + BuildableHeroesMP, its record's image RW 0x7810BC, cost, state and production clock; a press is the build-index "
 		"MSG_QUEUE_UNIT_CREATE) and a hero's special power buttons their lock / ready / recharge state and clock; not ported: the second pass (leftover records "
-		"into free slots), RW 0x942733's UI rules beyond canMakeUnit, Create-A-Hero's own image, the HeroSelect side list of the live heroes' portraits, the "
-		"radius cursor of a targeted ability",
+		"into free slots), RW 0x942733's UI rules beyond canMakeUnit, Create-A-Hero's own image, the HeroSelect side list of the live heroes' portraits",
 		"[S-851] RespawnUpdate AutoSpawn: the writer of state 3 (the auto respawn countdown) is not located and the refund slot RW 0x8B3017 has no caller; retail data has no "
 		"AutoSpawn:Yes rule, a mod's would never respawn by itself here (state 3 reached is a runtime error)",
 		"[S-852] hero records: not ported: the campaign / WotR saved heroes (RW 0x6B1771), the record "

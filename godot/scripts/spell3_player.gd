@@ -5,27 +5,28 @@
 ##              Palantir's powers button opens SpellStore.apt, every power that can be bought is clicked tier by tier, ACCEPT buys them; then every
 ##              spell book slot of the Palantir is clicked: a power that wants a position shows its targeting ring, a left click on the ground casts it;
 ##              the result per power: bought, the slot ready, the cast taken (the slot recharges), the objects the cast made and the damage it did
+##   spellbook_idle  (lane HUDREDRAW-1) the HUD's cost with the store open: power points given (the test hook above), 10 s with the store closed, then the
+##              Palantir's powers button opens it and it is held open 10 s; per window "SPELL3 APT <window> ..." prints the render frames, fps, the main thread's
+##              CPU per frame and the Apt player's get_stats (rebuilds, unchanged_frames, list_us, canvas_us, submit_us, the levels redrawn / kept); run with --perf
+##              for the GAME PERF lines
+##   spellrc    (lane SPELLRC-1, the owner: "you can't right click mouse move with spellbook powers out") power points given (the test hook above), a unit
+##              selected by a click, a power bought by mouse; with the store open a right click on the ground orders the move; then a spell book power that
+##              wants a position is pressed (its targeting): a right DRAG on the ground scrolls the camera and the power is still waiting (RotWK's LookAt
+##              translator sees the press; the GUI command translator RW 0x83D7AD ends a command only on a click that was not dragged), a right CLICK cancels
+##              it without an order (RW 0x83DB8D), and the next right click orders the move
 extends "res://scripts/play1_player.gd"
 
 var faction := ""
 var results: Array = []  # one Dictionary per power
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
 	shell = game._shell
 	faction = str(game._faction) if "_faction" in game else ""
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("SPELL3 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("SPELL3 %s: FAIL %s" % [s, r])
-	print("SPELL3 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func shot(name: String) -> void:
@@ -687,6 +688,121 @@ func _scenario_spellbook() -> String:
 	return "; ".join(fails)
 
 
+## lane HUDREDRAW-1: one measured window of `sec` seconds (or `count` render frames when > 0): the frames drawn, fps, the main thread's CPU per frame and the
+## shell player's stats over the window
+func apt_window(tag: String, sec: float, count: int = 0) -> Dictionary:
+	shell.reset_timing()
+	var s0: Dictionary = shell.get_stats()
+	var f0 := Engine.get_process_frames() # (a headless run draws no frames)
+	var t0 := Time.get_ticks_usec()
+	var c0: float = game._main_thread_cpu_ms()
+	if count > 0:
+		for i in count:
+			await game.get_tree().process_frame
+	else:
+		await game._wait_seconds(sec)
+	var frames := Engine.get_process_frames() - f0
+	var elapsed := (Time.get_ticks_usec() - t0) / 1.0e6
+	var cpu: float = (game._main_thread_cpu_ms() - c0) / maxf(frames, 1)
+	var s1: Dictionary = shell.get_stats()
+	var w := {"window": tag, "frames": frames, "fps": frames / maxf(elapsed, 0.001), "main_cpu_ms_per_frame": cpu,
+		"rebuilds": s1.get("rebuilds", 0), "unchanged_frames": int(s1.get("unchanged_frames", 0)) - int(s0.get("unchanged_frames", 0)),
+		"list_us": s1.get("list_us", 0.0), "canvas_us": s1.get("canvas_us", 0.0), "submit_us": s1.get("submit_us", 0.0), "last_ops": s1.get("last_ops", 0),
+		"canvas_items": s1.get("canvas_items", 0), "apt_notes": [s0.get("apt_notes", 0), s1.get("apt_notes", 0)], "wm_notes": [s0.get("wm_notes", 0),
+		s1.get("wm_notes", 0)]}
+	if s1.has("partial_frames"):
+		w["partial_frames"] = int(s1.partial_frames) - int(s0.get("partial_frames", 0))
+	if s1.has("levels"):
+		var lv := {}
+		var l0: Dictionary = s0.get("levels", {})
+		for k in s1.levels:
+			var a: Dictionary = s1.levels[k]
+			var b: Dictionary = l0.get(k, {})
+			lv[k] = {"movie": a.get("movie", ""), "redrawn": int(a.get("redrawn", 0)) - int(b.get("redrawn", 0)), "kept": int(a.get("kept", 0)) - int(b.get("kept", 0)),
+				"segments_redrawn": int(a.get("segments_redrawn", 0)) - int(b.get("segments_redrawn", 0)), "segments": int(a.get("segments", 0))}
+		w["levels"] = lv
+	print("SPELL3 APT %s %s" % [tag, JSON.stringify(w)])
+	return w
+
+
+func _scenario_spellbook_idle() -> String:
+	var me: int = game._local_index
+	var pts: int = world.debug_add_science_points(me, 200)
+	print("SPELL3 TEST HOOK: player %d (%s) given 200 power points -> %d" % [me, faction, pts])
+	hud.camera_look_at(base_position())
+	await game._step(10)
+	await game._wait_seconds(2.0)
+	var closed := await apt_window("closed", 10.0)
+	shot("idle-closed-steady") # the fps overlay (--fps) after 10 s closed
+	var st := await open_store()
+	if not st.get("open", false):
+		return "the powers button did not open the store (%s)" % st.get("error", "")
+	shot("idle-store-open")
+	var opened := await apt_window("open", 10.0)
+	shot("idle-store-open-steady") # after 10 s open
+	print("SPELL3 APT summary: fps closed %.1f open %.1f; main CPU ms/frame closed %.2f open %.2f" % [closed.fps, opened.fps, closed.main_cpu_ms_per_frame,
+		opened.main_cpu_ms_per_frame])
+	return ""
+
+
+## lane HUDREDRAW-1 (godot/tests/hudredraw_test.gd): the store held open costs the frame about what the HUD costs closed. Points given (the test hook), 300
+## frames closed, the store opened by its Palantir button, 300 frames open. FAIL when the open window's main thread CPU per frame exceeds the closed one's by
+## more than --hudredraw-budget (a fraction, default 0.6: a regression guard; a headless run has no canvas submission, the part the retained segments
+## save, so its open / closed ratio reads x1.25 - x1.45 with or without them; the windowed measurement is spellbook_idle); when a rebuild of the open window drew everything again (gadgets aside, the list must be planned);
+## when the Palantir or the store drew again more than 4 of their segments in a frame on average (the Palantir's pulsing powers button and money counter,
+## the store's three looping `_active` buttons; everything else of them is kept); or when the Apt / window manager note lists grew in either window
+func _scenario_hudredraw() -> String:
+	var budget := 0.6
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--hudredraw-budget="):
+			budget = float(a.get_slice("=", 1))
+	var me: int = game._local_index
+	var pts: int = world.debug_add_science_points(me, 200)
+	print("SPELL3 TEST HOOK: player %d (%s) given 200 power points -> %d" % [me, faction, pts])
+	hud.camera_look_at(base_position())
+	await game._step(10)
+	await game._wait_seconds(2.0)
+	var pal: int = int(hud.get_spellbook_state().get("palantir_level", -1))
+	var fails: Array = []
+	var closed := await apt_window("closed", 0.0, 300)
+	var st := await open_store()
+	if not st.get("open", false):
+		return "the powers button did not open the store (%s)" % st.get("error", "")
+	var lvl: int = int(st.level)
+	var active := 0
+	for x in st.get("states", []):
+		active += 1 if str(x) == "_active" else 0
+	for i in 90: # the store's fade-in, in frames (a wall-clock wait is short of it when frames render slowly: Movie Maker, a loaded host)
+		await game.get_tree().process_frame
+	var opened := await apt_window("open", 0.0, 300)
+	print("SPELL3 hudredraw: Palantir level %d, store level %d (%d powers _active); main CPU ms/frame closed %.3f open %.3f (x%.3f, budget x%.2f)" % [pal, lvl,
+		active, closed.main_cpu_ms_per_frame, opened.main_cpu_ms_per_frame, opened.main_cpu_ms_per_frame / maxf(closed.main_cpu_ms_per_frame, 0.001), 1.0 + budget])
+	if active == 0:
+		fails.append("no store power is _active (nothing loops: the window proves nothing)")
+	if opened.main_cpu_ms_per_frame > closed.main_cpu_ms_per_frame * (1.0 + budget): # tolerance: a CPU timing on a shared host; the budget is the claim
+		fails.append("the open store costs %.3f ms a frame, closed %.3f (over x%.2f)" % [opened.main_cpu_ms_per_frame, closed.main_cpu_ms_per_frame, 1.0 + budget])
+	var levels: Dictionary = opened.get("levels", {})
+	for lv in [pal, lvl]:
+		var l: Dictionary = levels.get(lv, {})
+		if l.is_empty():
+			fails.append("no level stats for level %d: %s" % [lv, JSON.stringify(levels)])
+			continue
+		var per := float(l.segments_redrawn) / maxf(float(l.redrawn), 1.0)
+		print("SPELL3 hudredraw: level %d (%s): %d segments; drawn again in %d of %d rebuilds, %.2f segments each" % [lv, l.movie, int(l.segments),
+			int(l.redrawn), int(opened.rebuilds), per])
+		if per > 4.0: # tolerance: the frames' Apt steps vary with the render rate; the claim is a few segments of the level's 50-odd
+			fails.append("level %d drew again %.2f of its %d segments per rebuild" % [lv, per, int(l.segments)])
+	var partial := int(opened.get("partial_frames", 0))
+	if partial == 0:
+		fails.append("no rebuild drew only the changed segments")
+	if partial + int(opened.unchanged_frames) != int(opened.rebuilds):
+		fails.append("%d of the open window's %d rebuilds drew everything again" % [int(opened.rebuilds) - partial - int(opened.unchanged_frames), int(opened.rebuilds)])
+	for w in [closed, opened]:
+		if int(w.apt_notes[0]) != int(w.apt_notes[1]) or int(w.wm_notes[0]) != int(w.wm_notes[1]):
+			fails.append("the note lists grew in the %s window: apt %s, window manager %s" % [w.window, str(w.apt_notes), str(w.wm_notes)])
+	return "; ".join(fails)
+
+
 ## the store's first power, probed: its button clip's states around a mouse press and release (the owner's Angmar store took no click)
 func _scenario_storeprobe() -> String:
 	var me: int = game._local_index
@@ -899,4 +1015,154 @@ func _scenario_earned() -> String:
 	print("SPELL3 TABLE " + JSON.stringify(results))
 	if r.result != "ok":
 		fails.append("%s: %s" % [r.power, r.why])
+	return "; ".join(fails)
+
+
+## lane SPELLRC-1: an empty ground pixel near `around` that is not over the GUI (none: x < 0)
+func spellrc_ground(around: Vector2) -> Vector2:
+	for off in [Vector2(220, 60), Vector2(-220, 60), Vector2(200, -80), Vector2(-200, -80), Vector2(300, 140), Vector2(-300, 140), Vector2(380, -120), Vector2(-380, -120)]:
+		var target: Vector2 = around + off
+		var w: Vector2 = hud.pixel_to_world(target)
+		var clear := w.x > -1.0e8 and on_screen(target)
+		for o in world.get_player_objects(game._local_name):
+			if Vector2(o.x, o.y).distance_to(w) < 60.0:
+				clear = false
+		if not clear:
+			continue
+		await move_to(target)
+		await game._step(4)
+		if not hud.get_state().get("over_gui", false):
+			return target
+	return Vector2(-1, -1)
+
+
+## lane SPELLRC-1: a right click at `p`; the MSG_DO_MOVETO it made
+func spellrc_right_click(p: Vector2, what: String) -> int:
+	var before := log_count("MSG_DO_MOVETO")
+	await click(p, MOUSE_BUTTON_RIGHT)
+	await game._step(6)
+	var ml: PackedStringArray = hud.get_message_log()
+	var moved := log_count("MSG_DO_MOVETO") - before
+	print("SPELL3 spellrc: %s: right click at %s: MSG_DO_MOVETO %d, targeting %s; the last messages %s" % [what, p, moved,
+		str(hud.get_spellbook_state().targeting), ml.slice(maxi(0, ml.size() - 3))])
+	return moved
+
+
+func _scenario_spellrc() -> String:
+	await _headless_window()
+	var fails: Array = []
+	var me: int = game._local_index
+	world.debug_add_science_points(me, 200)
+	print("SPELL3 TEST HOOK: player %d (%s) given 200 power points" % [me, faction])
+	# a unit of the player, selected by a click
+	var unit: Dictionary = {}
+	for u in local_units():
+		hud.camera_look_at(Vector2(u.x, u.y))
+		await game._step(10)
+		if on_screen(to_pixel(u.x, u.y)):
+			unit = u
+			break
+	if unit.is_empty():
+		var us := local_units()
+		return "no local unit on the screen (window %s, %d units%s)" % [window_size(), us.size(), (", the first at pixel %s" % to_pixel(us[0].x, us[0].y)) if not us.is_empty() else ""]
+	await click(to_pixel(unit.x, unit.y))
+	await game._step(20)
+	if hud.get_selection().is_empty():
+		return "the left click on the unit selected nothing"
+	# the store: every power it sells now; with it open a right click on the ground beside it is still the move order
+	var st := await open_store()
+	if not st.get("open", false):
+		return "the powers button did not open the store (%s)" % st.get("error", "")
+	# the first power the points buy (each click is a moment of the clip; buy_all would buy the whole tier)
+	var first: int = st.states.find("_active")
+	if first < 0:
+		return "the store sells nothing (%s)" % str(st.states)
+	for attempt in 4:
+		await click(shell_button(st.level, "SpellStore.Buttons.Spell%d" % (first + 1)))
+		await game._wait_seconds(1.2) # the generic button calls back when its _down animation ends
+		if store_state().states[first] != "_active":
+			break
+	var up := to_pixel(unit.x, unit.y)
+	var ground := await spellrc_ground(up)
+	if ground.x < 0:
+		return "no empty ground beside the store"
+	shot("spellrc-store-open")
+	await game._wait_seconds(1.0) # (a watchable clip: each step held a moment)
+	if await spellrc_right_click(ground, "store open") != 1:
+		fails.append("a right click on the ground with the store open did not order the move")
+	await click(shell_button(st.level, "SpellStore.Buttons.ButtonsMain.Accept"))
+	await game._wait_seconds(3.0)
+	if store_state().get("open", false):
+		return "ACCEPT did not close the store"
+	# a spell book power that wants a position, pressed: its targeting
+	var k := -1
+	var state: Dictionary = hud.get_spellbook_state()
+	for i in state.get("slots", []).size():
+		var b := power_of_button(int(state.slot_buttons[i]))
+		if state.slots[i] == "_up" and bool(b.get("needs_position", false)) and k < 0:
+			k = i
+	if k < 0:
+		return "no bought power that wants a position is up on the spell book (%s)" % str(state.get("slots", []))
+	var unit_now: Dictionary = world.get_object(int(unit.id))
+	up = to_pixel(float(unit_now.get("x", unit.x)), float(unit_now.get("y", unit.y)))
+	await click(slot_pixel(k))
+	await game._step(6)
+	state = hud.get_spellbook_state()
+	print("SPELL3 spellrc: slot %d (%s) pressed: targeting %s" % [k + 1, state.get("target_power", ""), str(state.targeting)])
+	if not state.targeting:
+		return "the spell book slot %d did not start its targeting" % (k + 1)
+	ground = await spellrc_ground(up)
+	if ground.x < 0:
+		return "no empty ground for the right drag"
+	shot("spellrc-aiming")
+	await game._wait_seconds(1.5)
+	# the right drag: the camera scrolls (the LookAt translator's RMB scroll), the power still waits, no order
+	var cam0: Vector2 = hud.get_camera().position
+	var moves0 := log_count("MSG_DO_MOVETO")
+	press(ground, MOUSE_BUTTON_RIGHT, true)
+	await game._step(2)
+	for i in 10:
+		var m := InputEventMouseMotion.new()
+		m.position = ground + Vector2(18 * (i + 1), 0)
+		m.global_position = m.position
+		m.button_mask = MOUSE_BUTTON_MASK_RIGHT
+		if OS.get_environment("PLAY1_NO_WARP") != "1":
+			Input.warp_mouse(m.position)
+		_vp().push_input(m)
+		await game._step(2)
+	press(ground + Vector2(180, 0), MOUSE_BUTTON_RIGHT, false)
+	await game._step(6)
+	await game._wait_seconds(1.5)
+	var cam1: Vector2 = hud.get_camera().position
+	state = hud.get_spellbook_state()
+	print("SPELL3 spellrc: right drag: camera %s -> %s (moved %.0f), targeting %s, MSG_DO_MOVETO %d" % [cam0, cam1, cam0.distance_to(cam1), str(state.targeting),
+		log_count("MSG_DO_MOVETO") - moves0])
+	if cam0.distance_to(cam1) < 1.0:
+		fails.append("a right drag with the power aimed did not scroll the camera")
+	if not state.targeting:
+		fails.append("a right drag cancelled the aimed power (RotWK keeps it: only a click cancels)")
+	if log_count("MSG_DO_MOVETO") != moves0:
+		fails.append("a right drag ordered a move")
+	# a right click: the power is cancelled, nothing is ordered
+	if not state.targeting:
+		await click(slot_pixel(k))
+		await game._step(6)
+	unit_now = world.get_object(int(unit.id))
+	hud.camera_look_at(Vector2(float(unit_now.get("x", unit.x)), float(unit_now.get("y", unit.y)))) # the drag scrolled the unit away: back to it
+	await game._step(10)
+	ground = await spellrc_ground(to_pixel(float(unit_now.get("x", unit.x)), float(unit_now.get("y", unit.y))))
+	if ground.x < 0:
+		return "; ".join(fails + ["no empty ground for the right click"])
+	await game._wait_seconds(1.0)
+	var moved := await spellrc_right_click(ground, "power aimed")
+	if hud.get_spellbook_state().targeting:
+		fails.append("a right click did not cancel the aimed power")
+	if moved != 0:
+		fails.append("the right click that cancelled the power also ordered a move")
+	# the next right click orders the move
+	shot("spellrc-after-cancel")
+	await game._wait_seconds(1.0)
+	if await spellrc_right_click(ground, "after the cancel") != 1:
+		fails.append("a right click after the cancel did not order the move")
+	await game._wait_seconds(3.0) # the unit walks there
 	return "; ".join(fails)

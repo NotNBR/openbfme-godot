@@ -116,3 +116,93 @@ def test_default_lookup_is_the_identity_strip(mount):
 
     for slice_, x, y in ((0, 0, 0), (5, 7, 11), (31, 31, 31), (16, 3, 29)):
         assert rgb(slice_ * 32 + x, y) == (x * 255 // 31, y * 255 // 31, slice_ * 255 // 31)
+
+
+def effect_string_annotations(data):
+    """Read FX9 top-level string annotations, following their object IDs.
+
+    Layout reference: Wine dlls/d3dx9_36/effect.c, d3dx_parse_effect,
+    d3dx_parse_effect_parameter/annotation/typedef and d3dx9_copy_data:
+    https://github.com/wine-mirror/wine/blob/master/dlls/d3dx9_36/effect.c
+    Only metadata is decoded; shader resources are not needed here.
+    """
+    assert struct.unpack_from("<I", data)[0] == 0xFEFF0901
+    base = 8
+    cursor = base + struct.unpack_from("<I", data, 4)[0]
+
+    def words(count):
+        nonlocal cursor
+        result = struct.unpack_from("<" + "I" * count, data, cursor)
+        cursor += count * 4
+        return result
+
+    def name(offset):
+        size = struct.unpack_from("<I", data, base + offset)[0]
+        value = data[base + offset + 4:base + offset + 4 + size]
+        assert len(value) == size and value.endswith(b"\0")
+        return value[:-1].decode("ascii")
+
+    def typedef(offset):
+        type_, class_, name_offset = struct.unpack_from("<3I", data, base + offset)
+        return type_, class_, name(name_offset)
+
+    def annotations(count):
+        result = {}
+        for _ in range(count):
+            type_offset, value_offset = words(2)
+            type_, class_, annotation = typedef(type_offset)
+            if (type_, class_) == (4, 4):  # D3DXPT_STRING, D3DXPC_OBJECT
+                result[annotation] = struct.unpack_from("<I", data, base + value_offset)[0]
+        return result
+
+    params, techniques, _, _ = words(4)
+    bindings = {}
+    for _ in range(params):
+        type_offset, _, _, count = words(4)
+        bindings[typedef(type_offset)[2]] = annotations(count)
+    for _ in range(techniques):
+        _, count, passes = words(3)
+        annotations(count)
+        for _ in range(passes):
+            _, count, states = words(3)
+            annotations(count)
+            words(states * 4)
+    strings, _ = words(2)
+    objects = {}
+    for _ in range(strings):
+        object_id, size = words(2)
+        value = data[cursor:cursor + size]
+        assert len(value) == size
+        objects[object_id] = value
+        cursor += (size + 3) & ~3
+    return {param: {annotation: objects[object_id].rstrip(b"\0").decode("ascii") for annotation, object_id in values.items()}
+            for param, values in bindings.items()}
+
+
+@needs_installs
+def test_terrain_main_light_uses_sas_directional_binding(mount):
+    # The annotation must belong to this parameter, not just occur elsewhere
+    # in the effect's string table.
+    data = mount.read("shaders\\compiled\\terrain.fxo")
+    annotations = effect_string_annotations(data)
+    assert annotations["MainDirectionalLight"]["SasBindAddress"] == "Sas.DirectionalLight[0]"
+    # Retain both strings while exchanging parameter names. A global string
+    # search still passes, but the parameter-specific assertion must fail.
+    other = next(name for name in annotations if len(name) == len("MainDirectionalLight") and name != "MainDirectionalLight")
+    swapped = data.replace(b"MainDirectionalLight\0", b"~" * len(other) + b"\0")
+    swapped = swapped.replace(other.encode() + b"\0", b"MainDirectionalLight\0")
+    swapped = swapped.replace(b"~" * len(other) + b"\0", other.encode() + b"\0")
+    assert b"MainDirectionalLight\0" in swapped and b"Sas.DirectionalLight[0]\0" in swapped
+    assert effect_string_annotations(swapped)["MainDirectionalLight"].get("SasBindAddress") != "Sas.DirectionalLight[0]"
+
+
+@needs_binary
+def test_sas_directional_colour_doubles_before_terrain_overbright_halving(img):
+    lines = body(img, 0x54D001, 0x40)
+    assert "54d001 cmp byte ptr [0xd9b03c], 0" in lines
+    assert "54d029 je 0x54d04e" in lines
+    assert "54d02b movss xmm0, dword ptr [0xbd889c]" in lines
+    assert "54d033 mulss xmm1, xmm0" in lines
+    assert "54d037 mulss xmm2, xmm0" in lines
+    assert "54d03b mulss xmm3, xmm0" in lines
+    assert struct.unpack_from("<f", img.data, img.off(0xBD889C))[0] == 2.0

@@ -20,6 +20,8 @@
 #include "GameLogic/Module/SiegeModules.h"
 #include "GameLogic/Object/Object.h"
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -76,6 +78,23 @@ TEST_CASE("walls snapshot retail: Helm's Deep with a horde on its wall top saves
 		same += r.logic().computeStateHash() == hashes[i] ? 1 : 0;
 	}
 	CHECK(same == (int)hashes.size());
+
+	// review of #63: the wall heights are in the state hash. The same snapshot with its first wall height 1 higher loads with every cell as saved (the
+	// heights only place units on the wall tops) and another state hash
+	REQUIRE(!heights.empty());
+	std::vector<std::uint8_t> run(4 + 4 * heights.size()); // the heights in the snapshot: their count, then each one (Pathfinder::xferWalls)
+	const std::uint32_t count = (std::uint32_t)heights.size();
+	std::memcpy(run.data(), &count, 4);
+	std::memcpy(run.data() + 4, heights.data(), 4 * heights.size());
+	std::vector<std::uint8_t> raised = snapshot;
+	const auto at = std::search(raised.begin(), raised.end(), run.begin(), run.end());
+	REQUIRE(at != raised.end());
+	REQUIRE(std::search(at + 1, raised.end(), run.begin(), run.end()) == raised.end()); // the run is the heights' (it is found once)
+	const float higher = heights[0] + 1.0f;
+	std::memcpy(&*(at + 4), &higher, 4);
+	REQUIRE_MESSAGE(r.game->loadSnapshot(raised, &error), error);
+	CHECK(r.logic().aiWorld()->pathfinder().wallHeights()[0] == higher);
+	CHECK(r.logic().computeStateHash() != savedHash);
 }
 
 TEST_CASE("walls snapshot retail: Helm's Deep with a siege ladder deployed on its wall saves and loads into itself; the walls, the raised walkway, the "

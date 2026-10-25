@@ -121,12 +121,15 @@ public:
 	bool reachInputs(float &x, float &y, float &speed) const override;
 	bool isStationary() const override;
 	bool footprintSkippedByStatus() const override;
+	bool cannotWalkOn() const override;
 	bool ignoresAsTarget(const PathfindObject &other) const override;
 	bool pathsThroughEachOther() const override;
 	int aiBlockedFrames() const override;
 	void onHordeGoalChanged() override;    // lane MOVE-3: RW 0x86EF13 through the horde contain
 	bool isEffectivelyDead() const override; // lane MOVE-3: Object + 0x458 bit 0
 	bool hordeFill(int &count, int &slots) const override; // lane MOVE-3: RW 0x6F1584's contain slots 0x7C / 0x70 / 0x114
+	PathfindObjectID getSlaverID() const override;       // lane ATTACKPATH-1: RW 0x6E82C8
+	bool isSignificantlyAboveTerrain() const override;  // lane ATTACKPATH-1: RW 0x70C55D
 	const PathfindWallGeometry *getWallGeometry() const override; // lane WALL-1: from the world's PathfindWallMeshSource, kept while the transform holds
 	bool isSkirmishAIControlled() const override; // lane WALL-2: Waypoint::isValidUnitType's AllowNonSkirmishAI test
 	bool inMoveAwaySearch() const override;       // lane WALL-2: RW AI + 0x3CF (Waypoint::isValidUnitType's type 7 test)

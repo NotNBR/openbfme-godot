@@ -33,7 +33,7 @@ const char *const kZoneProfiles =
 const char *const kHierarchical =
 	"S-162 the hierarchical block search of findPath (RW 0x6F9829) runs on the ground layer only (RW 0x6F8601): its bridge links (RW 0x9389CE) and the "
 	"mineshaft network's intermediate goal (RW 0x77559F, type 8 waypoints) are not ported (its block portals, RW 0x937F2D / 0x937F7F, are: lane WALL-2), and the block-edge passability "
-	"(RW 0x938240) is the port's zone pair test (INFERRED equal); findAttackPath's own corridor (RW 0x6FC4CB .. 0x6FC4F9) is not ported: it searches every block; "
+	"(RW 0x938240) is the port's zone pair test (INFERRED equal); "
 	"a goal inside the obstacle the unit ignores (a builder's own site) gets no corridor (INFERENCE: the port's builders aim inside the footprint)";
 // S-163 search
 const char *const kLargeRectGoal =
@@ -64,6 +64,11 @@ const char *const kPortalTable = "S-4857 more than 65534 portal waypoints: the w
 const char *const kPortalLostHorde =
 	"S-4852 a horde was crossing a portal that was removed: RW classifies its members before / on / after it (HordeContain slot 0x21C) and kills the ones on it; "
 	"the port only drops the horde's and its members' paths";
+// lane WALL-2 with ATTACKPATH-1: the attack search of a unit off the ground layer without a corridor (AIPathfindAttack.cpp)
+const char *const kAttackRaisedFallback =
+	"S-4858 findAttackPath (RW 0x6FC18E) keeps its closest-cell fallback only with the corridor of RW 0x6F9829 (its RW 0x93AD93 ranking runs only when the "
+	"corridor was found); the port's corridor runs on the ground grid only (S-162, S-4856), so a unit on a wall top, a raised walkway or a ramp often has n"
+	"one and would get no path at all: such a search keeps the cell closest to the goal cell by its squared cell distance instead (OpenBFME's own, pending the corridor's raised branch)";
 const char *const kPortalLayerQuirk =
 	"S-4857 the hierarchical portal branch met a portal whose start cell is outside the block that lists it: RW then reads the raised layer of the portal's index "
 	"(RW 0x6F9156), not ported";

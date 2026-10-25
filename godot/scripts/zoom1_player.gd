@@ -11,20 +11,18 @@
 ##          orc pit), the Health bars option "Always (all players)" (OpenBFMEHealthBars always) with AllHealthBars off, nothing selected: every unit's and
 ##          building's bar is drawn (the HUD's icon list against the objects on the screen); a second picture with retail's setting has none; an enemy
 ##          horde made out of the local player's sight but on the screen at 2.5x has none (r2)
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 var _created: Array = []
 var _bars_spot := Vector2()
 
 const FACTORS := [1.0, 1.5, 2.0, 2.5, 3.0]
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -37,15 +35,7 @@ func run(p_game: Node, scenarios: PackedStringArray) -> void:
 		world.set_time_scale(1.0)
 		print("ZOOM1 warp: logic frame %d after %.1f s, %d objects" % [world.get_frame(), (Time.get_ticks_msec() - w0) / 1000.0,
 			world.get_object_count() if world.has_method("get_object_count") else -1])
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("ZOOM1 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("ZOOM1 %s: FAIL %s" % [s, r])
-	print("ZOOM1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func shot(name: String) -> void:

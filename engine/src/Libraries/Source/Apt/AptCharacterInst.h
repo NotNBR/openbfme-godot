@@ -190,6 +190,9 @@ public:
 	virtual void destroy(bool fireUnload);
 
 	std::string targetPath() const; // "_level1.SoloPlayNav" form
+	// lane HUDREDRAW-1: this instance's own part of targetPath below its parent (its name, or "instance<depth>"), so a walk down the tree builds the paths
+	// without walking up again for each instance (Apt::buildRenderList)
+	std::string pathSegment() const;
 
 protected:
 	friend class AptSpriteInst;

@@ -17,6 +17,7 @@
 //   field table RW 0xBF84F8), and when that names no image the mapped image "MultiPortrait" (0x92FEEC);
 // - a drawable's portrait in the common case is its template's `SelectPortrait` (template +0x74, resolved by TheMappedImageCollection at 0x73CF31, a name
 //   without an image logs "is looking for Portrait ... but can't find it" and yields no image).
+// DONOR: Create-a-Hero portraits come from the first draw module supplying a model-state PortraitImageName (BFME2 RVA 0x4087E0, 0x272709, 0x2946AB).
 // NOT PORTED (stop S-760): the two other branches of 0x694F06 (a draw module's template override, 0x694BF8 -> vfunc 0x54; a template with the kind-of bit at
 // +0x11F & 0x40 checked against the local player through 0x68FBD3 / 0x6ADBEB), the rank and the cost modifier interfaces (ShowRankInterface,
 // SetRankProgressBar, ShowCostModifierUpgradeInterface), and a context drawable without an object (the null-object branch 0x92FE53).
@@ -34,7 +35,7 @@ namespace PalantirCommandUI
 {
 // the portrait image name of a selection ("" none). `contextObject`: the control bar's context object (INVALID_ID: none, the selection decides).
 std::string portraitFor(const HudContext &ctx, ObjectID contextObject, const std::vector<ObjectID> &selected);
-// the portrait of one object (its template's SelectPortrait, "" none)
+// the portrait of one object (Create-a-Hero model-state PortraitImageName, otherwise SelectPortrait; "" none)
 std::string objectPortrait(const Object &obj);
 
 // lane HUD-5: the rank interface of the selection (RW 0x92F778 per object, RW 0x9305CE over the selection): type 0 the rank (APT:HeroRank = APT:RankLabel with

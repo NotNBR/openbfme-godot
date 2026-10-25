@@ -28,6 +28,7 @@ class ReleaseServer:
         self.requests: list[tuple[str, dict]] = []
         self.pause_once: dict[str, threading.Event] = {}
         self.stopped = False
+        self._stop = threading.Event()
         srv = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -39,9 +40,7 @@ class ReleaseServer:
                 if self.path.startswith("/repos/"):
                     return self._api()
                 if self.path == "/v1/stats" and srv.stats is not None:
-                    end = time.monotonic() + srv.stats_delay
-                    while time.monotonic() < end and not srv.stopped:
-                        time.sleep(0.05)
+                    srv._stop.wait(srv.stats_delay)
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(srv.stats)))
@@ -89,7 +88,8 @@ class ReleaseServer:
                                 self.close_connection = True
                                 return
                             if slow is not None:
-                                time.sleep(slow)
+                                if srv._stop.wait(slow):
+                                    return
                     except (BrokenPipeError, ConnectionResetError):  # the launcher stopped the download
                         self.close_connection = True
                     return
@@ -124,15 +124,17 @@ class ReleaseServer:
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = f"http://127.0.0.1:{self.httpd.server_address[1]}"
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
         if self.stopped:
             return
         self.stopped = True
+        self._stop.set()
         self.httpd.shutdown()
         self.httpd.server_close()
+        self.thread.join()
 
     def publish(self, tag: str, files: dict[str, bytes], prerelease: bool | None = None, notes: str = "") -> None:
         assets = []

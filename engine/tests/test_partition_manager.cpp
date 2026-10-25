@@ -212,8 +212,29 @@ TEST_CASE("partition: the range test keeps distance <= radius^2 on the live posi
 	CHECK(hits[1].object == edge);
 	CHECK(hits[1].distSqr == doctest::Approx(47.0f * 47.0f));
 	CHECK(hits[2].object == out);
-	// type 4 needs RW 0xAD2CE0: refused with the stop
-	CHECK_THROWS(f.logic->partition().iterateObjectsInRange(Coord3D{ 500.0f, 500.0f, 0.0f }, 50.0f, FROM_GEOMETRY_OVERLAP, {}, ITER_FASTEST));
+}
+
+TEST_CASE("partition: distance type 4 (RW 0xA3C7D0) is the object's shapes against a sphere of the query radius (RW 0xAD2CE0): 0 on a hit, FLT_MAX refuses")
+{
+	Fx f;
+	Object *peg = f.at("Peg", 500.0f, 500.0f); // cylinder, radius 3, 10 high
+	Object *big = f.at("Big", 700.0f, 500.0f); // cylinder, radius 50
+	f.logic->runLogicFrame();
+	PartitionManager &pm = f.logic->partition();
+	auto overlap = [&](float x, float y, float z, float r) {
+		return f.ids(pm.iterateObjectsInRange(Coord3D{ x, y, z }, r, FROM_GEOMETRY_OVERLAP, {}, ITER_FASTEST));
+	};
+	// the circles touch at 3 + 2 = 5 (RW 0xAD48F0: dx^2 + dy^2 > (ra + rb)^2 refuses)
+	const std::vector<PartitionHit> hits = pm.iterateObjectsInRange(Coord3D{ 505.0f, 500.0f, 0.0f }, 2.0f, FROM_GEOMETRY_OVERLAP, {}, ITER_FASTEST);
+	REQUIRE(hits.size() == 1);
+	CHECK(hits[0].object == peg);
+	CHECK(hits[0].distSqr == 0.0f);
+	CHECK(overlap(506.0f, 500.0f, 0.0f, 2.0f).empty());
+	// the shape, not the centre: 54 from Big's centre, inside its radius 50 plus the sphere's 6
+	CHECK(overlap(754.0f, 500.0f, 0.0f, 6.0f) == std::vector<ObjectID>{ big->getID() });
+	// the heights: the sphere's bottom (z - its radius) above the cylinder's top (10) misses
+	CHECK(overlap(500.0f, 500.0f, 12.0f, 2.0f) == std::vector<ObjectID>{ peg->getID() });
+	CHECK(overlap(500.0f, 500.0f, 12.5f, 2.0f).empty());
 }
 
 TEST_CASE("partition: the double-precision pre-reject of the range walk and of getClosestObject changes no hit, order, distance or filter call (points packed on the boundaries, every type)")
@@ -505,7 +526,7 @@ TEST_CASE("partition: the state hash covers the link order; a region change re-i
 	CHECK(f.scan(405.0f, 405.0f, 20.0f) == std::vector<ObjectID>{ b->getID() });
 }
 
-TEST_CASE("partition: stop S-1020 is in the logic report (template geometry, no defector layer, distance type 4 refused, the empty region without a map)")
+TEST_CASE("partition: stop S-1020 is in the logic report (template geometry, no defector layer, distance type 4 on the template shapes, the empty region without a map)")
 {
 	Fx f;
 	const GameLogic::Report r = f.logic->report();

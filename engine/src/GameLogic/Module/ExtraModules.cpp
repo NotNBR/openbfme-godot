@@ -8,6 +8,7 @@
 #include "GameLogic/Module/ExtraDieModules.h"
 #include "GameLogic/Module/ExtraUpdateModules.h"
 #include "GameLogic/Module/ExtraUpgradeModules.h"
+#include "GameLogic/Module/FireWeaponWhenDamagedBehavior.h"
 #include "GameLogic/Module/FlammableUpdate.h"
 
 #include <memory>
@@ -36,6 +37,7 @@ void ExtraModules::registerAll(ModuleFactory &modules)
 	bind<AttributeModifierUpgrade, AttributeModifierUpgradeModuleData>(modules, "AttributeModifierUpgrade");
 	bind<CreateObjectDie, CreateObjectDieModuleData>(modules, "CreateObjectDie");
 	bind<FireWeaponWhenDeadBehavior, FireWeaponWhenDeadBehaviorModuleData>(modules, "FireWeaponWhenDeadBehavior");
+	FireWeaponWhenDamagedBehavior::registerModule(modules); // lane MODS-3
 	bind<UpgradeDie, UpgradeDieModuleData>(modules, "UpgradeDie");
 	bind<HeroDie, HeroDieModuleData>(modules, "HeroDie");
 	bind<DeletionUpdate, DeletionUpdateModuleData>(modules, "DeletionUpdate");

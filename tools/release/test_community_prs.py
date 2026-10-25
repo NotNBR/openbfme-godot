@@ -22,15 +22,15 @@ sys.path.insert(0, str(HERE))
 import autorelease  # noqa: E402
 import community_prs  # noqa: E402
 import public_workflows  # noqa: E402
-from test_autorelease import GIT_ENV, TARGET, World, git, run  # noqa: E402
+from test_autorelease import GIT_ENV, TARGET, World, commit, git, run, world_template  # noqa: E402, F401
 
 DAISY = {"GIT_AUTHOR_NAME": "Daisy", "GIT_AUTHOR_EMAIL": "daisy@example.invalid"}
 LOGIN = "daisyhasacat"
 
 
 @pytest.fixture
-def world(tmp_path):
-    return World(tmp_path)
+def world(tmp_path, world_template):
+    return world_template.copy(tmp_path)
 
 
 def gh_state(world: World) -> dict:
@@ -110,7 +110,46 @@ def log_len(world: World) -> int:
 
 
 def sync_prs(world: World) -> list[dict]:
-    return list(gh_state(world)["prs"].values())
+    """RELCAND-1: the sync commits on the public main, oldest first ({merge: the commit, body: its message}); there is no sync PR any
+    more: the candidate's commit is pushed as the public main, and its message carries what the PR body said"""
+    found = []
+    for c in reversed(git(world.remote, "log", "--first-parent", "--format=%H", "refs/heads/main").split()):
+        body = git(world.remote, "log", "-1", "--format=%B", c)
+        if body.startswith("Sync the rebuild"):
+            found.append({"merge": c, "body": body})
+    return found
+
+
+@pytest.mark.parametrize("conflict", [False, True], ids=["clean", "conflict"])
+def test_the_github_standin_performs_a_real_three_way_merge(world, conflict):
+    seed = world.tmp / "seed"
+    lines = [f"line {n}\n" for n in range(20)]
+    commit(seed, {"README.md": "".join(lines)}, "a shared base")
+    git(seed, "push", "-q", str(world.remote), "main")
+    theirs = lines.copy()
+    theirs[1] = "the contribution\n"
+    head = open_pr(world, 37, {"README.md": "".join(theirs)})
+    ours = lines.copy()
+    ours[1 if conflict else 18] = "the main branch moved on\n"
+    base = commit(seed, {"README.md": "".join(ours)}, "main advanced after the pull request opened")
+    git(seed, "push", "-q", str(world.remote), "main")
+    before = gh_state(world)
+    refs = git(world.remote, "show-ref")
+    worktrees = git(world.remote, "worktree", "list", "--porcelain")
+    r = run(world.gh, "pr", "merge", "37", "--merge", "--match-head-commit", head, env=world.env())
+    assert git(world.remote, "worktree", "list", "--porcelain") == worktrees, "no temporary worktree remains"
+    if conflict:
+        assert r.returncode == 1 and "CONFLICT (content)" in r.stderr, r.stdout + r.stderr
+        assert gh_state(world) == before and git(world.remote, "show-ref") == refs, "a conflict changes no GitHub record or ref"
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+        pull = gh_state(world)["pulls"]["37"]
+        merged = pull["merge_commit_sha"]
+        assert pull["merged"] is True and pull["state"] == "closed"
+        assert git(world.remote, "rev-parse", "refs/heads/main") == merged
+        assert git(world.remote, "rev-list", "--parents", "-1", merged).split() == [merged, base, head]
+        ours[1] = theirs[1]
+        assert git(world.remote, "show", f"{merged}:README.md") == "".join(ours).strip(), "both sides' edits survive the merge"
 
 
 # ---- the flow, end to end ---------------------------------------------------------------------------------------------------------------
@@ -122,20 +161,19 @@ def test_a_reviewed_pull_request_is_merged_first_and_credited(world):
     pull = gh_state(world)["pulls"]["37"]
     assert pull["merged"] is True and pull["state"] == "closed"
     mc = pull["merge_commit_sha"]
-    # merged on GitHub with a merge commit whose second parent is the contributor's own commit (their authorship kept), BEFORE the sync PR
+    # merged on GitHub with a merge commit whose second parent is the contributor's own commit (their authorship kept), before the sync
     assert git(world.remote, "rev-parse", f"{mc}^2") == head
     assert git(world.remote, "log", "-1", "--format=%an <%ae>", head) == "Daisy <daisy@example.invalid>"
     log = gh_log_from(world, start)
     merge_at = [i for i, x in enumerate(log) if x.startswith("pr merge 37 ")]
-    create_at = [i for i, x in enumerate(log) if x.startswith("pr create ")]
-    assert len(merge_at) == 1 and len(create_at) == 1 and merge_at[0] < create_at[0], log
+    assert len(merge_at) == 1 and not any(x.startswith("pr create ") for x in log), log
     assert f"--merge --match-head-commit {head}" in log[merge_at[0]]
     # the sync goes on top of that merge, its tree the audited public tree (the sync recipe's, the same community_prs.public_tree builds)
     sync = sync_prs(world)[-1]
     assert subprocess.run(["git", "-C", str(world.remote), "merge-base", "--is-ancestor", mc, sync["merge"]]).returncode == 0
     assert git(world.remote, "rev-parse", f"{sync['merge']}^{{tree}}") == community_prs.public_tree(str(world.repo), sha)
-    assert git(world.remote, "rev-parse", "refs/heads/main") == sync["merge"]
-    # the sync PR credits it
+    assert git(world.remote, "rev-parse", "refs/heads/main") == sync["merge"] and git(world.remote, "rev-parse", f"{sync['merge']}^") == mc
+    # the sync commit credits it (RELCAND-1: the sync PR's body before)
     assert f"- Includes #37 by @{LOGIN}" in sync["body"], sync["body"]
     landed = (world.state / "community-landed.tsv").read_text().split("\t")
     assert landed[:5] == ["37", head, LOGIN, mc, sync["merge"]], landed
@@ -191,7 +229,7 @@ def test_a_dry_run_prints_the_merge_and_runs_it_not(world):
     assert len(line) == 1 and line[0].startswith("WOULD RUN: ") and f"--merge --match-head-commit {head}" in line[0], line
     assert not any(x.startswith("pr ") for x in gh_log_from(world, start))
     assert gh_state(world)["pulls"]["37"]["state"] == "open" and git(world.remote, "rev-parse", "refs/heads/main") == main_before
-    assert [b for b in (world.tmp / "work").glob("*/pr-body.md") if f"- Includes #37 by @{LOGIN}" in b.read_text()], "the dry run's PR body"
+    assert [b for b in (world.tmp / "work").glob("*/commit-msg.txt") if f"- Includes #37 by @{LOGIN}" in b.read_text()], "the dry run's sync commit message"
     assert not (world.state / "community-landed.tsv").exists()
 
 
@@ -366,7 +404,8 @@ def test_a_port_outside_the_release_waits(world):
 
 
 def test_a_resumed_run_after_the_sync_merges_nothing_more(world):
-    """the run stops after the sync (a tampered package): the resumed run neither merges a pull request reviewed in between nor records it"""
+    """the run stops after its push (RELCAND-1: publishing fails): the resumed run neither merges a pull request reviewed in between nor
+    records it"""
     first_release(world)
     h37 = open_pr(world, 37, {"engine/c.cpp": "c\n"})
     port(world, 37)
@@ -374,7 +413,7 @@ def test_a_resumed_run_after_the_sync_merges_nothing_more(world):
     sha = port(world, 38)
     world.gate(sha)
     review(world, 37, h37, sha)
-    r = world.release(sha, STANDIN_TAMPERED="1")
+    r = world.release(sha, FAKE_GH_FAULT="tag-read-fail")
     assert r.returncode != 0 and gh_state(world)["pulls"]["37"]["merged"] is True, r.stdout + r.stderr
     assert "Includes #37" in sync_prs(world)[-1]["body"] and "#38" not in sync_prs(world)[-1]["body"]
     review(world, 38, h38, sha)
@@ -754,3 +793,33 @@ def test_pr_pytest_refuses_an_empty_list(monkeypatch, capfd):
 def test_pr_pytest_lists_real_files():
     import pr_pytest  # noqa: PLC0415
     assert pr_pytest.SUBSET and all((REPO / f).is_file() for f in pr_pytest.SUBSET) and len(set(pr_pytest.SUBSET)) == len(pr_pytest.SUBSET)
+
+
+def test_a_candidate_that_fails_leaves_its_merges_and_the_next_run_credits_them(world):
+    """RELCAND-1: the reviewed pull requests are merged on GitHub before the candidate (the one write before the push: the pull request's
+    own, already public commits). A candidate that fails (a tampered package) pushes nothing else; the next run takes the merged one as
+    already merged, lands the one reviewed in between, credits both in its sync commit and records both, under the same version"""
+    first_release(world)
+    h37 = open_pr(world, 37, {"engine/c.cpp": "c\n"})
+    port(world, 37)
+    h38 = open_pr(world, 38, {"engine/d.cpp": "d\n"})
+    port(world, 38)
+    sha = world.change({"engine/b.cpp": "b\n"}, "W-1: the game also changed")   # so the sync has more to bring than the merges
+    world.gate(sha)
+    review(world, 37, h37, sha)
+    n = len(sync_prs(world))
+    r = world.release(sha, STANDIN_TAMPERED="1")
+    assert r.returncode != 0 and gh_state(world)["pulls"]["37"]["merged"] is True, r.stdout + r.stderr
+    mc37 = gh_state(world)["pulls"]["37"]["merge_commit_sha"]
+    assert git(world.remote, "rev-parse", "refs/heads/main") == mc37 and len(sync_prs(world)) == n, "no sync commit was pushed"
+    assert not world.remote_refs("refs/tags/v0.4.6") and not (world.state / "intent").exists()
+    assert not (world.state / "community-landed.tsv").exists()
+    review(world, 38, h38, sha)
+    r = world.release(sha)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.6" in r.stdout, r.stdout + r.stderr
+    assert f"COMMUNITY: #37 by @{LOGIN} is already merged on GitHub" in r.stdout
+    sync = sync_prs(world)[-1]
+    assert "Includes #37" in sync["body"] and "Includes #38" in sync["body"]
+    mc38 = gh_state(world)["pulls"]["38"]["merge_commit_sha"]
+    assert git(world.remote, "rev-parse", f"{sync['merge']}^") == mc38 and git(world.remote, "rev-parse", f"{mc38}^") == mc37
+    assert [x.split("\t")[0] for x in (world.state / "community-landed.tsv").read_text().splitlines()] == ["37", "38"]

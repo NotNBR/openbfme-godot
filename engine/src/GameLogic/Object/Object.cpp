@@ -1,7 +1,11 @@
 // OpenBFME. GPL-3.0.
 // See GameLogic/Object/Object.h for the creation order and its sources.
 
+#include "Common/Upgrade.h"
+#include "Common/ModEngineFeatures.h"
+#include "GameClient/ControlBarCommands.h"
 #include "GameLogic/Object/Object.h"
+#include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/LegendaryHeroesGame.h"
 #include "GameLogic/Module/CastleModules.h"
 #include "GameLogic/Module/SpecialPowerModules.h"
@@ -366,7 +370,25 @@ void Object::reactToTransformChange(const Coord3D *oldPos, float)
 	if (oldPos && (oldPos->x != getPosition()->x || oldPos->y != getPosition()->y || oldPos->z != getPosition()->z))
 	{
 		updateTriggerAreaFlags(); // RW 0x69355D: only when the position changed (RW 0x68B777)
+		updateOffMapStatus();     // lane CAMPUI-1: then the extent test (RW 0x69355D, ZH Object.cpp:1788-1798)
 	}
+}
+
+// lane CAMPUI-1: RW 0x69355D after updateTriggerAreaFlags: TheTerrainLogic vslot 0x20 (RW 0x462637, W3DTerrainLogic::getExtent: lo (0, 0), hi the active
+// boundary * 10) and OFF_MAP (+ 0x458 bit 3) set unless lo < x < hi and lo < y < hi (RW 0x6936B2 sets, RW 0x6936A9 clears). The active boundary is 0
+// (only a script changes it, TerrainLogic::setActiveBoundary RW 0x680E15 with Object::friend_notifyOfNewMapBoundary RW 0x68BCBD: not ported, S-921).
+// A logic without a TerrainLogic (the flat test games) has no map extent: nothing is off the map there
+void Object::updateOffMapStatus()
+{
+	const TerrainLogic *terrain = m_logic.terrain();
+	float hiX = 0.0f, hiY = 0.0f;
+	if (!terrain || !terrain->getExtent(0, hiX, hiY))
+	{
+		m_offMap = false;
+		return;
+	}
+	const Coord3D &p = *getPosition();
+	m_offMap = !(p.x > 0.0f && p.x < hiX && p.y > 0.0f && p.y < hiY);
 }
 
 // lane SCRIPT-2: RW 0x69264D. The exit test uses the PREVIOUS integer position (+ 0x418 is written after the exit loop): an object that leaves a
@@ -1143,6 +1165,19 @@ ExitInterface *Object::getObjectExitInterface() const
 	return nullptr; // RW 0x68BB37: the contain's exit slot (0x74) is not ported
 }
 
+// RW 0x68C383
+DockUpdateInterface *Object::getDockUpdateInterface() const
+{
+	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
+	{
+		if (DockUpdateInterface *d = m->getDockUpdateInterface())
+		{
+			return d;
+		}
+	}
+	return nullptr;
+}
+
 ProductionUpdateInterface *Object::getProductionUpdate() const
 {
 	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
@@ -1915,6 +1950,7 @@ void Object::scoreTheKill(Object &victim, int scoreType)
 		return;
 	}
 	victim.m_scored = true;
+	if (killer->isKindOfName("CREATE_A_HERO") && m_logic.clientHooks()) m_logic.clientHooks()->createAHeroKill(*killer, victim);
 	if (scoreType != 1 && scoreType != 2)
 	{
 		return;
@@ -2019,7 +2055,19 @@ void Object::grantExperienceForKill(Object &victim, bool flag, float scale)
 	{
 		m_experienceFlags |= tracker->hasGainedLevel() ? 1u : 0u;
 		// RW 0x695589 .. 0x69559E: the object's experience listener (RW 0x88305B, lane HERO-2: ShareExperienceBehavior) shares the gain
-		if (ShareExperienceBehavior *share = ShareExperienceBehavior::of(*this))
+		if (ModEngineFeatures::has(ModEngineFeature::EdainUnchainedShareExperienceAll))
+		{
+			// lane MODS-3, edain-unchained.share-experience-all (0xEE8000): every module with the listener interface shares, in module order
+			for (const std::unique_ptr<BehaviorModule> &m : modules())
+			{
+				if (ShareExperienceBehavior *each = dynamic_cast<ShareExperienceBehavior *>(m.get()))
+				{
+					++m_logic.experience().counters().listenerCalls;
+					each->share(value);
+				}
+			}
+		}
+		else if (ShareExperienceBehavior *share = ShareExperienceBehavior::of(*this))
 		{
 			++m_logic.experience().counters().listenerCalls;
 			share->share(value);
@@ -2236,8 +2284,9 @@ void Object::crcOmittingModules(StateHasher &h, const std::function<bool(const B
 			h.addU32((e.entered ? 1u : 0u) | (e.exited ? 2u : 0u) | (e.inside ? 4u : 0u));
 		}
 	}
-	for (std::uint32_t w : m_upgradeMask.words) // UPGRADE-1
+	for (unsigned i = 0; i < UpgradeMaskType::activeWords(); ++i) // lane MODS-3: retail's 0x24 words unless the data has more upgrades
 	{
+		const std::uint32_t w = m_upgradeMask.words[i];
 		h.addU32(w);
 	}
 	h.addFloat(m_upgradeCostPaid);
@@ -2551,10 +2600,16 @@ void Object::xfer(Xfer &x)
 	}
 	m_geometryActive = active;
 	x.xferUnsignedInt(&m_geometryVersion);
-	SnapshotXfer::maskWords(x, m_upgradeMask.words, TheUpgradeCenter ? TheUpgradeCenter->nextMaskBit() : 0, "an object's upgrades",
-		"the upgrades of this game's data");
+	xferUpgradeMask(x, m_upgradeMask, "an object's upgrades"); // lane MODS-3: the count + words layout of SnapshotXfer::maskWords, activeWords
 	x.xferReal(&m_upgradeCostPaid);
 	x.xferAsciiString(&m_commandSetOverride);
+	if (x.isLoading() && TheCommandStore && ModEngineFeatures::has(ModEngineFeature::EdainUnchainedCommandSetButtons) &&
+		m_commandSetOverride.find('+') != std::string::npos)
+	{
+		// lane MODS-3: a CommandButtons set (edain-unchained.commandset-button-upgrade) is built at run time; a loaded game builds it again from its name
+		// (the same base and lists give the same slots)
+		TheCommandStore->mergedCommandSet(m_commandSetOverride);
+	}
 	SnapshotXfer::maskWords(x, m_modelCondition, SnapshotXfer::nameCount(TheModelConditionNames), "an object's model conditions", "the model conditions");
 	x.xferReal(&m_instanceScale);
 	SnapshotXfer::maskWords(x, m_placementConditions, SnapshotXfer::nameCount(TheModelConditionNames), "an object's placement conditions", "the model conditions");

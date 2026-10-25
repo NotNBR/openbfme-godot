@@ -69,6 +69,7 @@ struct IconUIOp
 	std::string text;                  ///< TEXT: UTF-8
 	ObjectID object = 0;
 	float width = 1.0f;                ///< OPEN_RECT: the outline's line width (Display +0xE0's fifth argument; Render2D Add_Outline)
+	float stageTextSize = 0.0f;        ///< TEXT: a size in 800 x 600 stage pixels, scaled with the window (0: the device's caption size)
 };
 
 struct IconUISettings

@@ -186,6 +186,8 @@ private:
 	void updateGroup(AISkirmishGroup &g);
 	void updateAI(AISkirmishPlayer &ai, AISkirmishGroup &g);
 	AISkirmishPlayer *eventAI(const Object &obj);
+	// lane AI5: the AI of a player whatever its state (the record's listeners keep listening after a shutdown); null without one
+	AISkirmishPlayer *listenerAI(int playerIndex);
 
 	GameLogic &m_logic;
 	const SkirmishAIStore *m_store = nullptr;

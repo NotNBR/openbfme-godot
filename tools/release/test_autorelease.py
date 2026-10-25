@@ -67,6 +67,16 @@ def commit(repo: Path, files: dict[str, str | bytes], message: str, force: bool 
     return git(repo, "rev-parse", "HEAD")
 
 
+# lane MACGATE-1: the release pipeline (autorelease.sh, publish_release.sh) runs on the Deck and the Linux release hosts only: its scripts are
+# #!/bin/bash and use bash 4+ (mapfile), and macOS's /bin/bash is 3.2. A run of it on macOS is skipped by name, never passed.
+DECK_HOSTED = "the release pipeline (autorelease.sh / publish_release.sh) runs on the Deck and Linux release hosts: #!/bin/bash needs bash 4+, macOS has 3.2"
+
+
+def skip_on_macos() -> None:
+    if sys.platform == "darwin":
+        pytest.skip(DECK_HOSTED)
+
+
 def run(*cmd, env=None, **kw) -> subprocess.CompletedProcess:
     return subprocess.run([str(c) for c in cmd], capture_output=True, text=True, timeout=600, env={**os.environ, **GIT_ENV, **(env or {})},
                           stdin=subprocess.DEVNULL, **kw)
@@ -84,6 +94,8 @@ def package_dir(d: Path, version: str, extra: bool = False, legacy: bool = True)
             files = {"OpenBFMELauncher" + ext: f"the launcher of {version} for {platform}".encode()}
             if kind == "game":
                 files["OpenBFME" + ext] = f"{n} bytes".encode()
+                # MACACT-1: the GDExtension, which autorelease.sh compares with a GitHub Actions build of it (actions_lib)
+                files[LIBS[platform]] = actions_lib(platform, version)
                 files["VERSION"] = f"OpenBFME {version}\n".encode()   # seal_package.py checks it names the version
             data = tiny_package(n, files)
             (d / n).write_bytes(data)
@@ -93,6 +105,53 @@ def package_dir(d: Path, version: str, extra: bool = False, legacy: bool = True)
     if extra:
         (d / "payload.bin").write_bytes(b"not a package file")
     return d
+
+
+LIBS = {"linux-x64": "openbfme.linux.template_debug.x86_64.so", "windows-x64": "openbfme.windows.template_debug.x86_64.dll"}
+
+
+def actions_lib(platform: str, version: str, github: bool = False, differs: bool = False) -> bytes:
+    """the stand-in GDExtension of a platform: the build host's and GitHub Actions' builds (`github`) are the same bytes, the Windows DLL
+    but for its CodeView GUID (lld's hash of the PDB, which holds the build folder's path: a small PE image, test_pdb_tools.pe); `differs`
+    (STANDIN_ACTIONS_FAULT=lib-differs): GitHub's is another build"""
+    body = f"the {platform} GDExtension of {version}{' (another build)' if differs else ''}\n".encode()
+    if platform == "linux-x64":
+        return body
+    import test_pdb_tools
+    return test_pdb_tools.pe(guid=bytes([0x6A if github else 0x11]) * 16, extra=body)
+
+
+def standin_build_hooks(checkout: Path, version: str) -> None:
+    """RELCAND-1, the stand-in build's side: it records what it was given (the checkout's commit, `git describe`, the tag object, and
+    whether the public remote had the tag or the commit yet) in $STANDIN_BUILD_LOG, then fails (STANDIN_BUILD_FAIL=1), moves the public
+    main meanwhile (STANDIN_MOVE_MAIN=1: someone else's push) or kills the release run like a power cut (STANDIN_KILL=1)"""
+    def g(*args: str, cwd: Path = checkout) -> str:
+        return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env={**os.environ, **GIT_ENV}).stdout.strip()
+    remote = Path(os.environ["FAKE_GH_REMOTE"])
+    head = g("rev-parse", "HEAD")
+    rec = {"version": version, "head": head, "describe": g("describe", "--tags", "--match", "v[0-9]*", "--exclude", "*-playtest.*", "--always",
+           "--dirty", "--abbrev=10"), "tagobj": g("rev-parse", f"refs/tags/{version}"),
+           "remote_tag": g("ls-remote", str(remote), f"refs/tags/{version}"),
+           "remote_has_head": subprocess.run(["git", "-C", str(remote), "merge-base", "--is-ancestor", head, "refs/heads/main"],
+                                             capture_output=True).returncode == 0}
+    with open(os.environ["STANDIN_BUILD_LOG"], "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    if os.environ.get("STANDIN_MOVE_MAIN") == "1":
+        main = g("rev-parse", "refs/heads/main", cwd=remote)
+        moved = g("commit-tree", f"{main}^{{tree}}", "-p", main, "-m", "someone else's push", cwd=remote)
+        g("update-ref", "refs/heads/main", moved, cwd=remote)
+    if os.environ.get("STANDIN_KILL") == "1":
+        os.kill(os.getppid(), 9)
+        sys.exit(1)
+    if os.environ.get("STANDIN_BUILD_FAIL") == "1":
+        print("AUTOREL BUILD FAIL at step build: a stand-in failure (the Windows start)")
+        sys.exit(1)
+
+
+def builds(world) -> list[dict]:
+    """what the stand-in build saw, one record per build"""
+    log = world.tmp / "builds.jsonl"
+    return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
 
 
 def mac_package_dir(checkout: Path, version: str, out: Path, fault: str = "", commit: str = "") -> Path:
@@ -105,8 +164,10 @@ def mac_package_dir(checkout: Path, version: str, out: Path, fault: str = "", co
     import test_macos_release
     commit = commit or git(checkout, "rev-parse", "HEAD")   # `commit`: the tagged public commit the host built (mac_publish_dir)
     key = (checkout / "launcher/release_key.pub").read_text().strip()
+    keys = [ln.split()[0] for ln in (checkout / "launcher/release_keys.pub").read_text().splitlines() if ln.strip() and not ln.startswith("#")]
     info = {"version": version, "display_version": f"{version} Mac Unstable Preview (Apple Silicon)", "commit": commit, "date": "2026-10-16",
-            "repo": TARGET, "release_key": key, "test_build": False, "local_trial": False, "macos_preview": False, "macos_updates": True}
+            "repo": TARGET, "release_key": key, "release_keys": keys, "test_build": False, "local_trial": False, "macos_preview": False,
+            "macos_updates": True}
     if fault == "wrong-key":
         info["release_key"] = "ab" * 32
     if fault == "wrong-repo":
@@ -136,7 +197,10 @@ def zip_of(members: dict[str, bytes]) -> bytes:
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w") as z:
         for n, d in members.items():
-            z.writestr(n, d)
+            # fixed timestamp: the bytes end up in parametrize ids, which must be identical on every xdist worker
+            info = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))
+            info.external_attr = 0o600 << 16  # what writestr(name, ...) sets
+            z.writestr(info, d)
     return b.getvalue()
 
 
@@ -164,11 +228,14 @@ class World:
         git(tmp, "init", "-q", "-b", "main", str(seed))
         commit(seed, {"README.md": "public\n"}, "public start")
         git(seed, "push", "-q", str(self.remote), "main")
+        self.seed_main = git(seed, "rev-parse", "HEAD")
         # the archive repository: the release scripts, the launcher key, an engine file, the README line the sync replaces
         git(tmp, "init", "-q", "-b", "archive-legacy-codebase", str(self.repo))
         shutil.copytree(HERE, self.repo / "tools/release", ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
         shutil.copy2(REPO / "tools/precommit.py", self.repo / "tools/precommit.py")
         files = {"README.md": "OpenBFME\n" + ARCHIVE_LINE, "launcher/release_key.pub": pub.stdout.strip() + "\n",
+                 # SIGNKMS-1: the trusted list, the Deck key first (the Mac launcher's build_info.json carries it)
+                 "launcher/release_keys.pub": pub.stdout.strip() + "  deck-2026\n",
                  # RELNAME-1: the launcher's release grammar (a bridge's launcher must know -alpha)
                  "launcher/scripts/core/semver.gd": (REPO / "launcher/scripts/core/semver.gd").read_text(),
                  "engine/a.cpp": "1\n", ".gitignore": "/workspace/\n*.secret\n", "archive/old.txt": "legacy\n",
@@ -185,8 +252,9 @@ class World:
         (self.standin / "build").write_text(f"""#!{sys.executable}
 import sys; sys.path.insert(0, {str(HERE)!r})
 from pathlib import Path
-from test_autorelease import package_dir
+from test_autorelease import package_dir, standin_build_hooks
 import os
+standin_build_hooks(Path(sys.argv[1]), sys.argv[2])
 package_dir(Path(sys.argv[3]), sys.argv[2], extra=os.environ.get("STANDIN_EXTRA") == "1",
             legacy=os.environ.get("OPENBFME_RELEASE_LEGACY_LAUNCHERS", "1") == "1")
 """)
@@ -199,6 +267,8 @@ from pathlib import Path
 from test_autorelease import mac_package_dir
 import os
 open(os.environ["FAKE_MAC_LOG"], "a").write("build-mac " + sys.argv[2] + "\\n")
+if os.environ.get("STANDIN_MAC_FAIL") == "1":
+    print("MAC BUILD FAIL: fatal: hardlink different from source (a stand-in failure)"); sys.exit(1)
 mac_package_dir(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), os.environ.get("STANDIN_MAC_FAULT", ""))
 """)
         (self.standin / "ssh").write_text('''#!/bin/bash
@@ -210,9 +280,29 @@ case "${FAKE_MAC:-up}" in
   *) echo "MAC READY 26.6 arm64 Godot 4.7.2.stable.official.test"; exit 0 ;;
 esac
 ''')
-        for f in ("build", "verify", "build-mac", "ssh"):
+        # MACACT-1: what the stand-in GitHub Actions run builds (gh_stand_in.py runs it at the dispatch): the Mac package as the Mac host
+        # would, or a platform's GDExtension; it logs what it built and what the public remote had then (the tag must not be there yet)
+        (self.standin / "actions-build").write_text(f"""#!{sys.executable}
+import sys; sys.path.insert(0, {str(HERE)!r})
+from pathlib import Path
+from test_autorelease import mac_package_dir, actions_lib, LIBS
+import json, os, subprocess
+platform, checkout, version, out = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+remote = os.environ["FAKE_GH_REMOTE"]
+tag = subprocess.run(["git", "ls-remote", remote, "refs/tags/" + version], capture_output=True, text=True).stdout.strip()
+head = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+open(os.environ["FAKE_ACTIONS_LOG"], "a").write(json.dumps({{"platform": platform, "version": version, "head": head, "remote_tag": tag}}) + "\\n")
+if platform == "macos":
+    mac_package_dir(checkout, version, out, os.environ.get("STANDIN_MAC_FAULT", ""))
+else:
+    p = "linux-x64" if platform == "linux" else "windows-x64"
+    data = actions_lib(p, version, github=True, differs=os.environ.get("STANDIN_ACTIONS_FAULT") == "lib-differs")
+    (out / LIBS[p]).write_bytes(data)
+""")
+        for f in ("build", "verify", "build-mac", "ssh", "actions-build"):
             (self.standin / f).chmod(0o755)
         self.mac_log = tmp / "mac.log"
+        self.actions_log = tmp / "actions.jsonl"
         self.gh = tmp / "bin" / "gh"
         self.gh.parent.mkdir()
         self.gh.write_text(f"#!/bin/bash\nexec {sys.executable} {HERE / 'gh_stand_in.py'} \"$@\"\n")
@@ -224,6 +314,14 @@ esac
         self.state.mkdir(exist_ok=True)
         with open(self.state / "gated.tsv", "a") as f:
             f.write(f"{sha}\ttest-gate\t2026-10-09T00:00:00Z\tALL PASS\n")
+
+    def copy(self, tmp: Path) -> World:
+        shutil.copytree(self.tmp, tmp, dirs_exist_ok=True)
+        world = object.__new__(type(self))
+        world.__dict__ = {name: tmp / value.relative_to(self.tmp) if isinstance(value, Path) else value
+                          for name, value in self.__dict__.items()}
+        git(world.repo, "remote", "set-url", "origin", str(world.remote))
+        return world
 
     def change(self, files: dict[str, str | bytes], message: str, force: bool = False) -> str:
         return commit(self.repo, files, message, force)
@@ -238,9 +336,13 @@ esac
                 "OPENBFME_RELEASE_STANDIN": str(self.standin), "BFME_COMMUNITY": str(self.tmp / "no-community"),
                 "OPENBFME_RELEASE_MAC_SSH": str(self.standin / "ssh"), "FAKE_MAC_LOG": str(self.mac_log), "OPENBFME_RELEASE_MAC_ROOT": "ci-root",
                 "OPENBFME_RELEASE_MIN_COMMIT": self.first,
+                "STANDIN_BUILD_LOG": str(self.tmp / "builds.jsonl"),
+                "FAKE_GH_ACTIONS_BUILD": str(self.standin / "actions-build"), "FAKE_ACTIONS_LOG": str(self.actions_log),
+                "OPENBFME_RELEASE_ACTIONS_POLL": "0",
                 "PATH": f"{self.gh.parent}:{os.environ['PATH']}", **extra}
 
     def release(self, sha: str, *args: str, **env) -> subprocess.CompletedProcess:
+        skip_on_macos()
         return run("bash", self.repo / "tools/release/autorelease.sh", sha, "--repo", TARGET, "--remote", "origin", *args, env=self.env(**env))
 
     def gh_data(self) -> dict:
@@ -250,9 +352,14 @@ esac
         return git(self.repo, "ls-remote", str(self.remote), pattern)
 
 
+@pytest.fixture(scope="session")
+def world_template(tmp_path_factory):
+    return World(tmp_path_factory.mktemp("release-world"))
+
+
 @pytest.fixture
-def world(tmp_path):
-    return World(tmp_path)
+def world(tmp_path, world_template):
+    return world_template.copy(tmp_path)
 
 
 # ---- real mode end to end (Sol r1: real mode always aborted) ------------------------------------------------------------------------------
@@ -283,13 +390,15 @@ def test_real_release_end_to_end(world):
     mac = "openbfme-v0.4.5-macos-arm64.zip"
     assert f"| **[{mac}]({base}/{mac})** | **OpenBFME for Mac (Apple Silicon, macOS 13 or later), an unstable preview.**" in rel["body"]
     assert world.mac_log.read_text().splitlines()[-1] == "build-mac v0.4.5" and "MAC READY mac" in r.stdout
-    # the PR merged on the public main, its tree the archive's without archive/ plus the README line, no PRIVACY.md; the branch deleted
-    (pr,) = gh["prs"].values()
-    main_tree = git(world.repo, "ls-tree", "--name-only", f"{pr['merge']}")
+    # RELCAND-1: no sync PR; the public main is the candidate's own commit, one commit on the old main, its tree the archive's without
+    # archive/ plus the README line, no PRIVACY.md; the tag is the candidate's tag on it
+    assert gh["prs"] == {} and world.remote_refs("refs/heads/sync/*") == ""
+    public = pr_merge(world)
+    main_tree = git(world.repo, "ls-tree", "--name-only", public)
     assert "archive" not in main_tree.split() and "PRIVACY.md" not in main_tree.split()
-    assert "legacy-final" in git(world.remote, "show", f"{pr['merge']}:README.md")
-    assert world.remote_refs("refs/heads/sync/*") == ""
-    assert world.remote_refs("refs/tags/v0.4.5")
+    assert "legacy-final" in git(world.remote, "show", f"{public}:README.md")
+    assert git(world.remote, "rev-parse", "v0.4.5^{commit}") == public and git(world.remote, "rev-parse", f"{public}^") == world.seed_main
+    assert "OpenBFME v0.4.5." in git(world.remote, "log", "-1", "--format=%B", public)
     assert (world.state / "last-released").read_text().split()[:2] == [sha, "v0.4.5"]
     # the publish steps: a draft, the uploads, the read-back, then published; gh never asked to create with assets
     log = world.gh_log.read_text()
@@ -323,8 +432,8 @@ def test_real_release_end_to_end(world):
 
 
 def pr_merge(world) -> str:
-    (pr,) = world.gh_data()["prs"].values()
-    return pr["merge"]
+    """the released public commit (RELCAND-1: the candidate's commit, pushed as the public main; there is no sync PR any more)"""
+    return git(world.remote, "rev-parse", "refs/heads/main")
 
 
 def check_mac_release(world, pkg: Path, version: str, public: str) -> None:
@@ -370,10 +479,11 @@ def test_a_failed_homepage_update_is_a_warning(world):
 
 
 # ---- MACREL-1: the macOS package -------------------------------------------------------------------------------------------------------
-def nothing_published(world) -> bool:
-    """no PR, no sync branch, no tag, no release, no open intent: nothing left the Deck"""
+def nothing_published(world, main: str = "") -> bool:
+    """no PR, no sync branch, no tag, no release, no open intent, the public main where it was: nothing left the Deck"""
     return (world.gh_data() == {"prs": {}, "releases": []} and world.remote_refs("refs/heads/sync/*") == ""
-            and world.remote_refs("refs/tags/*") == "" and not (world.state / "intent").exists())
+            and world.remote_refs("refs/tags/*") == "" and not (world.state / "intent").exists()
+            and git(world.remote, "rev-parse", "refs/heads/main") == (main or world.seed_main))
 
 
 @pytest.mark.parametrize("fake,why", [
@@ -625,7 +735,7 @@ def test_plain_releases_follow_the_alpha_builds_without_a_bridge(world):
     assert [x["prerelease"] for x in world.gh_data()["releases"]] == [False, False]
 
 
-def test_bridge_rules():
+def test_bridge_version_rules():
     ok = lambda r: ""
     rel = lambda t, draft=False: {"tag_name": t, "draft": draft, "prerelease": "-" in t}
     assert autorelease.bridge_check([], ok) == ("no release on the first 30 an old launcher can read", "")
@@ -641,19 +751,6 @@ def test_bridge_rules():
     assert autorelease.next_bridge(["refs/tags/v0.3.0-preview.4", "refs/tags/v0.4.0-alpha.7", "refs/tags/v0.3.0-preview.5^{}"]) == "v0.3.0-preview.6"
     with pytest.raises(SystemExit, match="would not be above v0.3.1"):
         autorelease.next_bridge(["refs/tags/v0.3.0-preview.4", "refs/tags/v0.3.1"])
-    # Sol r2: the grammar is run (Godot, sample tags), not searched for a word
-    assert autorelease.knows_alpha((REPO / "launcher/scripts/core/semver.gd").read_text())
-    for old in ("42f8a8d2", "2a422ce6"):   # the launchers of v0.3.0-preview.1/.2 and .3/.4
-        src = subprocess.run(["git", "-C", REPO, "show", f"{old}:launcher/scripts/core/semver.gd"], capture_output=True, text=True)
-        assert src.returncode == 0, f"the launcher of {old} is not in this clone"
-        assert not autorelease.knows_alpha(src.stdout), old
-        hacked = src.stdout.replace('(0|[1-9][0-9]{0,8}))?$"', '(0|[1-9][0-9]{0,8}))?$"  # alpha', 1)
-        assert hacked != src.stdout and not autorelease.knows_alpha(hacked), "a comment saying alpha is no alpha grammar"
-    assert not autorelease.knows_alpha("this is not gdscript"), "a semver.gd that does not parse"
-    assert not autorelease.knows_alpha("extends RefCounted\nstatic func is_valid(t): return [][1]\n"), "one that stops on an error"
-    lax = (REPO / "launcher/scripts/core/semver.gd").read_text().replace("(?:-(alpha|preview)", "(?:-(alpha|beta|preview)")
-    assert lax != (REPO / "launcher/scripts/core/semver.gd").read_text()
-    assert not autorelease.knows_alpha(lax), "a grammar that takes more than the launchers' is not the alpha grammar"
     iv = autorelease.intent_version_ok
     assert iv("v0.3.0-preview.5", "v0.3.0-preview.4") and iv("v0.4.0-alpha.1", "v0.3.0-preview.5") and iv("v0.3.0-preview.6", "v0.4.0-alpha.3")
     assert not iv("v0.4.0-alpha.2", "v0.4.0-alpha.2") and not iv("v0.3.0-preview.5", "v0.3.0-preview.6") and not iv("v0.5.0-alpha.1", "")
@@ -669,6 +766,43 @@ def test_bridge_rules():
     assert not iv("v0.4.6", "v0.4.0-alpha.4", tags + ["refs/tags/v0.4.7"]) and iv("v0.4.8", "v0.4.5", tags + ["refs/tags/v0.4.7"])
     assert not iv("v0.4.0-alpha.5", "v0.4.5") and not iv("v0.4.0-alpha.5", "v0.4.0-alpha.4", ["refs/tags/v0.4.5"])
     assert not iv("v0.3.0-preview.7", "v0.4.5") and not iv("v0.3.0-preview.7", "", ["refs/tags/v0.4.5^{}"])
+
+
+@pytest.fixture
+def bridge_godot():
+    if shutil.which(os.environ.get("GODOT", "godot")) is None:
+        pytest.skip("no Godot executable (set GODOT) to run the bridge launcher's semver.gd grammar probe")
+
+
+def test_bridge_rules(bridge_godot):
+    # Sol r2: the grammar is run (Godot, sample tags), not searched for a word
+    assert autorelease.knows_alpha((REPO / "launcher/scripts/core/semver.gd").read_text())
+    assert not autorelease.knows_alpha("this is not gdscript"), "a semver.gd that does not parse"
+    assert not autorelease.knows_alpha("extends RefCounted\nstatic func is_valid(t): return [][1]\n"), "one that stops on an error"
+    lax = (REPO / "launcher/scripts/core/semver.gd").read_text().replace("(?:-(alpha|nightly|preview)", "(?:-(alpha|beta|nightly|preview)")
+    assert lax != (REPO / "launcher/scripts/core/semver.gd").read_text()
+    assert not autorelease.knows_alpha(lax), "a grammar that takes more than the launchers' is not the alpha grammar"
+
+
+@pytest.mark.parametrize("tag,tree", [
+    ("v0.3.0-preview.2", "4bc620603c6824421b967bb174f9ed42bea91b9e"),
+    ("v0.3.0-preview.4", "b10f453de143a794ce9dd4e02baacc9fa9fd57ce"),
+])
+def test_bridge_historical_rules(bridge_godot, tag, tree):
+    # docs/WINDOWS.md: these published trees are identical to the unpublished development-history pins.
+    available = subprocess.run(["git", "-C", REPO, "cat-file", "-e", f"{tree}^{{tree}}"], capture_output=True, text=True)
+    if available.returncode:
+        pytest.skip(f"the pinned launcher tree {tree} of {tag} is absent; fetch refs/tags/{tag} from the repository")
+    src = git(REPO, "show", f"{tree}:scripts/core/semver.gd")
+    assert not autorelease.knows_alpha(src), tag
+    hacked = src.replace('(0|[1-9][0-9]{0,8}))?$"', '(0|[1-9][0-9]{0,8}))?$"  # alpha', 1)
+    assert hacked != src and not autorelease.knows_alpha(hacked), "a comment saying alpha is no alpha grammar"
+
+
+def test_the_alpha_probe_fails_closed_without_godot(tmp_path, monkeypatch):
+    monkeypatch.setenv("GODOT", str(tmp_path / "missing-godot"))
+    with pytest.raises(SystemExit, match=r"Godot .* could not run .*the alpha check fails closed"):
+        autorelease.knows_alpha((REPO / "launcher/scripts/core/semver.gd").read_text())
 
 
 def test_bridge_manifest_rules(world, tmp_path):
@@ -702,7 +836,7 @@ def test_an_open_plain_intent_keeps_its_version(world):
         world.gate(shas[-1])
     a, b = shas
     assert "AUTORELEASE OK v0.4.5" in world.release(a, "--since", world.first).stdout
-    r = world.release(b, STANDIN_TAMPERED="1")
+    r = world.release(b, FAKE_GH_FAULT="tag-read-fail")   # RELCAND-1: a failure after the push (a build failure leaves no tag)
     assert r.returncode != 0 and world.remote_refs("refs/tags/v0.4.6") and "version=v0.4.6" in (world.state / "intent").read_text(), \
         r.stdout + r.stderr
     intent = world.state / "intent"
@@ -740,8 +874,8 @@ def test_standin_is_refused_for_the_real_repository(world):
     ({"PRIVACY.md": "p\n"}, "not a public top-level entry: PRIVACY.md"),
     ({"tools/reference/x.txt": "x\n"}, "inside a private folder (reference/)"),
     # r3 (Sol r2): retail bytes inside containers
-    ({"docs/content.bin": gzip.compress(b"BIGF\0\0\0\0retail-payload")}, "a binary file in the public tree (not UTF-8 text, or NUL bytes), not in public_binaries.txt: docs/content.bin"),
-    ({"docs/nested.gz.bin": gzip.compress(zip_of({"a/b.bin": b"BIGF\0\0\0\0retail"}))}, "a binary file in the public tree (not UTF-8 text, or NUL bytes), not in public_binaries.txt: docs/nested.gz.bin"),
+    ({"docs/content.bin": gzip.compress(b"BIGF\0\0\0\0retail-payload", mtime=0)}, "a binary file in the public tree (not UTF-8 text, or NUL bytes), not in public_binaries.txt: docs/content.bin"),
+    ({"docs/nested.gz.bin": gzip.compress(zip_of({"a/b.bin": b"BIGF\0\0\0\0retail"}), mtime=0)}, "a binary file in the public tree (not UTF-8 text, or NUL bytes), not in public_binaries.txt: docs/nested.gz.bin"),
     ({"docs/raw.bin": zlib.compress(b"DDS |\0\0\0 texture")}, "a binary file in the public tree (not UTF-8 text, or NUL bytes), not in public_binaries.txt: docs/raw.bin"),
     ({"docs/cut.bin": zlib.compress(b"\x01\x02" * 500)[:-4]}, "a binary file in the public tree"),
     ({"docs/seven.bin": b"7z\xbc\xaf\x27\x1c" + b"\0" * 32}, "a binary file in the public tree"),
@@ -766,9 +900,7 @@ def test_sync_drops_a_stray_privacy_md_of_the_public_main(world):
     world.gate(sha)
     r = world.release(sha, "--since", world.first)
     assert r.returncode == 0, r.stdout + r.stderr
-    gh = json.loads(world.gh_state.read_text())
-    (pr,) = gh["prs"].values()
-    assert "PRIVACY.md" not in git(world.repo, "ls-tree", "--name-only", pr["merge"]).split()
+    assert "PRIVACY.md" not in git(world.repo, "ls-tree", "--name-only", pr_merge(world)).split()
 
 
 def test_audit_tree_of_the_real_public_tree():
@@ -790,10 +922,12 @@ def test_returned_artifacts_are_checked_before_signing(world):
     r = world.release(sha, "--since", world.first, STANDIN_TAMPERED="1")
     assert r.returncode != 0 and "at step deck-verify" in r.stdout
     assert not list((world.tmp / "work").rglob("manifest.json.sig")) and world.gh_data()["releases"] == []
-    # the tag stays (no release was created for it) and the release intent stays open: the next run resumes that sha and tag
-    assert world.remote_refs("refs/tags/v0.4.5") and (world.state / "intent").exists()
+    # RELCAND-1: the candidate failed before the push: no tag, no public commit, no intent, the local tag gone; the next run releases
+    # the same number
+    assert nothing_published(world) and not git(world.repo, "tag", "-l", "v0.4.5"), r.stdout
+    assert "nothing was pushed: no tag and no public commit of v0.4.5 left the Deck" in r.stdout
     r = world.release(sha, "--since", world.first)
-    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout and "already on origin" in r.stdout, r.stdout + r.stderr
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout and "already on origin" not in r.stdout, r.stdout + r.stderr
     assert not world.remote_refs("refs/tags/v0.4.6") and not (world.state / "intent").exists()
     # an extra file among the returned ones
     nxt = world.change({"engine/a.cpp": "3\n"}, "X-2: something else new for players")
@@ -1164,7 +1298,7 @@ def test_stale_state_cannot_roll_back(world):
 def test_an_open_intent_is_resumed_before_any_other_sha(world):
     a = world.change({"engine/a.cpp": "2\n"}, "X-1: first change")
     world.gate(a)
-    r = world.release(a, "--since", world.first, STANDIN_TAMPERED="1")
+    r = world.release(a, "--since", world.first, FAKE_GH_FAULT="tag-read-fail")
     assert r.returncode != 0 and (world.state / "intent").exists()
     # RELTEST-1: the pushed tag cannot be deleted (GH013); the stop message says the next run resumes the same version from it
     assert world.remote_refs("refs/tags/v0.4.5")
@@ -1229,7 +1363,7 @@ def test_a_draft_the_intent_did_not_create_is_left(world):
 def test_github_read_failures_fail_closed(world, tmp_path):
     sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
     world.gate(sha)
-    assert world.release(sha, "--since", world.first, STANDIN_TAMPERED="1").returncode != 0
+    assert world.release(sha, "--since", world.first, FAKE_GH_FAULT="tag-read-fail").returncode != 0
     broken = tmp_path / "broken-gh"
     broken.write_text("#!/bin/bash\necho 'gh: HTTP 502' >&2; exit 1\n")
     broken.chmod(0o755)
@@ -1336,7 +1470,7 @@ def test_the_key_path_is_never_printed(world):
 # ---- round 4 (Sol r3 REJECT) -----------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("data,why", [
     (zlib.compress(zlib.compress(b"BIGF\0\0\0\0retail")), "a binary file in the public tree"),
-    (gzip.compress(zip_of({"in.bin": zlib.compress(b"BIGF\0\0\0\0retail")})), "a binary file in the public tree"),
+    (gzip.compress(zip_of({"in.bin": zlib.compress(b"BIGF\0\0\0\0retail")}), mtime=0), "a binary file in the public tree"),
 ])
 def test_every_decoded_layer_is_audited(world, data, why):
     """Sol r3: a twice-zlib-wrapped BIG passed; every decoded layer goes back through SyncAudit.blob"""
@@ -1411,15 +1545,15 @@ def test_linux_packed_payload_signature_that_looks_like_zlib():
     def package(data):
         member = tarfile.TarInfo(path)
         member.size = len(data)
-        return gzip.compress(tar_of([(member, data)]))
+        return gzip.compress(tar_of([(member, data)]), mtime=0)
     a = autorelease.SyncAudit(PRIVATE, top=True)
     a.blob("package.tar.gz", package(sig))
     assert a.problems == []
     for name, data in (("package.tar.gz", package(sig[:-1])),
                        ("package.tar.gz", package(sig + b"\x00")),
-                       ("package.tar.gz", gzip.compress(zip_of({path: sig}))),
+                       ("package.tar.gz", gzip.compress(zip_of({path: sig}), mtime=0)),
                        ("outer.zip", zip_of({"inner.tar.gz": package(sig)})),
-                       ("package.tar.gz", gzip.compress(package(sig)))):
+                       ("package.tar.gz", gzip.compress(package(sig), mtime=0))):
         a = autorelease.SyncAudit(PRIVATE, top=True)
         a.blob(name, data)
         assert any("unreadable zlib data" in p for p in a.problems), a.problems
@@ -1569,9 +1703,9 @@ def test_one_redaction_point_covers_intent_fields(world, tmp_path):
 
 # ---- round 6 (Sol r5 REJECT): a text-only public tree, public metadata audited, one fixed key path -----------------------------------
 @pytest.mark.parametrize("name,data", [
-    ("docs/prefixed.bin", b"header bytes " + gzip.compress(b"BIGF\0\0\0\0retail")),
-    ("tools/install.sh", b"#!/bin/sh\ntail -n +3 \"$0\" | gunzip; exit\n" + gzip.compress(b"BIGF\0\0\0\0retail")),
-    ("docs/picture.png", b"\x89PNG\r\n\x1a\n" + b"\0" * 16 + gzip.compress(b"BIGF\0\0\0\0retail")),
+    ("docs/prefixed.bin", b"header bytes " + gzip.compress(b"BIGF\0\0\0\0retail", mtime=0)),
+    ("tools/install.sh", b"#!/bin/sh\ntail -n +3 \"$0\" | gunzip; exit\n" + gzip.compress(b"BIGF\0\0\0\0retail", mtime=0)),
+    ("docs/picture.png", b"\x89PNG\r\n\x1a\n" + b"\0" * 16 + gzip.compress(b"BIGF\0\0\0\0retail", mtime=0)),
 ])
 def test_the_public_tree_is_text_only(world, name, data):
     """Sol r5: a prefixed gzip, a self-extracting shell stub and PNG + gzip passed the container detectors"""
@@ -1844,7 +1978,7 @@ def test_a_resumed_plain_release_is_above_every_release_tag():
 def test_a_resumed_release_below_a_later_tag_is_refused_by_the_run(world):
     sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
     world.gate(sha)
-    r = world.release(sha, "--since", world.first, STANDIN_TAMPERED="1")
+    r = world.release(sha, "--since", world.first, FAKE_GH_FAULT="tag-read-fail")
     assert r.returncode != 0 and "version=v0.4.5" in (world.state / "intent").read_text(), r.stdout + r.stderr
     git(world.repo, "tag", "v0.5.0-alpha.1", sha)
     git(world.repo, "push", "-q", "origin", "refs/tags/v0.5.0-alpha.1")
@@ -1922,8 +2056,7 @@ def test_sync_tree_drops_the_excluded_paths(world):
     world.gate(sha)
     r = world.release(sha, "--since", world.first)
     assert r.returncode == 0, r.stdout + r.stderr
-    (pr,) = world.gh_data()["prs"].values()
-    assert git(world.repo, "rev-parse", f"{pr['merge']}^{{tree}}") == tree
+    assert git(world.repo, "rev-parse", f"{pr_merge(world)}^{{tree}}") == tree
 
 
 def test_sync_tree_without_its_exclusion_list_is_refused(world):
@@ -2732,7 +2865,7 @@ def test_a_listed_gzip_is_read_by_its_content():
 def test_the_note_sources_reach_the_metadata_audit():
     """the review's weak spot: nothing checked that autorelease.sh audits note-sources.txt"""
     text = (HERE / "autorelease.sh").read_text().replace("\\\n", " ")
-    audit = next(line for line in text.splitlines() if "autorelease.py\" audit-text" in line and "pr-title.txt" in line)
+    audit = next(line for line in text.splitlines() if "autorelease.py\" audit-text" in line and "commit-msg.txt" in line)
     assert '"$WORK/note-sources.txt"' in audit and "--denylist" in audit, audit
 
 
@@ -2768,3 +2901,452 @@ def test_the_mac_build_host_folder_comes_from_the_private_environment(tmp_path, 
     env["OPENBFME_RELEASE_MAC_ROOT"] = "ci-root"   # the control: a plain folder reaches the host, and the check names that folder
     r = subprocess.run(["bash", str(HERE / "build_macos_release.sh"), "--check"], capture_output=True, text=True, env=env)
     assert r.returncode == 0 and "MAC READY" in r.stdout and log.exists(), (r.stdout, r.stderr)
+
+
+
+# ---- RELCAND-1: candidate first, tag last ---------------------------------------------------------------------------------------------
+def released(world, version: str) -> dict:
+    (rel,) = [x for x in world.gh_data()["releases"] if x["tag_name"] == version]
+    return rel
+
+
+def published_asset(world, rel: dict, name: str) -> bytes:
+    (a,) = [x for x in rel["assets"] if x["name"] == name]
+    return (Path(str(world.gh_state) + ".d") / str(a["id"])).read_bytes()
+
+
+def candidate_files(world, version: str) -> dict[str, str]:
+    lines = (world.tmp / "work" / version / "candidate.ok").read_text().splitlines()
+    return {ln[66:]: ln[:64] for ln in lines if re.fullmatch(r"[0-9a-f]{64}  .+", ln)}
+
+
+def test_the_candidate_is_built_and_tested_before_anything_is_pushed_and_published_as_tested(world):
+    """the build sees the final tag and commit (git describe is the version) while the remote has neither; the pushed tag is the very
+    tag object the build was given, main is the very commit; every published asset is byte for byte the candidate's recorded file"""
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: units walk around trees instead of through them")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    (b,) = builds(world)
+    public = git(world.remote, "rev-parse", "refs/heads/main")
+    assert b["describe"] == "v0.4.5" and b["head"] == public, b
+    assert b["remote_tag"] == "" and b["remote_has_head"] is False, "tag last: nothing was public while the candidate was built"
+    assert git(world.repo, "ls-remote", str(world.remote), "refs/tags/v0.4.5").split()[0] == b["tagobj"], "the tested tag object is pushed"
+    out = r.stdout
+    assert out.index("AUTORELEASE candidate: v0.4.5 passed every check") < out.index("AUTORELEASE push:") < out.index("PUBLISH draft release")
+    pkg = world.tmp / "work/v0.4.5/pkg"
+    assert json.loads((pkg / "manifest.json").read_text())["commit"] == public
+    rel = released(world, "v0.4.5")
+    files = candidate_files(world, "v0.4.5")
+    assert len(rel["assets"]) == 10 and all(f"pkg/{a['name']}" in files for a in rel["assets"]), "the candidate is what is published"
+    for a in rel["assets"]:
+        assert hashlib.sha256(published_asset(world, rel, a["name"])).hexdigest() == files[f"pkg/{a['name']}"], a["name"]
+    assert rel["body"] == (world.tmp / "work/v0.4.5/notes.md").read_text() and "notes.md" in files
+    assert not git(world.repo, "tag", "-l", "v0.4.5") or git(world.repo, "rev-parse", "v0.4.5") == b["tagobj"]
+
+
+@pytest.mark.parametrize("env,step", [
+    ({"STANDIN_BUILD_FAIL": "1"}, "build"),            # the Linux / Windows build, package.sh, test_export, the Windows start + HUD6
+    ({"STANDIN_MAC_FAIL": "1"}, "mac-build"),          # v0.4.11: the Mac clone failed after Linux, Windows and HUD6 had passed
+    ({"STANDIN_TAMPERED": "1"}, "deck-verify"),        # step 5's trusted-checkout checks (package.sh --verify in a real run)
+    ({"STANDIN_MAC_FAULT": "wrong-commit"}, "deck-verify"),
+])
+def test_a_failed_candidate_burns_no_number_and_the_next_run_releases_it(world, env, step):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first, **env)
+    assert r.returncode == 1 and f"AUTORELEASE FAIL at step {step} (v0.4.5)" in r.stdout, r.stdout + r.stderr
+    assert nothing_published(world), "no tag, no public commit, no release, no intent"
+    assert not git(world.repo, "tag", "-l", "v0.4.5"), "the candidate's local tag is gone"
+    assert "v0.4.5 is not used and the next run releases it" in r.stdout
+    r = world.release(sha, "--since", world.first)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    assert [x["tag_name"] for x in world.gh_data()["releases"]] == ["v0.4.5"]
+    assert sorted(t.split("refs/tags/")[1] for t in world.remote_refs("refs/tags/*").splitlines() if not t.endswith("^{}")) == ["v0.4.5"]
+    assert builds(world)[-1]["head"] == git(world.remote, "rev-parse", "refs/heads/main") and builds(world)[-1]["describe"] == "v0.4.5"
+
+
+def test_main_moving_while_the_candidate_is_built_makes_it_stale(world):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first, STANDIN_MOVE_MAIN="1")
+    assert r.returncode == 1 and "AUTORELEASE FAIL at step push (v0.4.5): STALE CANDIDATE: origin/main moved from" in r.stdout, r.stdout
+    moved = git(world.remote, "rev-parse", "refs/heads/main")
+    assert moved != world.seed_main and git(world.remote, "log", "-1", "--format=%s", moved) == "someone else's push"
+    assert world.remote_refs("refs/tags/*") == "" and world.gh_data()["releases"] == [] and not (world.state / "intent").exists()
+    assert not git(world.repo, "tag", "-l", "v0.4.5")
+    # the next run: a new candidate on the moved main, the same number
+    r = world.release(sha, "--since", world.first)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    public = git(world.remote, "rev-parse", "refs/heads/main")
+    assert git(world.remote, "rev-parse", f"{public}^") == moved and builds(world)[-1]["head"] == public
+    assert git(world.remote, "rev-parse", "v0.4.5^{commit}") == public
+
+
+def git_racer(tmp: Path, remote: Path) -> Path:
+    """a git whose atomic push is preceded by someone else's push to the public main (the race between the last check and the push)"""
+    real = shutil.which("git")
+    w = tmp / "rbin" / "git"
+    w.parent.mkdir(exist_ok=True)
+    w.write_text(f"""#!{sys.executable}
+import os, subprocess, sys
+if "push" in sys.argv and "--atomic" in sys.argv:
+    g = lambda *a: subprocess.run([{real!r}, "-C", {str(remote)!r}, *a], capture_output=True, text=True, check=True).stdout.strip()
+    main = g("rev-parse", "refs/heads/main")
+    g("update-ref", "refs/heads/main", g("commit-tree", main + "^{{tree}}", "-p", main, "-m", "a push just before ours"))
+os.execv({real!r}, [{real!r}] + sys.argv[1:])
+""")
+    w.chmod(0o755)
+    return w.parent
+
+
+def test_a_push_that_loses_the_race_pushes_nothing(world, tmp_path):
+    """the push is atomic: when main moved between the last check and the push, git refuses main and the tag goes with it"""
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    wbin = git_racer(tmp_path, world.remote)
+    r = world.release(sha, "--since", world.first, PATH=f"{wbin}:{world.gh.parent}:{os.environ['PATH']}")
+    assert r.returncode == 1 and "pushing v0.4.5 failed: origin/main moved to" in r.stdout and "nothing is public" in r.stdout, r.stdout + r.stderr
+    assert world.remote_refs("refs/tags/*") == "" and world.gh_data()["releases"] == [] and not (world.state / "intent").exists()
+    assert git(world.remote, "log", "-1", "--format=%s", "refs/heads/main") == "a push just before ours"
+    r = world.release(sha, "--since", world.first)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+
+
+def test_a_run_killed_during_its_candidate_frees_the_number(world):
+    """a power cut during the build: the intent (step candidate) and the local tag survive the run; the next run sees the tag is not on
+    the remote, deletes the candidate's local tag, discards the intent and releases the same number, for another sha too"""
+    a = world.change({"engine/a.cpp": "2\n"}, "X-1: first change")
+    world.gate(a)
+    r = world.release(a, "--since", world.first, STANDIN_KILL="1")
+    assert r.returncode != 0
+    intent = (world.state / "intent").read_text()
+    assert "step=candidate" in intent and "version=v0.4.5" in intent and git(world.repo, "tag", "-l", "v0.4.5") == "v0.4.5"
+    assert world.remote_refs("refs/tags/*") == "" and git(world.remote, "rev-parse", "refs/heads/main") == world.seed_main
+    b = world.change({"engine/a.cpp": "3\n"}, "X-2: second change")
+    world.gate(b)
+    for extra in (["--plan"], ["--dry-run"]):
+        r = world.release(b, "--since", world.first, *extra)
+        assert r.returncode != 0 and "only a real run reconciles it" in r.stdout
+    r = world.release(b, "--since", world.first)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "never reached origin: discarded; nothing of it was public and v0.4.5 is not used" in r.stdout
+    assert "deleted the candidate's local tag v0.4.5" in r.stdout and "AUTORELEASE OK v0.4.5" in r.stdout
+    assert (world.state / "last-released").read_text().split()[:2] == [b, "v0.4.5"]
+
+
+def test_a_candidate_intent_does_not_delete_a_tag_it_did_not_make(world):
+    a = world.change({"engine/a.cpp": "2\n"}, "X-1: first change")
+    world.gate(a)
+    assert world.release(a, "--since", world.first, STANDIN_KILL="1").returncode != 0
+    intent = world.state / "intent"
+    text = intent.read_text()
+    git(world.repo, "tag", "-d", "v0.4.5")
+    git(world.repo, "tag", "v0.4.5", world.first)   # someone's own local tag of that name
+    r = world.release(a, "--since", world.first)
+    assert r.returncode != 0 and "a local tag v0.4.5 exists that is not the open candidate's" in r.stdout, r.stdout
+    assert git(world.repo, "rev-parse", "v0.4.5") == world.first and intent.read_text() == text
+
+
+def git_killer(tmp: Path, lost: bool) -> Path:
+    """a git whose atomic push goes through, then the run dies (a power cut) or the answer is lost (exit 1)"""
+    real = shutil.which("git")
+    w = tmp / "kbin" / "git"
+    w.parent.mkdir(exist_ok=True)
+    after = "sys.exit(1)" if lost else "os.kill(os.getppid(), 9); sys.exit(1)"
+    w.write_text(f"""#!{sys.executable}
+import os, subprocess, sys
+if "push" in sys.argv and "--atomic" in sys.argv:
+    subprocess.run([{real!r}] + sys.argv[1:], check=True)
+    {after}
+os.execv({real!r}, [{real!r}] + sys.argv[1:])
+""")
+    w.chmod(0o755)
+    return w.parent
+
+
+def test_a_lost_push_answer_is_read_back(world, tmp_path):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    wbin = git_killer(tmp_path, lost=True)
+    r = world.release(sha, "--since", world.first, PATH=f"{wbin}:{world.gh.parent}:{os.environ['PATH']}")
+    assert r.returncode == 0 and "the push reported a failure, but origin has the candidate's tag: continuing" in r.stdout, r.stdout + r.stderr
+    assert "AUTORELEASE OK v0.4.5" in r.stdout and len(builds(world)) == 1
+
+
+def test_a_run_killed_after_its_push_resumes_and_publishes_the_candidate_unrebuilt(world, tmp_path):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    wbin = git_killer(tmp_path, lost=False)
+    r = world.release(sha, "--since", world.first, PATH=f"{wbin}:{world.gh.parent}:{os.environ['PATH']}")
+    assert r.returncode != 0 and "step=pushing" in (world.state / "intent").read_text()
+    assert world.remote_refs("refs/tags/v0.4.5") and world.gh_data()["releases"] == []
+    r = world.release(sha)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "the candidate's push of v0.4.5 reached origin (its answer was lost): it goes on as tagged" in r.stdout
+    assert "it is published as it is, not rebuilt" in r.stdout and len(builds(world)) == 1, "published without a rebuild"
+    rel = released(world, "v0.4.5")
+    files = candidate_files(world, "v0.4.5")
+    for a in rel["assets"]:
+        assert hashlib.sha256(published_asset(world, rel, a["name"])).hexdigest() == files[f"pkg/{a['name']}"], a["name"]
+
+
+def test_a_failure_after_the_push_resumes_the_candidate_and_a_changed_one_is_rebuilt(world):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first, FAKE_GH_FAULT="tag-read-fail")
+    assert r.returncode != 0 and world.remote_refs("refs/tags/v0.4.5") and "step=publishing" in (world.state / "intent").read_text()
+    assert "the tag v0.4.5 stays on origin with no release yet" in r.stdout
+    # the candidate's folder changed after it passed (a file edited): not published; built and tested again at the pushed tag
+    pkg = world.tmp / "work/v0.4.5/pkg"
+    sums = pkg / "SHA256SUMS-v0.4.5.txt"
+    sums.write_text(sums.read_text() + "\n")
+    r = world.release(sha)
+    assert r.returncode == 0 and "candidate.ok does not verify" in r.stdout and "a file differs from its record" in r.stdout, r.stdout + r.stderr
+    assert "AUTORELEASE OK v0.4.5" in r.stdout and len(builds(world)) == 2
+    assert builds(world)[1]["remote_tag"] and builds(world)[1]["tagobj"] == builds(world)[0]["tagobj"], "the rebuild is of the pushed tag"
+    rel = released(world, "v0.4.5")
+    files = candidate_files(world, "v0.4.5")
+    for a in rel["assets"]:
+        assert hashlib.sha256(published_asset(world, rel, a["name"])).hexdigest() == files[f"pkg/{a['name']}"], a["name"]
+
+
+@pytest.mark.parametrize("edit", ["extra", "missing", "public"])
+def test_a_candidate_record_that_does_not_hold_is_not_published(world, edit):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    assert world.release(sha, "--since", world.first, FAKE_GH_FAULT="tag-read-fail").returncode != 0
+    work = world.tmp / "work/v0.4.5"
+    if edit == "extra":
+        (work / "pkg/extra.bin").write_bytes(b"x")
+    elif edit == "missing":
+        (work / "pkg/BUILDINFO-v0.4.5.txt").unlink()
+    else:
+        ok = work / "candidate.ok"
+        ok.write_text(re.sub(r"^public=.*$", "public=" + "1" * 40, ok.read_text(), flags=re.M))
+    r = world.release(sha)
+    why = {"extra": "does not hold exactly the recorded files", "missing": "does not hold exactly the recorded files",
+           "public": "candidate.ok names another public"}[edit]
+    assert r.returncode == 0 and why in r.stdout and len(builds(world)) == 2, r.stdout + r.stderr
+    assert "extra.bin" not in json.dumps(released(world, "v0.4.5")["assets"])
+
+
+def test_an_intent_of_the_earlier_order_at_step_tag_is_released_with_its_public_commit(world):
+    """the order before RELCAND-1 merged the sync PR, then failed to push the tag (intent step=tag, public on main, no tag): the new
+    order builds and tests that public commit as the candidate and pushes only the tag"""
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    tree = autorelease.sync_tree(str(world.repo), sha)
+    git(world.repo, "fetch", "-q", "origin", "main")
+    public = git(world.repo, "commit-tree", tree, "-p", world.seed_main, "-m", "Sync the rebuild (the old order's merge)")
+    git(world.repo, "push", "-q", "origin", f"{public}:refs/heads/main")
+    world.state.mkdir(exist_ok=True)
+    work = world.tmp / "work/v0.4.5"
+    (world.state / "intent").write_text(f"sha={sha}\nversion=v0.4.5\ntree={tree}\nbase={world.first}\nwork={work}\nbranch=sync/x\n"
+                                        f"public={public}\nstep=tag\n")
+    git(world.repo, "fetch", "-q", "origin", "main")
+    r = world.release(sha)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    assert "resumed, the public commit" in r.stdout and git(world.remote, "rev-parse", "refs/heads/main") == public
+    assert git(world.remote, "rev-parse", "v0.4.5^{commit}") == public and builds(world)[-1]["head"] == public
+
+
+def test_the_dry_run_prints_the_one_atomic_push_and_leaves_no_tag(world):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first, "--dry-run")
+    assert r.returncode == 0 and "AUTORELEASE DRY RUN OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    (b,) = builds(world)
+    assert f"WOULD RUN: git push --atomic origin {b['head']}:refs/heads/main refs/tags/v0.4.5" in r.stdout
+    assert nothing_published(world) and not git(world.repo, "tag", "-l", "v0.4.5") and b["describe"] == "v0.4.5"
+
+
+@pytest.mark.parametrize("field,value,why", [
+    ("tagobj", "2" * 40, "is not the candidate's tag object"),
+    ("tagobj", "", "is not the candidate's tag object (none recorded)"),
+])
+def test_a_pushing_intent_whose_remote_tag_is_not_its_own_is_refused(world, tmp_path, field, value, why):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    wbin = git_killer(tmp_path, lost=False)
+    assert world.release(sha, "--since", world.first, PATH=f"{wbin}:{world.gh.parent}:{os.environ['PATH']}").returncode != 0
+    intent = world.state / "intent"
+    intent.write_text(re.sub(rf"^{field}=.*$", f"{field}={value}", intent.read_text(), flags=re.M))
+    before = intent.read_text()
+    r = world.release(sha)
+    assert r.returncode != 0 and why in r.stdout and intent.read_text() == before and world.gh_data()["releases"] == [], r.stdout
+
+
+
+# ---- Sol r1 (RELCAND-1): a push the server is still applying when the client dies -------------------------------------------------------
+def paused_remote(world, tmp: Path) -> dict:
+    """a pre-receive hook on the public remote that, while <pause> exists, says it received the push and waits for <go>, then accepts or
+    refuses it (<rc>): a server still applying a push whose client is gone"""
+    f = {k: tmp / k for k in ("pause", "received", "go", "rc", "done")}
+    hook = world.remote / "hooks/pre-receive"
+    hook.write_text(f"""#!/bin/bash
+cat > /dev/null
+[ -f {f['pause']} ] || exit 0
+touch {f['received']}
+while [ ! -f {f['go']} ]; do sleep 0.1; done
+rc=$(cat {f['rc']} 2>/dev/null || echo 0)
+touch {f['done']}
+exit $rc
+""")
+    hook.chmod(0o755)
+    f["pause"].touch()
+    return f
+
+
+def git_dropper(tmp: Path, received: Path) -> Path:
+    """a git whose atomic push loses its connection once the server has the push: the client is killed, the server goes on"""
+    real = shutil.which("git")
+    w = tmp / "dbin" / "git"
+    w.parent.mkdir(exist_ok=True)
+    w.write_text(f"""#!{sys.executable}
+import os, subprocess, sys, time
+if "push" in sys.argv and "--atomic" in sys.argv:
+    # the local "server" (receive-pack, a child of this push) must not hold the run's output pipes, as a remote one would not
+    p = subprocess.Popen([{real!r}] + sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    end = time.time() + 60
+    while not os.path.exists({str(received)!r}) and time.time() < end:
+        time.sleep(0.05)
+    p.kill(); p.wait()
+    print("fatal: the remote end hung up unexpectedly", file=sys.stderr)
+    sys.exit(128)
+os.execv({real!r}, [{real!r}] + sys.argv[1:])
+""")
+    w.chmod(0o755)
+    return w.parent
+
+
+def wait_for(path: Path, what: str) -> None:
+    import time  # noqa: PLC0415
+    end = time.time() + 60
+    while not path.exists() and time.time() < end:
+        time.sleep(0.05)
+    assert path.exists(), what
+
+
+@pytest.mark.parametrize("server", ["lands", "refuses"])
+def test_a_push_whose_client_dies_while_the_server_applies_it_is_never_discarded(world, tmp_path, server):
+    """Sol's repro: the client dies after the server has the push; the run reads no tag yet. The intent must stay (step pushing) with
+    the local tag: when the server then lands the push, the next run goes on from the tag; when the server refuses it, the next run pushes
+    the very same candidate again. Either way the same version is published from the candidate's folder, never rebuilt, and no second
+    number is taken"""
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    f = paused_remote(world, tmp_path)
+    f["rc"].write_text("0\n" if server == "lands" else "1\n")
+    wbin = git_dropper(tmp_path, f["received"])
+    r = world.release(sha, "--since", world.first, PATH=f"{wbin}:{world.gh.parent}:{os.environ['PATH']}")
+    assert r.returncode == 1 and "but the server may still be applying the push" in r.stdout, r.stdout + r.stderr
+    intent = (world.state / "intent").read_text()
+    assert "step=pushing" in intent and git(world.repo, "tag", "-l", "v0.4.5") == "v0.4.5", "the intent and the local tag stay"
+    assert "the next real run reads origin and goes on from the tag v0.4.5, or pushes this same candidate again" in r.stdout
+    # the server finishes what it received
+    f["go"].touch()
+    wait_for(f["done"], "the server's hook finished")
+    f["pause"].unlink()
+    import time  # noqa: PLC0415
+    time.sleep(0.5)
+    landed = world.remote_refs("refs/tags/v0.4.5")
+    assert bool(landed) == (server == "lands"), landed
+    r = world.release(sha)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    if server == "lands":
+        assert "the candidate's push of v0.4.5 reached origin (its answer was lost)" in r.stdout
+    else:
+        assert "pushing the very same candidate again" in r.stdout
+    assert "it is published as it is, not rebuilt" in r.stdout and len(builds(world)) == 1
+    assert git(world.repo, "ls-remote", str(world.remote), "refs/tags/v0.4.5").split()[0] == builds(world)[0]["tagobj"]
+    assert [x["tag_name"] for x in world.gh_data()["releases"]] == ["v0.4.5"] and not world.remote_refs("refs/tags/v0.4.6")
+
+
+def git_unreachable(tmp: Path) -> Path:
+    """a git whose atomic push never reaches the remote (the network is down): nothing is sent"""
+    real = shutil.which("git")
+    w = tmp / "ubin" / "git"
+    w.parent.mkdir(exist_ok=True)
+    w.write_text(f"""#!{sys.executable}
+import os, sys
+if "push" in sys.argv and "--atomic" in sys.argv:
+    print("fatal: unable to access the remote: Could not resolve host", file=sys.stderr); sys.exit(128)
+os.execv({real!r}, [{real!r}] + sys.argv[1:])
+""")
+    w.chmod(0o755)
+    return w.parent
+
+
+def test_a_push_that_never_left_is_pushed_again_by_the_next_run(world, tmp_path):
+    """the push fails and main has not moved: the outcome is not provable from here, so the intent stays (step pushing); the next run
+    pushes the same candidate (its record verified) and publishes it unrebuilt; another sha asked for meanwhile waits (exit 3)"""
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first, PATH=f"{git_unreachable(tmp_path)}:{world.gh.parent}:{os.environ['PATH']}")
+    assert r.returncode == 1 and "step=pushing" in (world.state / "intent").read_text(), r.stdout + r.stderr
+    assert world.remote_refs("refs/tags/*") == "" and git(world.remote, "rev-parse", "refs/heads/main") == world.seed_main
+    other = world.change({"engine/a.cpp": "3\n"}, "X-2: a later change")
+    world.gate(other)
+    r = world.release(other)
+    assert r.returncode == 3 and "pushing the very same candidate again" in r.stdout and "RESUMED ONLY" in r.stdout, r.stdout + r.stderr
+    assert (world.state / "last-released").read_text().split()[:2] == [sha, "v0.4.5"] and len(builds(world)) == 1
+    r = world.release(other)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.6" in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("edit,why", [
+    ("candidate.ok", "its candidate record does not verify"),
+    ("local tag", "its local tag v0.4.5 is not its tag object"),
+    ("public", "does not hold"),
+])
+def test_a_pushing_intent_is_pushed_again_only_when_it_verifies(world, tmp_path, edit, why):
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    assert world.release(sha, "--since", world.first, PATH=f"{git_unreachable(tmp_path)}:{world.gh.parent}:{os.environ['PATH']}").returncode == 1
+    intent = world.state / "intent"
+    if edit == "candidate.ok":
+        notes = world.tmp / "work/v0.4.5/notes.md"
+        notes.write_text(notes.read_text() + "edited\n")
+    elif edit == "local tag":
+        git(world.repo, "tag", "-f", "-a", "v0.4.5", "-m", "another tag object", git(world.repo, "rev-parse", "v0.4.5^{commit}"))
+    else:
+        intent.write_text(re.sub(r"^public=.*$", f"public={world.first}", intent.read_text(), flags=re.M))
+    before = intent.read_text()
+    r = world.release(sha)
+    assert r.returncode != 0 and why in r.stdout, r.stdout + r.stderr
+    assert world.remote_refs("refs/tags/*") == "" and git(world.remote, "rev-parse", "refs/heads/main") == world.seed_main
+    assert intent.read_text() == before, "nothing was pushed and the intent is unchanged"
+
+
+def test_the_push_guard_runs_before_the_push(world, tmp_path):
+    """the pre-push hook's check runs first for a remote whose URL is the public repository (a refusal is then a failure before the push)"""
+    alias = tmp_path / "gh-host/open-bfme/openbfme-godot.git"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(world.remote)
+    git(world.repo, "remote", "set-url", "origin", str(alias))
+    sha = world.change({"engine/a.cpp": "2\n"}, "X-1: something new for players to see")
+    world.gate(sha)
+    r = world.release(sha, "--since", world.first)
+    assert r.returncode == 0 and "AUTORELEASE OK v0.4.5" in r.stdout, r.stdout + r.stderr
+    assert r.stdout.index("PUBLIC PUSH GUARD ok: 1 new commit(s), 1 tree(s) audited for origin") < r.stdout.index("AUTORELEASE push:")
+
+
+def test_onlinemenu1_the_mailer_arns_hold_no_account():
+    """lane ONLINEMENU-1: the aws-account rule allows the mailer's IAM policy and deploy steps because every ARN there names the account with the
+    <ACCOUNT_ID> placeholder; no 12-digit account, access key or bucket name may appear in them"""
+    for name in ("services/online/mailer/iam-policy.json", "services/online/mailer/README.md"):
+        text = (REPO / name).read_text(encoding="utf-8")
+        arns = re.findall(r"arn:aws[a-z-]*:[^\s\"]*", text)
+        assert arns, name
+        for arn in arns:
+            parts = arn.split(":")
+            assert len(parts) >= 6 and parts[4] == "<ACCOUNT_ID>" and parts[2] in ("iam", "logs", "ses"), arn
+        assert not re.search(r"(?<!\d)\d{12}(?!\d)|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|aws_secret_access_key|aws_session_token", text), name
+
+
+def test_onlinemenu1_only_the_project_domain_itself_is_public():
+    """Sol (onlinemenu1-guards): @openbfme.com is public, a longer domain that starts with it is not"""
+    rx = next(r[1] for r in autorelease.BUILTIN if r[0] == "e-mail")
+    assert not rx.search("write to admin@openbfme.com with your code") and not rx.search("from `no-reply@openbfme.com`;")
+    assert rx.search("person@openbfme.com.evil.net") and rx.search("person@openbfme.community")

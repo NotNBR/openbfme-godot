@@ -1,8 +1,8 @@
 // OpenBFME. GPL-3.0.
 //
 // Road segment ribbon. Retail draws roads with ST_ROAD_BASE (road texture x static terrain diffuse, optional
-// cloud/noise passes, W3DShaderManager); the road geometry comes from W3DRoadBuffer. Only straight
-// segments are generated (no tee / curve / cross joins, stop S-036). Colour: texture * vertex colour where
+// cloud/noise passes, W3DShaderManager); the road geometry comes from W3DRoadBuffer. Straight
+// segments and degree-two corners are generated (Y/H junctions and cross-type stacking remain S-036). Colour: texture * vertex colour where
 // the vertex colour is the static terrain light at the segment's position (ZH RoadSegment::updateSegLighting).
 shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;

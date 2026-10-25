@@ -35,6 +35,7 @@ public:
 
 	Capture capture() const override;
 	void pump(UnsignedInt protocolFrame, CommandList &pending) override;
+	void frameDue(UnsignedInt frame, std::uint32_t msFromNow) override; ///< lane NETLAG-2: handed to the Network (Network::setFrameDue)
 	bool acquire(UnsignedInt frame, FrameBatch &out) override;
 	void completed(const FrameCompletion &c) override;
 	void simulationAfterFrame(GameLogic &logic) override;
@@ -91,6 +92,8 @@ public:
 		int battalions = 0, troops = 0, objects = 0;
 	};
 	void setCensus(bool on) { m_census = on; }
+	// ONLINE16-FIX: the state hash after every frame without a replay (a rejoined incarnation records none; the soak compares its frames)
+	void setHashEveryFrame(bool on) { m_hashEveryFrame = on; }
 	const std::vector<CensusRow> &censusLog() const { return m_censusLog; }
 	// "count N p50 X p95 Y max Z" of samples (ms); "count 0" when empty
 	static std::string percentiles(std::vector<std::uint32_t> samples);
@@ -135,6 +138,7 @@ private:
 	int m_localPlayer = -1;
 	bool m_waitAfterLoad = false;
 	bool m_census = false;
+	bool m_hashEveryFrame = false;
 	std::vector<CensusRow> m_censusLog;
 	void noteIssued(UnsignedInt protocolFrame);
 	void noteRelayed(UnsignedInt frame, const CommandList &commands);

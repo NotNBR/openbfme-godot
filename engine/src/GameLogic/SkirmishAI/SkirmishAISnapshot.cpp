@@ -84,9 +84,28 @@ void xferRequest(Xfer &x, AIBuildRequest &r)
 	x.xferInt(&r.siteIndex);
 	x.xferBool(&r.requeueOnProducerDeath);
 	x.xferBool(&r.reserveMoney);
+	// version 2 (lane AI5): the upgrade / expansion request
+	x.xferBool(&r.upgrade);
+	x.xferBool(&r.expansion);
+	x.xferAsciiString(&r.buttonName);
+	x.xferInt(&r.cost);
+	x.xferBool(&r.upgrading);
+	x.xferBool(&r.expansionDone);
+	x.xferInt(&r.heuristicType);
+	x.xferInt(&r.heuristicResult);
+	x.xferUnsignedInt(&r.heuristicNextFrame);
+	x.xferInt(&r.heuristicFortressResult);
+	AIXfer::strings(x, r.heuristicUnlocks);
 	if (x.isLoading())
 	{
 		AIXfer::inRange(r.state, 0, 3, "skirmish ai: a build request's state"); // waiting, in progress, complete, failed
+		AIXfer::inRange(r.heuristicType, -1, 7, "skirmish ai: an upgrade request's heuristic"); // none and the 8 of RW 0xDB4F44
+		AIXfer::inRange(r.heuristicResult, 0, 3, "skirmish ai: an upgrade request's heuristic result");          // the heuristics answer 0 .. 3
+		AIXfer::inRange(r.heuristicFortressResult, 0, 3, "skirmish ai: a FORTRESS heuristic's result");          // 3, or 0 once drawn (RW 0x9ED374)
+		if (r.upgrade && r.expansion)
+		{
+			throw XferException("skirmish ai: a request that is both an upgrade and an expansion");
+		}
 	}
 }
 
@@ -225,6 +244,25 @@ void xferBuild(Xfer &x, AIBuildState &s, RequestTable &t, const SkirmishAIStore 
 	AIXfer::u64(x, e.made);
 	AIXfer::u64(x, e.refusedByDifficulty);
 	AIXfer::u64(x, e.noSite);
+	// version 2 (lane AI5): the unit upgrader and the upgrade builder
+	AIUnitUpgraderState &uu = s.unitUpgrader;
+	x.xferBool(&uu.listening);
+	x.xferBool(&uu.disabled);
+	xferRefs(x, uu.waiting, t);
+	xferRefs(x, uu.upgrading, t);
+	AIXfer::u64(x, uu.registered);
+	AIXfer::u64(x, uu.submitted);
+	AIXfer::u64(x, uu.declined);
+	AIUpgradeScienceBuilderState &sb = s.scienceBuilder;
+	x.xferBool(&sb.listening);
+	x.xferBool(&sb.disabled);
+	AIXfer::ids(x, sb.pendingStructures);
+	xferRefs(x, sb.upgrades, t);
+	xferRefs(x, sb.expansions, t);
+	x.xferUnsignedInt(&sb.lastExpansionFrame);
+	AIXfer::u64(x, sb.registered);
+	AIXfer::u64(x, sb.upgradesSubmitted);
+	AIXfer::u64(x, sb.expansionsSubmitted);
 	x.xferInt(&s.phase);
 	if (x.isLoading())
 	{
@@ -373,7 +411,7 @@ void xferBrain(Xfer &x, AIBrainState &b)
 
 void AIStatCollector::xfer(Xfer &x)
 {
-	XferVersion v{ 1, 1 };
+	XferVersion v{ 2, 2 }; // version 2 (lane AI5): the money reserve and its target (the block's version 2 refuses older snapshots)
 	x.xferVersion(v);
 	for (std::vector<ObjectID> *l : { &m_army, &m_dozers, &m_ships, &m_structures, &m_pads, &m_economy, &m_heroes })
 	{
@@ -383,11 +421,15 @@ void AIStatCollector::xfer(Xfer &x)
 		x.xferAsciiString(&k);
 		x.xferInt(&n);
 	});
+	x.xferUnsignedInt(&m_reserve);
+	x.xferUnsignedInt(&m_reserveTarget);
 }
 
 void SkirmishAIManager::xferState(Xfer &x, bool hooksInstalled)
 {
-	XferVersion v{ 1, 1 };
+	// version 2 (lane AI5): the upgrade / expansion requests and the unit upgrader / upgrade builder states. A version 1 snapshot has neither: loaded here its
+	// AIs would never buy an upgrade (their records are made when objects register), so it is refused rather than loaded with empty builders
+	XferVersion v{ 2, 2 };
 	x.xferVersion(v);
 	const bool loading = x.isLoading();
 	bool started = loading ? false : m_started;
@@ -475,6 +517,10 @@ void SkirmishAIManager::xferState(Xfer &x, bool hooksInstalled)
 				table.noteAll(s.inProgress);
 				table.noteAll(s.units.requests);
 				table.noteAll(s.economy.requests);
+				table.noteAll(s.unitUpgrader.waiting);
+				table.noteAll(s.unitUpgrader.upgrading);
+				table.noteAll(s.scienceBuilder.upgrades);
+				table.noteAll(s.scienceBuilder.expansions);
 			}
 		}
 	}
@@ -746,7 +792,8 @@ void SkirmishAIManager::checkLoaded() const
 				}
 			}
 		}
-		for (const auto *list : { &s.pending, &s.inProgress, &s.units.requests, &s.economy.requests })
+		for (const auto *list : { &s.pending, &s.inProgress, &s.units.requests, &s.economy.requests, &s.unitUpgrader.waiting, &s.unitUpgrader.upgrading,
+				 &s.scienceBuilder.upgrades, &s.scienceBuilder.expansions })
 		{
 			for (const auto &r : *list)
 			{
@@ -756,6 +803,10 @@ void SkirmishAIManager::checkLoaded() const
 		// a shut-down AI (disabled: its player defeated, RW 0x6C7981, or without an army) gets no more object events (RW 0x6C7779 / 0x6C778A) and never
 		// runs its builders again (RW 0x6C79A1: the brain only), so its builder lists keep the ids of objects that died or changed owner since, as
 		// retail's do: ids the game issued. A running AI's are kept up to date by the events: live objects of its player
+		for (ObjectID id : s.scienceBuilder.pendingStructures)
+		{
+			AIXfer::issued(id, "skirmish ai: a structure the upgrade builder waits for"); // RW 0x99FCC4 drops a gone one
+		}
 		for (ObjectID id : s.freeDozers)
 		{
 			AIXfer::issued(id, "skirmish ai: a free dozer");

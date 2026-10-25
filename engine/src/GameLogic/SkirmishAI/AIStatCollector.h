@@ -27,13 +27,15 @@
 //     the dozers + 0x58 are not pruned) and then makes its idle army record (RW 0x99E63B, AITacticalAI::updateIdleArmy); the ship, structure (+ 4 only) and
 //     economy lists drop unresolved ids (RW 0x65BD07).
 //   * the count RW 0x8E3FD6(name): the + 0x20 entry of the name, 0 when absent.
-// NOT PORTED (stop S-416 / S-418): the position sampler (+ 0x10) and its test RW 0x8E3EF8 against the AI's + 0x160 -> + 0x98 names, the listener vector (+ 0x38;
-// no listener is ported). TheNameKeyGenerator's key is the template name here (the map is only looked up, never walked, so its order is not observable).
+// NOT PORTED (stop S-416 / S-418): the position sampler (+ 0x10) and its test RW 0x8E3EF8 against the AI's + 0x160 -> + 0x98 names. The listener vector (+ 0x38)
+// is the AI's: lane AI5 ports the unit upgrader (mask 4) and the upgrade builder (mask 1), called by SkirmishAIManager with the masks these functions return; the
+// economy builder's listener (+ 0xB4) is not ported (the port's economy builder counts its farms through the request states). TheNameKeyGenerator's key is the template name here (the map is only looked up, never walked, so its order is not observable).
 
 #pragma once
 
 #include "GameLogic/ObjectTypes.h"
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -49,9 +51,16 @@ public:
 
 	int playerIndex() const { return m_playerIndex; }
 
-	// RW 0x8E4591 / RW 0x8E480C
-	void registerObject(const Object &obj);
-	void unRegisterObject(const Object &obj);
+	// the listener masks (RW 0x8E3D4C / 0x8E3D77 test listener + 4 against them): 1 structures, 2 economy, 4 army and ships
+	enum : unsigned
+	{
+		LISTEN_STRUCTURES = 1,
+		LISTEN_ECONOMY = 2,
+		LISTEN_ARMY = 4
+	};
+	// RW 0x8E4591 / RW 0x8E480C; the masks of the lists that took / lost the object (lane AI5: the caller calls the listeners)
+	unsigned registerObject(const Object &obj);
+	unsigned unRegisterObject(const Object &obj);
 	// RW 0x8E3CF3 without the idle army record (AITacticalAI::updateIdleArmy reads army() right after)
 	void update(GameLogic &logic);
 	// RW 0x8E3FD6
@@ -64,6 +73,13 @@ public:
 	const std::vector<ObjectID> &expansionPads() const { return m_pads; }      ///< + 8 -> + 0x10
 	const std::vector<ObjectID> &economy() const { return m_economy; }         ///< + 0xC -> + 4
 	const std::vector<ObjectID> &heroes() const { return m_heroes; }           ///< + 0x14
+
+	// record + 0xC (the economy stats, ctor RW 0x99E738): + 0x14 the money reserve (0), + 0x18 its target (-1); written by the AIPlayer's money saver
+	// RW 0x8F0502, read by RW 0x99E766 (money + reserve) and drawn by RW 0x99E79A (lane AI5, S-413)
+	std::uint32_t reserve() const { return m_reserve; }
+	std::uint32_t reserveTarget() const { return m_reserveTarget; }
+	void setReserve(std::uint32_t v) { m_reserve = v; }
+	void setReserveTarget(std::uint32_t v) { m_reserveTarget = v; }
 
 	void crc(StateHasher &h) const;
 	void xfer(class Xfer &x); ///< lane SAVE-4c (SkirmishAISnapshot.cpp)
@@ -78,6 +94,8 @@ private:
 	std::vector<ObjectID> m_structures;
 	std::vector<ObjectID> m_pads;
 	std::vector<ObjectID> m_economy;
+	std::uint32_t m_reserve = 0;              ///< + 0xC -> + 0x14
+	std::uint32_t m_reserveTarget = 0xFFFFFFFFu; ///< + 0xC -> + 0x18
 	std::vector<ObjectID> m_heroes;
 	std::map<std::string, int> m_counts;
 };

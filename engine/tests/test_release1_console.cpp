@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <chrono>
 #include <csignal>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <vector>
@@ -153,9 +154,38 @@ TEST_CASE("onezip1: the console filter ends while a child holds the stream, and 
 	REQUIRE(err >= 0); // tolerance: open() returns any descriptor number, -1 on failure
 	char before[512] = {};
 	const ssize_t beforeLen = ::readlink("/proc/self/fd/1", before, sizeof(before) - 1);
+	// lane MACGATE-1: the descriptors open before the install and the original stdout / stderr, for the close-on-exec check below (macOS
+	// has no /proc, so there the check is on the descriptors the install opened rather than on what an exec'd child holds)
+	struct stat consoleOut = {}, consoleErr = {};
+	REQUIRE(::fstat(1, &consoleOut) == 0);
+	REQUIRE(::fstat(2, &consoleErr) == 0);
+	const int fdLimit = 1024;
+	std::vector<bool> openBefore(fdLimit, false);
+	for (int fd = 0; fd < fdLimit; ++fd)
+		openBefore[fd] = ::fcntl(fd, F_GETFD) != -1;
 	LogPrivacy::Rules rules;
 	std::string error;
 	REQUIRE(ConsoleFilter::install(rules, &error, out, err));
+	// every descriptor the install opened that is the original console (the saved streams) is close-on-exec: no child inherits it
+	{
+		int saved = 0;
+		std::vector<std::string> inheritable;
+		for (int fd = 3; fd < fdLimit; ++fd)
+		{
+			struct stat st = {};
+			if (openBefore[fd] || ::fstat(fd, &st) != 0)
+				continue;
+			const bool console = (st.st_dev == consoleOut.st_dev && st.st_ino == consoleOut.st_ino) ||
+								 (st.st_dev == consoleErr.st_dev && st.st_ino == consoleErr.st_ino);
+			if (!console)
+				continue;
+			++saved;
+			if (!(::fcntl(fd, F_GETFD) & FD_CLOEXEC))
+				inheritable.push_back(std::to_string(fd));
+		}
+		CHECK_MESSAGE(saved >= 1, "the install saved no copy of the original console"); // tolerance: 1 when stdout and stderr are one file, else 2
+		CHECK_MESSAGE(inheritable.empty(), "a saved console descriptor is inheritable: fd " << (inheritable.empty() ? "" : inheritable[0]));
+	}
 	std::printf("before the child\n");
 	std::fflush(stdout);
 
@@ -180,6 +210,8 @@ TEST_CASE("onezip1: the console filter ends while a child holds the stream, and 
 		::_exit(127);
 	}
 	std::this_thread::sleep_for(std::chrono::milliseconds(300)); // the exec has happened
+#ifdef __linux__
+	// Linux: what the exec'd child really holds (/proc/<pid>/fd)
 	std::vector<std::string> leaked;
 	for (const auto &e : fs::directory_iterator("/proc/" + std::to_string((long long)clean) + "/fd"))
 	{
@@ -192,6 +224,9 @@ TEST_CASE("onezip1: the console filter ends while a child holds the stream, and 
 			leaked.push_back(n + " -> " + target);
 	}
 	CHECK_MESSAGE(leaked.empty(), "the child inherited the saved console: " << (leaked.empty() ? "" : leaked[0]));
+#else
+	(void)beforeLen;
+#endif
 
 	const auto t0 = std::chrono::steady_clock::now();
 	ConsoleFilter::uninstall();

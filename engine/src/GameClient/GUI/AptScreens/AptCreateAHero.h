@@ -37,8 +37,8 @@
 //     PalantirToolTip / MatrixToolTip / MyPowerToolTip, the providers NumPowerRows / DisablePowerInstructions / CurrentPowerIndex / NumCurrentPowers
 //     (RW 0x9C1A55), CahPowers::InitGadgets;
 //   * Class::Exit (RW 0xC8B4CC; the Manager's and NewFeatures' back buttons) leaves the screen.
-// NOT PORTED / INFERENCE (stops S-1400 .. S-1405): the take-picture path (OnTakePicture, the portrait file), the awards / statistics page
-// (OnSelectAward, SavedHeroStats rows, MyHero::AwardState_<i>), OnPlayGame (the test map), the message boxes (an error is a note and the screen's
+// NOT PORTED / INFERENCE (stops S-1400 .. S-1405): award reward bling and popups
+// (Manager stats/awards are implemented; see docs/CREATE_A_HERO_STATS.md), OnPlayGame (the test map), the message boxes (an error is a note and the screen's
 // lastMessage()), the delete confirmation (the delete happens at once), the SuppressCahPromo preference is kept for the session only, the camera
 // views of ViewInfo are the device's (GodotDevice), the sort of the power rows, which page "CreateAHero" forwards to.
 
@@ -175,6 +175,30 @@ public:
 	bool typeName(const std::u16string &name); ///< lane CAH-2 r2: typed through the entry's insert (RW 0x72260B, the 22 limit, RW 0x75E4DF); false if a character was refused
 	std::string firstAvailablePower();
 
+	// ---- Take Picture (lane CAHPIC-1; RotWK RW 0x919D85 / 0x919D8F / 0x919DA2 / 0x91A3A9 / 0x91A20A, BFME2 decomp
+	// AptCreateAHeroDrawMapComponent.cpp tier A for the same body) ----
+	// RotWK's TAKE PICTURE is no portrait: the movie closes its panels (CreateAHero.apt TakeHeroPicture / ReadyToTakePicture), and once the
+	// CreateAHero::RenderPictureGuard clip has been drawn twice, OnTakePicture arms the screen; the next draw of the 3D view saves the window's picture
+	// (TheDisplay->takeScreenShot, RW 0x4474A0) named for the hero, tells the movie OnGameTookPicture (it reopens the panels) and shows an OK box
+	// GUI:OnPictureTakenTitle (the hero's name) / GUI:OnPictureTaken (the folder + the name). The card's portrait is the model's (e76f3a1e7).
+	struct PictureTime
+	{
+		int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0; ///< the local time (GetLocalTime)
+	};
+	// RW 0x91A20A (BFME2 0x513ED1): the hero's name + " " + the short date + " " + the time with seconds, every character a file name cannot take
+	// (GadgetTextEntryValidateCharacter flag 8, RW 0x75E4DF) made '-'. TARGET FACT: GetDateFormatW(LOCALE_SYSTEM_DEFAULT, DATE_SHORTDATE) (RW 0x6DD0DE)
+	// and GetTimeFormatW(LOCALE_SYSTEM_DEFAULT, 0) (RW 0x6DD1B2 with its argument 1); INFERENCE: the system locale is US English ("M/d/yyyy",
+	// "h:mm:ss tt"), the language the game's own texts are in
+	static std::u16string pictureFileName(const std::u16string &heroName, const PictureTime &time);
+	void pictureGuardDrawn() { ++m_pictureFrames; } ///< RW 0x919DA2: the guard clip's render callback (the device calls it per draw)
+	int pictureFrames() const { return m_pictureFrames; }
+	bool takePicturePending() const { return m_takePicture; } ///< + 0x437: OnTakePicture armed the next 3D view draw
+	// RW 0x91A3A9's branch, first half: the flag goes and the file name (no extension) is returned; the device saves the window's picture
+	std::u16string beginPicture(const PictureTime &time);
+	// the second half: the movie hears OnGameTookPicture and the OK box tells where the picture went (`shownPath`: the folder + the name, as retail,
+	// without the extension); a picture the device could not save is said in the player's words instead (`error`)
+	void pictureTaken(const std::u16string &shownPath, const std::string &error);
+
 protected:
 	WindowMsgHandledType gadgetMessage(GameWindow *from, std::uint32_t msg, WindowMsgData data1, WindowMsgData data2) override;
 
@@ -183,6 +207,9 @@ private:
 	void update();
 	void fillHeroList();
 	void refreshTexts();
+	void refreshStatistics();
+	void refreshAwardBindings();
+	void selectAward(int index);
 	void refreshClassPage();
 	void refreshPowersPage();
 	void setImage(const std::string &name, const std::string &image);
@@ -207,6 +234,9 @@ private:
 	std::uint32_t m_displayRevision = 1;
 	bool m_rotateLeft = false, m_rotateRight = false, m_zoomIn = false, m_zoomOut = false;
 	int m_pictureFrames = 0;
+	bool m_takePicture = false; ///< lane CAHPIC-1: + 0x437 (RW 0x919D98)
+	bool m_pictureInProgress = false; ///< lane CAHPIC-1: between beginPicture and pictureTaken (the device saves a frame later than RotWK's same draw)
+	std::u16string m_pictureHero; ///< lane CAHPIC-1: the name the picture was taken for (the box's title)
 	std::string m_lastMessage;
 	std::unique_ptr<AptMessageBox> m_box;      ///< lane CAH-2: TheMessageBox's calls of this screen (RW 0x81A375 / 0x81A452)
 	int m_deleteAnswer = -1;                   ///< the delete question's button, acted on in update (outside the box's own command)

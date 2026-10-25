@@ -12,11 +12,13 @@
 #include "Common/Xfer.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/Module/NotifyCrushModules.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/Object/ObjectGeometry.h"
 #include "GameLogic/ObjectTemplateInfo.h"
 #include "GameLogic/SimMath.h"
 
+#include <cfloat>
 #include <map>
 #include <stdexcept>
 #include <utility>
@@ -49,7 +51,7 @@ namespace
 const char *const kStopPartition =
 	"[S-1020] partition: ThePartitionManager is RotWK's 21 loose quadtrees (RW 0xA3BD20 .. 0xA3C7D0, ported: registration, dirty update, range / region / "
 	"closest queries, the STLport introsort of the hits); inference: the geometry is the template's (RW keeps it per object and RW 0x68B2CB marks a change), "
-	"the undetected defector bit (Object + 0x458 bit 1) is never set (no defection, S-141), distance type 4 needs the shape overlap test RW 0xAD2CE0 (refused), "
+	"the undetected defector bit (Object + 0x458 bit 1) is never set (no defection, S-141), distance type 4 (RW 0xA3C7D0 -> RW 0xAD2CE0) tests the template's shapes, "
 	"a game without a map keeps the constructor's empty region (every object in cell 0, 0; getClosestObject's range clamps to 0: only a coincident or overlapping candidate can still be returned)";
 } // namespace
 
@@ -565,7 +567,6 @@ bool PartitionManager::allowed(Object &obj, const PartitionFilterList &filters) 
 // the distance functions of RW table 0xDBDAF8: the x87 register value (24-bit significand, the wide exponent of the carrier)
 double PartitionManager::distance(DistanceCalculationType type, const Coord3D &c, const Entry &e, float radiusSqr) const
 {
-	(void)radiusSqr;
 	const Coord3D *p = e.object->getPosition();
 	switch (type)
 	{
@@ -603,7 +604,26 @@ double PartitionManager::distance(DistanceCalculationType type, const Coord3D &c
 			return (d < 0.0) ? -sq : sq;
 		}
 		case FROM_GEOMETRY_OVERLAP:
-			throw std::logic_error("partition: distance type 4 (RW 0xA3C7D0) needs the shape overlap test RW 0xAD2CE0, not ported [S-1020]");
+		{
+			// RW 0xA3C7D0: a static GeometryInfo (RW 0xDEF920, built once by RW 0x450429(SPHERE, small, 2, 2, 2)) whose first shape's major radius
+			// (+ 0x08) becomes fsqrt(radiusSqr) (the float argument, fstp dword; RW 0xAD2860 then only refreshes its bounds); the entry's own
+			// geometry (proxy vslot 0) CollidesWith (RW 0xAD2CE0) at the object's position (vslot 1) and angle (vslot 2) against that sphere at the
+			// centre with angle 0: 0.0 (RW 0xC1B594) on a hit, else FLT_MAX (RW 0xBD1910)
+			ObjectGeometry::Shape sphere;
+			sphere.type = ObjectGeometry::SHAPE_SPHERE;
+			sphere.height = 2.0f;
+			sphere.majorRadius = SimMath::fstpDword(SimMath::sqrtPC24((double)radiusSqr));
+			sphere.minorRadius = 2.0f;
+			const std::vector<ObjectGeometry::Shape> query = { sphere };
+			const ThingTemplate *tt = static_cast<const ThingTemplate *>(e.object->getTemplate());
+			if (!tt)
+			{
+				throw std::logic_error("partition: distance type 4 (RW 0xA3C7D0) on an object without a template");
+			}
+			const bool hit = NotifyCrushModules::geometriesOverlap(ObjectGeometry::cachedShapesOf(*tt->getFinalOverride()), *p, e.object->getOrientation(),
+			                                                       query, c, 0.0f);
+			return hit ? 0.0 : (double)FLT_MAX;
+		}
 		case FROM_CENTER_2D:
 		default:
 		{
@@ -746,10 +766,6 @@ PartitionHits PartitionManager::iterateObjectsInRange(const Coord3D &center, flo
 	if ((int)type < 0 || (int)type > 4)
 	{
 		type = FROM_CENTER_2D;
-	}
-	if (type == FROM_GEOMETRY_OVERLAP)
-	{
-		throw std::logic_error("partition: distance type 4 (RW 0xA3C7D0) needs the shape overlap test RW 0xAD2CE0, not ported [S-1020]");
 	}
 	std::uint32_t layers = layerMask(filters);
 	const int x0 = (int)cellX(SimMath::pc24Sub(center.x, radius));

@@ -27,9 +27,10 @@ PDB = precommit.MSF_MAGICS[0] + struct.pack("<6I", 512, 1, 8, 0, 0, 3) + b"\0" *
 
 
 def zipped(name: str, data: bytes) -> bytes:
+    """A ZIP of one entry with a fixed date: the same bytes at every collection (pytest-xdist workers must collect the same parameters)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr(name, data)
+        z.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), data, compress_type=zipfile.ZIP_DEFLATED)
     return buf.getvalue()
 
 
@@ -51,7 +52,7 @@ def gate(tmp_path: Path, files: dict[str, bytes], allow: str = "") -> subprocess
 @pytest.mark.parametrize("name,data", [
     ("assets/secret.zip", zipped("secret.pdb", b"debug symbols, deflated")),        # Sol r4 case 1
     ("assets/data.bin", zipped("readme.bin", PDB)),                                  # Sol r4 case 2: a renamed PDB in a renamed ZIP
-    ("docs/notes.txt", gzip.compress(PDB)),                                          # Sol r4 case 3: a gzipped PDB under a text name
+    ("docs/notes.txt", gzip.compress(PDB, mtime=0)),                                 # Sol r4 case 3: a gzipped PDB under a text name
 ])
 def test_sol_r4_containers_are_refused(tmp_path, name, data):
     result = gate(tmp_path, {name: data})

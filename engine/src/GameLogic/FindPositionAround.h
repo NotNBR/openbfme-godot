@@ -16,7 +16,8 @@
 //       - the first spot TryPosition accepts is the result (true); none: false and the result is left as it is.
 //   * RW 0x6851F1 tryPosition(center, dist, angle, options, result):
 //       - x = fcos(angle) * dist + center.x, y = fsin(angle) * dist + center.y (RW 0x42F4E0 / 0x42F4D0, x87 PC24, one store each);
-//       - z: TheTerrainLogic getGroundHeight (vslot 0x18) on the ground layer; FPF_USE_HIGHEST_LAYER (0x80) asks the layer (RW 0x680B70): not ported, refused;
+//       - z: TheTerrainLogic getGroundHeight (vslot 0x18) on the ground layer; FPF_USE_HIGHEST_LAYER (0x80) asks the layer (RW 0x680B70) and its height (vslot
+//         0x1C), + 1.0 off the ground: the ground and its height here (lane SUMMON-1; layers are S-161);
 //       - fabs(z - center.z) (PC24 subtraction, MSVCR71 fabs) > maxZDelta fails;
 //       - without FPF_CLEAR_CELLS_ONLY (0x100) on the ground layer: TheTerrainLogic vslot 0x50 (isCliffCell, RW 0x4624A4) fails;
 //       - the pathfinder cell (RW 0x6EAD90 -> getCell RW 0x5E2EF2): no cell, or a cell of type 5, fails;
@@ -75,7 +76,7 @@ struct FindPositionOptions
 
 namespace FindPosition
 {
-// RW 0x68592D; throws std::logic_error when the game has no AI world or terrain (nothing to search) or for FPF_USE_HIGHEST_LAYER (not ported)
+// RW 0x68592D; throws std::logic_error when the game has no AI world or terrain (nothing to search)
 bool findPositionAround(GameLogic &logic, const Coord3D &center, const FindPositionOptions &options, Coord3D &result);
 // RW 0x6851F1
 bool tryPosition(GameLogic &logic, const Coord3D &center, float dist, float angle, const FindPositionOptions &options, Coord3D &result);

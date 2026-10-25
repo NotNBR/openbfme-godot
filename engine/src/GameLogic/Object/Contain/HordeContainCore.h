@@ -120,6 +120,9 @@ public:
 	// RW 0x873F30: returns the slot index taken, or -1 when no free slot of a matching rank exists (the member
 	// is then in the contain list without a slot).
 	int addMember(ObjectId id, const std::string &templateName);
+	// lane MODS-3: addMember's search without taking the slot (edain-unchained.horde-exit-absorption)
+	bool hasFreeSlotFor(const std::string &templateName) const;
+	bool built() const { return m_built; }
 	// RW 0x87370B / 0x87393E. `templateIsSpecial` is ThingTemplate+0x109 bit 3.
 	void removeMember(ObjectId id, bool templateIsSpecial);
 	// lane GARRISON-3: a member released through HordeContainInterface slot 0xA8 (RW 0x86EBF4 -> OpenContain's removal RW 0x8665BE / 0x865EB6 ->

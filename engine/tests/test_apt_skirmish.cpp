@@ -742,7 +742,7 @@ TEST_CASE("retail lobby: the gadgets are populated from the INI factions, colour
 	CHECK(fx.layer->errors().empty());
 	CHECK(fx.screen->initializedCount() == 1);
 	const SkirmishGameSetup &setup = *fx.screen->setup();
-	for (int slot = 0; slot < MAX_SLOTS; ++slot)
+	for (int slot = 0; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		GameWindow *player = fx.screen->slotGadget(slot, "Player");
 		REQUIRE(player);
@@ -958,7 +958,7 @@ TEST_CASE("retail lobby API: StartGame with more players than the map holds is r
 		}
 	}
 	REQUIRE(map);
-	for (int slot = 1; slot < MAX_SLOTS; ++slot)
+	for (int slot = 1; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		GadgetComboBoxSetSelectedPos(fx.screen->slotGadget(slot, "Player"), 2, false); // every slot an easy AI
 	}
@@ -970,7 +970,7 @@ TEST_CASE("retail lobby API: StartGame with more players than the map holds is r
 	CHECK(fx.sink.refusals[0].first.empty()); // lane GAMEMODES-1: MessageBoxOk(L"", text), RW 0x928482
 	CHECK(fx.sink.refusals[0].second == asciiToU16("Too many players: the map has " + std::to_string(map->numPlayers)));
 	// slots over the map's size are closed again: the lobby starts
-	for (int slot = (int)map->numPlayers; slot < MAX_SLOTS; ++slot)
+	for (int slot = (int)map->numPlayers; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		GadgetComboBoxSetSelectedPos(fx.screen->slotGadget(slot, "Player"), 1, false); // Closed
 	}
@@ -1509,7 +1509,7 @@ TEST_CASE("retail lobby input: StartGame with more players than the map holds is
 		}
 	}
 	REQUIRE(map);
-	for (int slot = 1; slot < MAX_SLOTS; ++slot)
+	for (int slot = 1; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		chooseComboRow(fx, fx.screen->slotGadget(slot, "Player"), 2); // easy AI
 	}
@@ -1522,7 +1522,7 @@ TEST_CASE("retail lobby input: StartGame with more players than the map holds is
 	REQUIRE(fx.sink.refusals.size() == 1);
 	CHECK(fx.sink.refusals[0].first.empty()); // lane GAMEMODES-1: MessageBoxOk(L"", text), RW 0x928482
 	CHECK(fx.sink.refusals[0].second == asciiToU16("Too many players: the map has " + std::to_string(map->numPlayers)));
-	for (int slot = (int)map->numPlayers; slot < MAX_SLOTS; ++slot)
+	for (int slot = (int)map->numPlayers; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		chooseComboRow(fx, fx.screen->slotGadget(slot, "Player"), 1); // closed
 	}
@@ -1593,7 +1593,7 @@ TEST_CASE("fb7 retail lobby input: a click on a start spot gives it to the playe
 	CHECK(spots[0]->winGetText().empty());
 	CHECK(spots[0]->winGetInstanceData()->getTooltipText() == u"Start position");
 	// lane ONLINE-5: the skirmish panel has no Ready column (no flag 0x20): every Ready box of the movie was told "_none" (RW 0x84211D)
-	for (int slot = 0; slot < MAX_SLOTS; ++slot)
+	for (int slot = 0; slot < LEGACY_MAX_SLOTS; ++slot)
 	{
 		CHECK_MESSAGE(fx.screen->readyIcon(slot) == "_none", "slot " << slot);
 	}

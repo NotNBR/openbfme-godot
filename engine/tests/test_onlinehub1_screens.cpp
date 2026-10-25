@@ -870,6 +870,31 @@ TEST_CASE("onlinehub1 retail: the TOURNAMENT page against the backend's own serv
 	CHECK(host.platform.qmState() == PlatformApiClient::QmState::Idle);
 }
 
+TEST_CASE("menufix2 onlinehub retail: leaving the online menu destroys the tournaments panel's lists (they stayed on screen over later menus)")
+{
+	// lane MENUFIX-2: the menu inventory found "No tournaments are planned." and two scroll bars over Create-a-Hero's class screen: the panel's engine
+	// gadgets outlived the online shell (AptOnlineHub's destructor did not destroy them)
+	HUB_REQUIRE_TOOLS();
+	OPENBFME_REQUIRE_START(s);
+	auto lobby = makeLobby();
+	auto plat = makePlatform();
+	HubPlayer p(*s, lobby->port, plat->port, 31, kInstallA);
+	signIn(p, u"Leaver");
+	openTournamentPage(p);
+	AptOnlineHub &h = p.hubPage();
+	REQUIRE_MESSAGE(runUntil({ &p }, [&] { return h.tournamentList() != nullptr && h.detailList() != nullptr; }, 600), p.notes());
+	GameWindow *list = h.tournamentList();
+	GameWindow *details = h.detailList();
+	GameWindowManager &gwm = p.fx.wm->gadgetLayer()->gadgets();
+	CHECK(gwm.winIsAlive(list));
+	CHECK(gwm.winIsAlive(details));
+	p.fx.shell->popImmediate(); // the online shell goes (as its MAIN MENU leaves it)
+	p.fx.tick(30);
+	CHECK(p.fx.shell->top() == nullptr);
+	CHECK_FALSE(gwm.winIsAlive(list));
+	CHECK_FALSE(gwm.winIsAlive(details));
+}
+
 TEST_CASE("onlinehub1 retail e2e: a Quick Match's START from both TOURNAMENT pages, played by two openbfme_peer processes through a local relay in lockstep")
 {
 	HUB_REQUIRE_TOOLS();
@@ -1476,7 +1501,7 @@ TEST_CASE("onlineux1 retail: the TOURNAMENT page's lettering leaves with the onl
 	AptGadgetLayer *layer = p.fx.wm->gadgetLayer();
 	REQUIRE(layer);
 	REQUIRE_MESSAGE(runUntil({ &p }, [&] { return layer->hasDecorator(); }, 120), p.notes());
-	CHECK(layer->decoratorOwner() == p.sh->hub());
+	CHECK(layer->decoratorOwner() == static_cast<const void *>(p.sh)); // lane ONLINEMENU-1: the shell owns the layer's one decorator (the hub's page and the FRIENDS page)
 	GadgetDrawList drawn;
 	layer->buildDrawList(drawn);
 	CHECK_FALSE(drawn.commands.empty());

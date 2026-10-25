@@ -554,6 +554,10 @@ Drawable::PresentedLook Drawable::presentedLook(const LogicSnapshot *presented, 
 	{
 		look.hidden = true;
 	}
+	if (m_clientHidden)
+	{
+		look.hidden = true; // lane CHAT-1: BeaconClientUpdate::hideBeacon on an enemy's screen
+	}
 	look.fogLook = look.fogLook && !look.hidden;
 	return look;
 }

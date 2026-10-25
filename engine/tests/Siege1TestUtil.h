@@ -47,7 +47,9 @@ inline int templateIndex(starttest::Shared &s, const std::string &name)
 }
 
 // slot 0: the computer at start 0 (the fortress, Men), slot 1: the human at start 1 (Mordor)
-inline NewGameMessage fortressMessage(starttest::Shared &s, const std::string &map)
+// `aiDefender` false (test_siege1_gate): the fortress side is a second human slot that never gives an order, so no skirmish AI moves its porters or builds:
+// the gate runs depend only on the siege weapon and the structures, not on the AI's own draws of the game's random numbers or its builders' paths
+inline NewGameMessage fortressMessage(starttest::Shared &s, const std::string &map, bool aiDefender = true)
 {
 	NewGameMessage m;
 	m.game.mapName = map;
@@ -57,8 +59,8 @@ inline NewGameMessage fortressMessage(starttest::Shared &s, const std::string &m
 	for (int i = 0; i < 2; ++i)
 	{
 		SkirmishGameSlot &sl = m.game.slots[i];
-		sl.state = i == 0 ? SLOT_EASY_AI : SLOT_PLAYER;
-		sl.name = i == 0 ? u"Easy" : u"Host";
+		sl.state = i == 0 && aiDefender ? SLOT_EASY_AI : SLOT_PLAYER;
+		sl.name = i == 0 ? (aiDefender ? u"Easy" : u"Defender") : u"Host";
 		sl.accepted = true;
 		sl.playerTemplate = templateIndex(s, factions[i]);
 		REQUIRE(sl.playerTemplate >= 0); // tolerance: the index of a found template (-1: not found)
@@ -75,7 +77,7 @@ struct FortressGame
 	ArchiveW3DFileSource source;
 	WW3DAssetManager assets;
 	std::unique_ptr<LiveGame> game;
-	FortressGame(starttest::Shared &sh, const std::string &map) : s(sh), source(*sh.mount->fs), assets(source)
+	FortressGame(starttest::Shared &sh, const std::string &map, bool aiDefender = true) : s(sh), source(*sh.mount->fs), assets(source)
 	{
 		std::string error;
 		static std::vector<MapCacheEntry> cache;
@@ -83,7 +85,7 @@ struct FortressGame
 		{
 			REQUIRE_MESSAGE(IniSkirmishSetupSource::loadMapCache(*s.mount->fs, cache, &error), error);
 		}
-		REQUIRE_MESSAGE(NewGame::prepareNewGame(fortressMessage(s, map), s.world->playerTemplates(), s.settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
+		REQUIRE_MESSAGE(NewGame::prepareNewGame(fortressMessage(s, map, aiDefender), s.world->playerTemplates(), s.settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
 		game = std::make_unique<LiveGame>(*s.world, *s.mount->fs, assets, s.options);
 		LiveGame::Options o;
 		o.start = &start;
@@ -103,6 +105,19 @@ struct FortressGame
 			if (o->getName() == name)
 			{
 				return o;
+			}
+		}
+		return nullptr;
+	}
+	// the player of the faction (the attacker of test_siege1_gate is FactionMordor's: with aiDefender false both slots are human)
+	Player *ofFaction(const std::string &faction)
+	{
+		for (int i = 0; i < game->players().getPlayerCount(); ++i)
+		{
+			Player *p = game->players().getNthPlayer(i);
+			if (p && p->getPlayerTemplate() && p->getPlayerTemplate()->getName() == faction)
+			{
+				return p;
 			}
 		}
 		return nullptr;
@@ -145,14 +160,15 @@ struct AttackResult
 };
 
 // `targetName` empty: the map object named `gateName`; else the WALK_ON_TOP_OF_WALL piece nearest it that is no gate
-inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, const std::string &gateName, const std::string &unit, bool wall, float d, int frames)
+inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, const std::string &gateName, const std::string &unit, bool wall, float d, int frames,
+	bool fromFront = false)
 {
 	AttackResult res;
-	FortressGame g(s, map);
+	FortressGame g(s, map, false);
 	g.frames(2);
 	Object *gate = g.named(gateName);
 	REQUIRE(gate);
-	Player *me = g.human();
+	Player *me = g.ofFaction("FactionMordor");
 	REQUIRE(me);
 	g.game->shroud().revealMapForPlayerPermanently(me->getPlayerIndex());
 	const Waypoint *w = g.game->logic().terrain()->findWaypointByName("Player_2_Start");
@@ -180,6 +196,16 @@ inline AttackResult siegeAttack(starttest::Shared &s, const std::string &map, co
 	const float len = std::sqrt(dx * dx + dy * dy);
 	dx /= len;
 	dy /= len;
+	if (fromFront)
+	{
+		dx = std::cos(target->getOrientation());
+		dy = std::sin(target->getOrientation());
+		if (dx * (w->location.x - tp.x) + dy * (w->location.y - tp.y) < 0.0f)
+		{
+			dx = -dx;
+			dy = -dy;
+		}
+	}
 	std::string error;
 	Object *o = g.game->createObject(unit, me->getPlayerIndex(), Coord3D{ tp.x + dx * d, tp.y + dy * d, 0.0f }, 0.0f, &error);
 	REQUIRE_MESSAGE(o, error);

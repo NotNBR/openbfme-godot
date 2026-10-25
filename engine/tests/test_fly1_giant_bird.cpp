@@ -4,6 +4,7 @@
 
 #include "doctest.h"
 
+#include "CampaignTestUtil.h"
 #include "StartTestUtil.h"
 
 #include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
@@ -24,6 +25,8 @@
 #include "GameLogic/AI/AIGuard.h"
 #include "GameLogic/AI/AerialPathfinder.h"
 #include "GameLogic/AI/AIStateMachine.h"
+#include "GameLogic/Map/TerrainLogic.h"
+#include "GameLogic/SimMath.h"
 #include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/Combat/CombatNames.h"
 #include "GameLogic/Combat/CombatState.h"
@@ -33,7 +36,10 @@
 #include "Libraries/WWVegas/WW3D2/assetmgr.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cfloat>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -130,7 +136,7 @@ struct FlyArena
 	std::unique_ptr<LiveGame> game;
 	Player *a = nullptr, *b = nullptr;
 
-	FlyArena(starttest::Shared &shared, const char *factionA, const char *factionB, unsigned seed = 2)
+	FlyArena(starttest::Shared &shared, const char *factionA, const char *factionB, unsigned seed = 2, const char *map = "maps/map mp evendim/map mp evendim.map")
 		: s(shared)
 	{
 		static std::vector<MapCacheEntry> cache;
@@ -140,7 +146,7 @@ struct FlyArena
 			REQUIRE_MESSAGE(IniSkirmishSetupSource::loadMapCache(*s.mount->fs, cache, &error), error);
 		}
 		NewGameMessage m;
-		m.game.mapName = "maps/map mp evendim/map mp evendim.map";
+		m.game.mapName = map;
 		m.game.seed = seed;
 		m.game.startingCash = 1500;
 		const char *factions[2] = { factionA, factionB };
@@ -517,15 +523,17 @@ TEST_CASE("fly1 retail: Drogoth's breath: his fireball (SpecialAbilityDrogothFir
 	}
 	MESSAGE("the fireball's first damage after " << f << " frames: " << total0 << " -> " << hordeHealth() << ", Drogoth " << arena.above(*drogoth) << " above the ground");
 	// DrogothFireballWarhead on each GondorFighter within DROGOTH_FIREBALL_RADIUS 30: 400 FLAME + 50 MAGIC + 400 MAGIC (DROGOTH_FIREBALL_DAMAGE_SIEGE, its 300 %
-	// only on fell beasts and Gwaihir) at SoldierArmor's 100 % is 850, above GONDOR_SOLDIER_HEALTH 200: the six soldiers the blast covers die, 6 x 200
-	CHECK(total0 - hordeHealth() == 1200.0f);
+	// only on fell beasts and Gwaihir) at SoldierArmor's 100 % is 850, above GONDOR_SOLDIER_HEALTH 200: the soldiers the blast covers die, 200 each. Lane FLANK-1:
+	// DrogothFireballProjectile is not NO_COLLIDE and its warhead's ProjectileCollidesWith has ENEMIES (RW 0x6CC79C), so the ball goes off on the first soldier it
+	// touches, backed off its path (RW 0x85EA5F), not at the aimed soldier at the path's end: nine soldiers are inside the blast there (six before), 9 x 200
+	CHECK(total0 - hordeHealth() == 1800.0f);
 	int killed = 0;
 	for (ObjectID id : members)
 	{
 		Object *m = logic.findObjectByID(id);
 		killed += !m || m->isEffectivelyDead() ? 1 : 0;
 	}
-	CHECK(killed == 6);
+	CHECK(killed == 9);
 }
 
 TEST_CASE("fly1 retail: every template of the retail data with a GiantBirdAIUpdate, by exact name, runs the class and flies to a point")
@@ -664,4 +672,305 @@ TEST_CASE("fly1 retail: a hunting fell beast (AI command 0x12: the hunt state wi
 	// NazgulPlowAttack on MonsterLair: 500 inner + 250 outer SIEGE x 70 % STRUCTURE x SIEGE 150 % = 525 + 262.5, 100 FLY_INTO x DEFAULT 50 % = 50: 837.5
 	CHECK(before == 2000.0f);
 	CHECK(before - health(v) == 837.5f);
+}
+
+// ---- lane STEALTHFLY1: MinFlightHeight, the follow states, command 0x39 ---------------------------------------------------------------------------------
+namespace
+{
+// the map directory (lower case, backslashes) of a "...\map.ini" path
+std::string mapDirOf(const std::string &mapIni)
+{
+	std::string d = mapIni.substr(0, mapIni.size() - std::string("\\map.ini").size());
+	for (char &c : d)
+	{
+		c = (char)std::tolower((unsigned char)c);
+	}
+	return d;
+}
+
+// the 2D distance between two points
+float dist2d(const Coord3D &a, const Coord3D &b)
+{
+	return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+}
+
+// RW 0x76D84B's walk from a waypoint: its location, then along the first link until a waypoint without links or the first one again (true: a loop)
+bool waypointChain(const TerrainLogic &t, const Waypoint &first, std::vector<Coord3D> &out)
+{
+	const Waypoint *w = &first;
+	for (size_t guard = 0; guard <= t.waypoints().size(); ++guard)
+	{
+		out.push_back(w->location);
+		if (w->linksTo.empty())
+		{
+			return false;
+		}
+		w = t.findWaypointById(w->linksTo.front());
+		if (!w)
+		{
+			return false;
+		}
+		if (w == &first)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+} // namespace
+
+TEST_CASE("stealthfly1 retail: a map's map.ini AIData block sets MinFlightHeight (row RW 0xC1CE60, AIData + 0xB0): map wor dol guldur 76 and map evil rivendell 300; "
+		  "every other map leaves the constructor's FLT_MAX, and every retail map's AIData reads without an error")
+{
+	OPENBFME_REQUIRE_START(s);
+	ArchiveFileSystem &fs = *s->mount->fs;
+	FilenameList maps;
+	fs.getFileListInDirectory("", "maps", "map.ini", maps, true);
+	REQUIRE(maps.size() == 123); // the mounted RotWK 2.01 + BFME2 1.06 archives hold 123 maps/*/map.ini (a census of the effective file system)
+	CHECK(s->settings.minFlightHeight == FLT_MAX); // data\ini\default\aidata.ini sets none
+	std::map<std::string, float> set;
+	std::vector<std::string> errors;
+	for (const std::string &path : maps)
+	{
+		GameLogicSettings g = s->settings;
+		CHECK_MESSAGE(GameLogicSettingsLoader::applyMapAIData(fs, mapDirOf(path), g, errors), path);
+		if (g.minFlightHeight != FLT_MAX)
+		{
+			set[mapDirOf(path)] = g.minFlightHeight;
+		}
+		// the rest of the AIData is the global one (the two retail rows are MinFlightHeight and the client's LowLodTreeName)
+		CHECK(g.formationColumnWidth == s->settings.formationColumnWidth);
+		CHECK(g.repulsedDistance == s->settings.repulsedDistance);
+	}
+	for (const std::string &e : errors)
+	{
+		MESSAGE(e);
+	}
+	CHECK(errors.empty());
+	const std::map<std::string, float> expected = { { "maps\\map evil rivendell", 300.0f }, { "maps\\map wor dol guldur", 76.0f } };
+	CHECK(set == expected);
+}
+
+TEST_CASE("stealthfly1 retail: on map wor dol guldur the game reads its MinFlightHeight 76 and the aerial path's ground height is never below it (RW 0x777ED7: "
+		  "max(terrain, no-fly height) raised to AIData + 0xB0); on Evendim it is the terrain")
+{
+	OPENBFME_REQUIRE_START(s);
+	{
+		FlyArena arena(*s, "FactionMordor", "FactionMen", 2, "maps/map wor dol guldur/map wor dol guldur.map");
+		GameLogic &logic = arena.logic();
+		CHECK(logic.settings().minFlightHeight == 76.0f);
+		int below = 0, samples = 0;
+		for (float x = 100.0f; x < 4000.0f; x += 300.0f) // tolerance: a sampling grid over the map, not an assertion
+		{
+			for (float y = 100.0f; y < 4000.0f; y += 300.0f) // tolerance: a sampling grid
+			{
+				const float ground = logic.getGroundHeight(x, y);
+				const float flight = AerialPathfinder::flightGroundHeight(logic, x, y);
+				CHECK(flight == (ground < 76.0f ? 76.0f : ground)); // tolerance: the retail rule's two cases, each asserted exactly
+				below += ground < 76.0f ? 1 : 0; // tolerance: counting the samples below the floor
+				++samples;
+			}
+		}
+		MESSAGE(below << " of " << samples << " samples lie below 76");
+		CHECK(below != 0); // tolerance: a precondition (some of the grid lies below the floor, so the rule is exercised)
+	}
+	{
+		FlyArena arena(*s, "FactionMordor", "FactionMen");
+		GameLogic &logic = arena.logic();
+		CHECK(logic.settings().minFlightHeight == FLT_MAX);
+		CHECK(AerialPathfinder::flightGroundHeight(logic, 1500.0f, 800.0f) == logic.getGroundHeight(1500.0f, 800.0f));
+	}
+}
+
+TEST_CASE("stealthfly1 retail: a fell beast's queued waypoints (shift-click: AI vslot 0x84, RW 0x76D659) fly its own follow path state 0x3F6 (RW 0x76B491), "
+		  "from its flight goal through each queued point, then idle in the air")
+{
+	OPENBFME_REQUIRE_START(s);
+	FlyArena arena(*s, "FactionMordor", "FactionMen");
+	Object *beast = arena.make("MordorWitchKingOnFellBeast", arena.a, 1500.0f, 800.0f);
+	GiantBirdAIUpdate *ai = birdAI(beast);
+	REQUIRE(ai != nullptr);
+	arena.step(2);
+	ai->aiMoveToPosition(Coord3D{ 1900.0f, 800.0f, 0.0f }, CMD_FROM_PLAYER);
+	REQUIRE(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FLY_TO);
+	arena.step(2);
+	const Coord3D flightGoal = ai->stateMachine().goalPosition();
+	const Coord3D second{ 1900.0f, 1200.0f, 0.0f }, third{ 1500.0f, 1200.0f, 0.0f };
+	// in a flight state (0x3E9): a new path from the machine's goal position through the point
+	ai->aiFollowPathAppend(second, CMD_FROM_PLAYER);
+	CHECK(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH);
+	CHECK(ai->goalType() == 1);
+	REQUIRE(ai->stateMachine().goalPath().size() == 2);
+	CHECK(ai->stateMachine().goalPath()[0].x == flightGoal.x);
+	CHECK(ai->stateMachine().goalPath()[0].y == flightGoal.y);
+	CHECK(ai->stateMachine().goalPath()[1].x == second.x);
+	CHECK(ai->stateMachine().goalPath()[1].y == second.y);
+	CHECK(ai->stateMachine().goalPosition().x == second.x); // RW 0x8DB810: the path's last point
+	CHECK((ai->flight().flags & 0x80u) == 0x80u);           // a look-ahead point: the second
+	// RW 0x76A320: the leg to point 0 with point 1 as the look-ahead, both at the terrain height + the path height (x87 sum stored); RW 0x778413 with a
+	// look-ahead appends point 0 and ends the spline at the look-ahead (the control point count - 2), which becomes the anchor the update steers to
+	const float h = ai->pathHeight();
+	CHECK(h == ai->curLocomotor()->preferredHeight());
+	CHECK(ai->flight().anchor.x == second.x);
+	CHECK(ai->flight().anchor.y == second.y);
+	CHECK(ai->flight().anchor.z == SimMath::fstpDword(SimMath::pc24AddW((double)arena.logic().getGroundHeight(second.x, second.y), (double)h)));
+	// following a path with points: the point is appended (RW 0x75536B)
+	ai->aiFollowPathAppend(third, CMD_FROM_PLAYER);
+	CHECK(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH);
+	REQUIRE(ai->stateMachine().goalPath().size() == 3);
+	CHECK(ai->stateMachine().goalPath()[2].x == third.x);
+	CHECK(ai->stateMachine().goalPath()[2].y == third.y);
+	float closest[3] = { 1e9f, 1e9f, 1e9f };
+	int closestFrame[3] = { -1, -1, -1 };
+	const Coord3D pts[3] = { flightGoal, second, third };
+	int f = 0;
+	for (; f < 600; ++f)
+	{
+		arena.step();
+		for (int i = 0; i < 3; ++i)
+		{
+			const float d = dist2d(*beast->getPosition(), pts[i]);
+			if (d < closest[i]) // tolerance: tracking the nearest approach
+			{
+				closest[i] = d;
+				closestFrame[i] = f;
+			}
+		}
+		if (ai->currentStateId() != (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH && f > 2)
+		{
+			break;
+		}
+	}
+	MESSAGE("left 0x3F6 after " << f << " frames in state " << ai->currentStateId() << "; nearest " << closest[0] << " @" << closestFrame[0] << ", " << closest[1] << " @"
+								<< closestFrame[1] << ", " << closest[2] << " @" << closestFrame[2] << "; above the ground " << arena.above(*beast));
+	CHECK(f < 600); // tolerance: the whole path flown within 120 s
+	// the arrival test puts the bird on each leg's anchor (within one speed, RW 0x70C201): the anchors are the look-ahead points (the second, then the
+	// third), so it passes over those in order; point 0 is only a control point of the first leg's spline, which the steering's rebuild toward the anchor
+	// (RW 0x76A933 -> RW 0x769EA5 without a look-ahead) may cut
+	CHECK(closest[1] < 40.0f); // tolerance: within one speed of the anchor (the arrival test)
+	CHECK(closest[2] < 40.0f); // tolerance: as above
+	CHECK(closestFrame[1] < closestFrame[2]); // tolerance: an order of frames
+	CHECK((ai->flight().flags & 0x80u) == 0u); // the exit (RW 0x76AC9F) clears the look-ahead bit
+	CHECK(arena.above(*beast) > 90.0f);         // tolerance: it hovers at about its PreferredHeight 121
+	CHECK_FALSE(beast->testModelCondition(AIUpdateInterface::modelConditionBit("MOVING")));
+}
+
+TEST_CASE("stealthfly1 retail: a script's waypoint path order (AI commands 6 / 0x33, RW 0x76D84B) flies a fell beast along a campaign map's waypoint chain in "
+		  "state 0x3F7 / 0x3F8 (RW 0x76A451 / 0x76B14A), the chain read along each waypoint's first link (the skirmish maps link none)")
+{
+	OPENBFME_REQUIRE_START(s);
+	campaigntest::Mission m;
+	m.load(*s, "map ang angmar");
+	GameLogic &logic = m.logic();
+	logic.combat().setAutoAcquireEnabled(false); // the bird flies its path, it does not stop for the mission's enemies
+	REQUIRE(logic.terrain() != nullptr);
+	const TerrainLogic &t = *logic.terrain();
+	// the first waypoint (map order) that starts an open chain of at least three points
+	const Waypoint *start = nullptr;
+	std::vector<Coord3D> chain;
+	int linked = 0;
+	for (const Waypoint &w : t.waypoints())
+	{
+		linked += w.linksTo.empty() ? 0 : 1;
+		std::vector<Coord3D> c;
+		const bool loops = waypointChain(t, w, c);
+		if (!start && !loops && c.size() >= 3)
+		{
+			start = &w;
+			chain = c;
+		}
+	}
+	MESSAGE(t.waypoints().size() << " waypoints, " << linked << " with links");
+	REQUIRE_MESSAGE(start != nullptr, "map ang angmar has an open linked waypoint path");
+	MESSAGE("waypoint '" << start->name << "' #" << start->id << ", a chain of " << chain.size() << " points");
+	Player *me = logic.players().getLocalPlayer();
+	REQUIRE(me != nullptr);
+	const ThingTemplate *tt = logic.things().findTemplate("MordorWitchKingOnFellBeast");
+	REQUIRE(tt != nullptr);
+	Object *beast = logic.newObject(tt, me->getDefaultTeam(), {});
+	REQUIRE(beast != nullptr);
+	Coord3D at{ chain[0].x, chain[0].y, logic.getGroundHeight(chain[0].x, chain[0].y) };
+	beast->setPosition(&at);
+	GiantBirdAIUpdate *ai = birdAI(beast);
+	REQUIRE(ai != nullptr);
+	const ObjectID id = beast->getID();
+	m.step(2);
+	REQUIRE(ai->aiFollowWaypointPath(start->id, CMD_FROM_SCRIPT, false, false)); // command 6
+	CHECK(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_WAYPOINTS);
+	CHECK_FALSE(ai->loopPath());
+	REQUIRE(ai->stateMachine().goalPath().size() == chain.size());
+	for (size_t i = 0; i < chain.size(); ++i)
+	{
+		CHECK(ai->stateMachine().goalPath()[i].x == chain[i].x);
+		CHECK(ai->stateMachine().goalPath()[i].y == chain[i].y);
+	}
+	CHECK(ai->stateMachine().goalPosition().x == chain.back().x); // RW 0x8DB810: the path's last point
+	CHECK(ai->pathHeight() == ai->curLocomotor()->preferredHeight()); // RW 0x76D86F: the command sets the path height
+	// every leg's anchor is its look-ahead point (the next waypoint): the bird passes within one speed of each waypoint after the first and the open chain
+	// ends (success: AIGoingIdleState 0x4E)
+	std::vector<float> nearest(chain.size(), 1e9f);
+	int f = 0;
+	for (; f < 1500; ++f)
+	{
+		m.step();
+		REQUIRE(logic.findObjectByID(id) != nullptr);
+		for (size_t i = 0; i < chain.size(); ++i)
+		{
+			nearest[i] = std::min(nearest[i], dist2d(*beast->getPosition(), chain[i]));
+		}
+		if (ai->currentStateId() != (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_WAYPOINTS)
+		{
+			break;
+		}
+	}
+	MESSAGE("left 0x3F7 after " << f << " frames for state " << ai->currentStateId() << ", nearest to the last waypoint " << nearest.back());
+	CHECK(f < 1500); // tolerance: the open chain flown within 300 s
+	for (size_t i = 1; i < chain.size(); ++i)
+	{
+		CHECK_MESSAGE(nearest[i] < 40.0f, "waypoint " << i << " nearest " << nearest[i]); // tolerance: within one speed of the anchor (the arrival test)
+	}
+	CHECK((ai->flight().flags & 0x80u) == 0u); // the exit (RW 0x76B228) clears the look-ahead bit
+	// command 0x33 (exact, as a team) is the team state 0x3F8
+	REQUIRE(ai->aiFollowWaypointPath(start->id, CMD_FROM_SCRIPT, true, true));
+	CHECK(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_WAYPOINTS_TEAM);
+}
+
+TEST_CASE("stealthfly1 retail: AI command 0x39 (the scripts' attack of a giant bird, RW 0x77131B) swoops like the attack order and NazgulPlowAttack takes the "
+		  "retail 565 from a barracks; an order queued while it attacks waits for the attack's end (RW 0x76D9B6)")
+{
+	OPENBFME_REQUIRE_START(s);
+	FlyArena arena(*s, "FactionMordor", "FactionMen");
+	Object *beast = arena.make("MordorWitchKingOnFellBeast", arena.a, 1300.0f, 800.0f);
+	Object *barracks = arena.make("GondorBarracks", arena.b, 1700.0f, 820.0f);
+	GiantBirdAIUpdate *ai = birdAI(beast);
+	REQUIRE(ai != nullptr);
+	arena.step(2);
+	const float full = health(barracks);
+	REQUIRE(ai->aiSwoopAttackObject(barracks, CMD_FROM_SCRIPT));
+	CHECK(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_SWOOP);
+	const Coord3D queued{ 1300.0f, 1200.0f, 0.0f };
+	bool queuedWhileAttacking = false;
+	int f = 0;
+	for (; f < 400 && ai->strikes() == 0; ++f)
+	{
+		arena.step();
+		if (!queuedWhileAttacking && ai->attacking())
+		{
+			ai->aiFollowPathAppend(queued, CMD_FROM_PLAYER);
+			queuedWhileAttacking = true;
+			CHECK(ai->currentStateId() != (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH); // kept for later
+		}
+	}
+	REQUIRE(queuedWhileAttacking);
+	arena.step(3);
+	CHECK(ai->strikes() == 1);
+	CHECK(full - health(barracks) == 565.0f); // 350 + 175 SIEGE at 100 %, 40 FLY_INTO at 40 % (the fly1 case)
+	for (f = 0; f < 200 && ai->currentStateId() != (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH; ++f)
+	{
+		arena.step();
+	}
+	MESSAGE("the queued point's path after " << f << " frames past the strike");
+	REQUIRE(ai->currentStateId() == (unsigned)GiantBirdAIUpdate::STATE_FOLLOW_PATH);
+	CHECK(ai->stateMachine().goalPath().back().x == queued.x);
+	CHECK(ai->stateMachine().goalPath().back().y == queued.y);
 }

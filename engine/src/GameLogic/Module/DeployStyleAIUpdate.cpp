@@ -35,7 +35,7 @@ const char kStopDeployStyle[] =
 	"with an angle, 0xB, 0xC, 0xE and 0xF reach it; guard, hunt, enter and the rest run without the pre-idle, the kept command and the target flags: "
 	"INFERENCE), so the guard-position branch (+ 0x597, command 0x1E: INFERENCE from the ZH command order) is unreachable; the AI-source classification copy "
 	"(+ 0x570) of an AI command given elsewhere (only this class's own idles and attacks keep it); the drawable's animation time and the template's \"Deploy\" / "
-	"\"Undeploy\" unit sounds (RW 0x6726B9 / 0x674FFE: client); RW 0x66844A's two arguments (the port's nextMoodTarget has none); the toggle on an object "
+	"\"Undeploy\" unit sounds (RW 0x6726B9 / 0x674FFE: client); the toggle on an object "
 	"whose AI is not a DeployStyleAIUpdate (retail writes into it unchecked: the port does nothing)";
 
 std::string rawField(const ModuleData *data, const char *field)
@@ -457,7 +457,7 @@ UpdateSleepTime DeployStyleAIUpdate::update()
 			}
 			if (victim && victim->isEffectivelyDead())
 			{
-				victim = nextMoodTarget(); // RW 0x66844A(1, 0)
+				victim = getNextMoodTarget(true, false); // RW 0x66844A(1, 0)
 				retargeted = true;
 			}
 			if (!victim)
@@ -465,7 +465,7 @@ UpdateSleepTime DeployStyleAIUpdate::update()
 				if (m_attackMoveCommand)
 				{
 					// RW 0x892631 .. 0x89268E: the guard position's mood target, attacked once it is in range
-					victim = nextMoodTarget(); // RW 0x66844A(0, 0)
+					victim = getNextMoodTarget(false, false); // RW 0x66844A(0, 0)
 					if (victim)
 					{
 						inRange = weapons->isWithinAttackRange(*victim, 0.0f, true);

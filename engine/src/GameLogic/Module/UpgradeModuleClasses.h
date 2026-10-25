@@ -45,6 +45,7 @@
 #include <string>
 #include <vector>
 
+class CommandButton;
 class ModuleFactory;
 
 class StatusBitsUpgradeModuleData : public UpgradeModuleData
@@ -144,6 +145,7 @@ class CommandSetUpgradeModuleData : public UpgradeModuleData
 {
 public:
 	std::string m_commandSet;
+	std::string m_commandButtons; ///< lane MODS-3: edain-unchained.commandset-button-upgrade's +0x13C (the rest of the line, ' '-joined)
 	static void buildFieldParse(MultiIniFieldParse &p);
 };
 
@@ -159,7 +161,43 @@ protected:
 	void processUpgradeRemoval() override;
 
 private:
+	// lane MODS-3: edain-unchained.commandset-button-upgrade's rebuild (0xEDB169) of the object's command set override from its CommandSetUpgrade
+	// modules; selfActive is this module's state (the others': their executed flag)
+	void rebuildCommandButtons(bool selfActive);
 	const CommandSetUpgradeModuleData *m_data;
+};
+
+// lane SUMMON-1: DoCommandUpgrade (data factory RW 0x655563: 0x140 bytes, constructor RW 0x655543; runtime factory RW 0x64FE48: 0x1C bytes, constructor
+// RW 0x8B8DAF, vtable RW 0xC6E748, the mux RW 0xC6E700; table RW 0xC6E7B4). GetUpgradeCommandButtonName (+ 0x138) and RemoveUpgradeCommandButtonName
+// (+ 0x13C), both RW 0x42EE5E strings. The implementation (mux slot 10, RW 0x8B8E2E) finds the Get button by name (TheControlBar RW 0x71D6EA) and, when it
+// exists, runs it on the object as a player command (Object::doCommandButton RW 0x696FD2(button, 0, 0)); the removal (slot 8, RW 0x8B8DFC) does the same with
+// the Remove button. Retail data: the Thrall Master's four summons (SPECIAL_POWER), the rock-throw toggles (TOGGLE_WEAPONSET) and the Hall of Twilight's
+// technologies (PLAYER_UPGRADE: through Object::doCommandButton since lane MODS-3).
+class DoCommandUpgradeModuleData : public UpgradeModuleData
+{
+public:
+	std::string m_getUpgradeCommandButtonName;    // + 0x138
+	std::string m_removeUpgradeCommandButtonName; // + 0x13C
+	static void buildFieldParse(MultiIniFieldParse &p);
+};
+
+class DoCommandUpgrade : public UpgradeModule
+{
+public:
+	OBFME_MODULE_XFER(DoCommandUpgrade) // UpgradeModule's (RW keeps no state of its own: 0x1C bytes)
+	DoCommandUpgrade(Thing *thing, const DoCommandUpgradeModuleData *data) : UpgradeModule(thing, data), m_data(data) {}
+	// RW 0x696FD2 with source CMD_FROM_PLAYER (0) and no auto flag, the cases a DoCommandUpgrade button can be: SPECIAL_POWER / SPELL_BOOK (0x18 / 0x26:
+	// Object::doSpecialPower RW 0x68E5A3 of the button's power with its options | 0x40000, not forced) and TOGGLE_WEAPONSET (0x2D: WeaponSetToggle); a
+	// disabled object (RW 0x9325B4) without SUMMONING_REPLACEMENT (Object + 0xA0 bit 6) does nothing. Every other type is counted (S-5145)
+	static void doCommandButton(Object &obj, const CommandButton &button);
+
+protected:
+	void upgradeImplementation() override; // RW 0x8B8E2E
+	void processUpgradeRemoval() override; // RW 0x8B8DFC
+
+private:
+	void run(const std::string &buttonName);
+	const DoCommandUpgradeModuleData *m_data;
 };
 
 class SubObjectsUpgradeModuleData : public UpgradeModuleData
@@ -230,6 +268,35 @@ private:
 	const RemoveUpgradeUpgradeModuleData *m_data;
 };
 
+// lane MODS-3: ObjectImageUpgrade, edain-unchained.object-image-upgrade (registered by its 0xEF3128 next to TooltipUpgrade; a TooltipUpgrade with its own
+// upgrade vtable 0xEF3000): the upgrade mux fields, SelectPortrait (+0x138) and ButtonImage (+0x13C), names. Implementation 0xEF320F: the object's
+// portrait / button image become these (the newest applied module with a non-empty name wins, per field); removal 0xEF3330 is `ret` (the image stays).
+// Its sidecar keeps at most 0x800 entries a session and is never saved; here the applied frame is the module's state (saved), with no cap. Only a
+// presentation read: no logic reads the images
+class ObjectImageUpgradeModuleData : public UpgradeModuleData
+{
+public:
+	std::string m_selectPortrait, m_buttonImage;
+	static void buildFieldParse(MultiIniFieldParse &p);
+};
+
+class ObjectImageUpgrade : public UpgradeModule
+{
+public:
+	OBFME_MODULE_XFER(ObjectImageUpgrade)
+	ObjectImageUpgrade(Thing *thing, const ObjectImageUpgradeModuleData *data) : UpgradeModule(thing, data), m_data(data) {}
+	// the object's override (its 0xEF3331 portrait / 0xEF3392 button image lookups), empty when no applied module names one: the retail path then
+	static std::string imageOf(const Object &obj, bool portrait);
+
+protected:
+	void upgradeImplementation() override;
+	void processUpgradeRemoval() override {}
+
+private:
+	const ObjectImageUpgradeModuleData *m_data;
+	unsigned m_appliedFrame = 0; ///< the logic frame + 1 of the last implementation; 0: never applied
+};
+
 // GrantUpgradeCreate (create RW 0x6508A3, table RW 0xC70158): UpgradeToGrant (+8, a name looked up when it is granted: RW 0x66F5E5, an unknown name grants
 // nothing), ExemptStatus (+0xC, RW 0x7B1E5C, empty by default), GiveOnBuildComplete (+0x1C). onCreate RW 0x8BD15E: without GiveOnBuildComplete, when
 // ExemptStatus holds UNDER_CONSTRUCTION and the object is not under construction, the upgrade is granted; onBuildComplete RW 0x8BD1D4: once (the create
@@ -270,6 +337,7 @@ struct Stats
 	unsigned subObjectFadesNotPorted = 0;
 	unsigned textureSwapsNotPorted = 0;
 	unsigned houseRecolorsNotPorted = 0;
+	unsigned doCommandsNotPorted = 0; // lane SUMMON-1: DoCommandUpgrade buttons of a command type RW 0x696FD2 runs but the port does not (S-5145)
 };
 Stats &stats();
 // the unknown names the upgrade modules met at run time (RW keeps them as debug messages): RemoveUpgradeUpgrade's UpgradeToRemove, GrantUpgradeCreate's UpgradeToGrant

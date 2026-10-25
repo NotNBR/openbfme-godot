@@ -383,6 +383,14 @@ public:
 	const std::vector<WindowManagerNote> &notes() const { return m_notes; }
 	std::size_t noteCount(const std::string &kind) const;
 	void note(const std::string &kind, const std::string &detail) { m_notes.push_back({ kind, detail }); }
+	// lane HUDREDRAW-1: once per kind and detail (what a HUD movie asks every frame: an unhandled extern, a command): the list is never cleared
+	void noteOnce(const std::string &kind, const std::string &detail)
+	{
+		if (m_notedOnce.emplace(kind, detail).second)
+		{
+			m_notes.push_back({ kind, detail });
+		}
+	}
 	// Movie load failures and script errors the Apt player reported (never swallowed).
 	const std::vector<std::string> &errors() const { return m_errors; }
 	void clearErrors() { m_errors.clear(); }
@@ -480,6 +488,7 @@ private:
 	std::vector<ComponentRecord> m_componentRecords;
 	std::uint32_t m_componentBits = 0; // lane MENU-1: RW 0xDE8A04 (bit 0: DisableComponents() without a path)
 	std::vector<WindowManagerNote> m_notes;
+	std::set<std::pair<std::string, std::string>> m_notedOnce; // noteOnce
 	std::vector<std::string> m_errors;
 	std::vector<std::string> m_traces;
 	std::vector<MovieLoadNote> m_movieLoads;

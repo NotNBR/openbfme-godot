@@ -171,6 +171,9 @@ public:
 
 	// ---- notes (stops, silent EA behaviours) --------------------------------------------------------------
 	void note(const std::string &kind, const std::string &detail);
+	// lane HUDREDRAW-1: a note made each time a movie does a thing it does every frame (a HUD clip duplicated per update) is kept once per kind and detail:
+	// the list is never cleared, and a long game grew it without bound
+	void noteOnce(const std::string &kind, const std::string &detail);
 	const std::vector<AptNote> &notes() const { return m_notes; }
 	std::size_t noteCount(const std::string &kind) const;
 
@@ -243,6 +246,7 @@ private:
 	std::int64_t m_carryMs = 0;
 	std::uint64_t m_frameCount = 0;
 	std::vector<AptNote> m_notes;
+	std::set<std::pair<std::string, std::string>> m_notedOnce; // noteOnce
 	float m_mouseX = 0, m_mouseY = 0;
 	std::uint8_t m_background[4] = { 0, 0, 0, 0 };
 

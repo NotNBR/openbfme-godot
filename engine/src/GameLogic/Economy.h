@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "Common/INIDataTypes.h"
 #include "Common/PlayerEconomyHost.h"
 #include "Common/StateHash.h"
 #include "GameLogic/EconomySettings.h"
@@ -124,6 +125,9 @@ public:
 	bool hasAttributeModifierProvider() const { return (bool)m_attributeModifiers; }
 	// RW 0x68C82D with the out value starting at 1.0 (RW 0x805007)
 	float attributeModifierProduct(const Object &obj, int type) const;
+	// the income / deposit factor: the PRODUCTION product (RW 0x68C82D(0xD)); lane MODS-3: times PRODUCTION_MONEY's under
+	// edain-unchained.production-split (its 0xED90D8 at RW 0x88559F / 0x89DC45 / 0x883C4E / 0x8A4623)
+	float productionMoneyProduct(const Object &obj) const;
 	// RW 0x68C818 style: the sum form for COMMAND_POINT_BONUS (RW 0x6A7C01 starts it at 0.0)
 	typedef std::function<bool(const Object &obj, int type, float &sum)> AttributeModifierSumProvider;
 	void setAttributeModifierSumProvider(AttributeModifierSumProvider p) { m_attributeSums = std::move(p); }
@@ -148,10 +152,21 @@ public:
 		int playerIndex = 0;
 		int amount = 0;
 		UnsignedInt frame = 0;
+		// the floating text's anchor (GameClient/FloatingText.h): the object's position, raised by 10 (AutoDepositUpdate) or by the geometry's top
+		// (TerrainResourceBehavior: the client works the height out from `templateName`, so a geometry row that does not parse is reported there)
+		enum TextAnchor : std::uint8_t
+		{
+			TEXT_RAISED_10 = 0,
+			TEXT_GEOMETRY_TOP = 1
+		};
+		Coord3D textPos{};
+		TextAnchor textAnchor = TEXT_RAISED_10;
+		std::string templateName;
 	};
 	typedef std::function<void(const IncomeEvent &)> IncomeListener;
 	void setIncomeListener(IncomeListener l) { m_incomeListener = std::move(l); }
-	void noteIncome(Object &obj, Player &owner, int amount);
+	// `anchor`: where the floating text appears (AutoDepositUpdate 10 above the object, TerrainResourceBehavior the geometry's top)
+	void noteIncome(Object &obj, Player &owner, int amount, IncomeEvent::TextAnchor anchor = IncomeEvent::TEXT_RAISED_10);
 	const std::deque<IncomeEvent> &incomeLog() const { return m_incomeLog; }
 	unsigned long long incomePayments() const { return m_incomePayments; }
 	void clearIncomeLog() { m_incomeLog.clear(); }

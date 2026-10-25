@@ -19,7 +19,7 @@ const Style := preload("res://scripts/ui/style.gd")
 const Semver := preload("res://scripts/core/semver.gd")
 
 const TABS := [["general", "General"], ["display", "Display"], ["about", "About & logs"]]
-const CHANNELS := ["preview", "stable"]
+const CHANNELS := ["stable", "preview"]  # lane NIGHTLY-1: shown as Stable, Nightly (in this order)
 
 var tab := "general"
 var _tabs := {}
@@ -61,10 +61,10 @@ func _init(macos_preview := false) -> void:
 	# General
 	var g := _page(s.box, "general")
 	_channel = OptionButton.new()
-	_channel.add_item(Semver.channel_name("preview"))  # lane VERSION-1: shown as "Preview"
-	_channel.add_item(Semver.channel_name("stable"))   # shown as "Alpha": the numbered releases ("Alpha 0.4.5")
+	_channel.add_item(Semver.channel_name("stable"))   # lane NIGHTLY-1 (owner, 2026-10-21): "Stable", the tested numbered releases ("Alpha 0.4.5")
+	_channel.add_item(Semver.channel_name("preview"))  # "Nightly": a new test build twice a day (NIGHTLY-2)
 	_channel.item_selected.connect(func(i: int) -> void: channel_picked.emit(CHANNELS[i]))
-	g.add_child(W.row(_with_note("Channel", "Preview also gets test builds between releases."), _channel))
+	g.add_child(W.row(_with_note("Channel", "Nightly gets a new test build twice a day; Stable gets the tested releases."), _channel))
 	_free_camera = CheckButton.new()
 	_free_camera.tooltip_text = "Applies the next time the game starts. In a game, Ctrl+Z toggles it."
 	_free_camera.toggled.connect(func(on: bool) -> void: free_camera_toggled.emit(on))

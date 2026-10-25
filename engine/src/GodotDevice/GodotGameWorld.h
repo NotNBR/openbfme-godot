@@ -35,6 +35,7 @@
 #include "GameEngineDevice/W3DDevice/GameClient/Drawable/Draw/W3DStreakDraw.h"
 #include "GameEngineDevice/W3DDevice/GameClient/W3DVegetationSway.h"
 #include "GodotDevice/GodotW3DMaterial.h"
+#include "GameEngineDevice/W3DDevice/GameClient/HouseColor.h" // lane HCKEY-1: EntryView::staticKeyPalette
 
 #include <godot_cpp/classes/immediate_mesh.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
@@ -196,6 +197,9 @@ public:
 	int64_t find_object_by_template(const String &template_name) const;
 	// lane BUILD-1: the first real model of the template's draw modules (its default model condition state), "" when it has none: what the placement ghost shows
 	String get_template_model(const String &template_name) const;
+	// Ping wheel (not retail, presentation only): the BeaconName of player `player_index`'s PlayerTemplate (RotWK's multiplayer beacon object, e.g. its
+	// MultiplayerBeacon), "" when the player or the name is missing. Reads the start-time player template only, never the simulation's state
+	String get_player_beacon_template(int64_t player_index) const;
 	// lane PLAY-1: what PlayerTribute.apt reads of this game and its Send (GameClient/GUI/TributeInfo.h); valid while the world lives (null-safe without a game)
 	TributeSource *tribute_source();
 
@@ -300,6 +304,7 @@ public:
 	// scenario helper: money for a player (Player::depositMoney)
 	void give_money(int64_t player, int64_t amount);
 	// lane HERO-2: the system Create-a-Heroes of the archives (data\\systemheroes\\*.cah): [{ name, class, subclass, unique_id, valid }]
+	void set_hero_stats_profile(const std::string &profile) { m_heroStatsProfile = profile; }
 	Array get_system_heroes() const;
 	// lane HERO-2: a Create-a-Hero record for a game setup's slot, read at the setup (never during play): `name` is a system hero's name or the path of a
 	// .cah file; { ok, record: PackedByteArray (the .cah form a slot's create_a_hero takes: load_map's slots, the new game message, the LAN lobby),
@@ -350,6 +355,15 @@ public:
 	// steps the script camera director by `delta_ms` of render time: { moving, has_target, x, y, z (SAGE), has_angle, angle, reset_view, letterbox,
 	// input_disabled, caption (label), caption_text (the game text), caption_ms, fade }; `camera` gives the current look-at { x, y, z, angle } (the start of a move)
 	Dictionary update_script_view(double delta_ms, const Dictionary &camera);
+	// lane CAMPUI-1: InGameUI.ini's MilitaryCaption* rows with language.ini's caption fonts (MilitaryCaptionSettings): { ok, error, color (Color),
+	// position (Vector2 fractions), centered, font, point_size, bold, title_font, title_point_size, title_bold, delay_ms }
+	Dictionary get_military_caption_settings() const;
+	// lane CAMPUI-1: TheMissionObjectiveTracker (GameLogic::missionObjectives): { has_list, screen_enabled, objectives: [{ label, text (the game text, UTF-8),
+	// bonus, shown, completed }] in list order (main then bonus), held (read now; else the last held frame's copy) }
+	Dictionary get_mission_objectives();
+	// lane CAMPUI-1: { ok, image }: the ThingTemplate's ButtonImage (RW 0x73CFEF: ThingTemplate + 0x78; "" when it has none); ok false: no such template
+	// (DISPLAY_NOTIFICATION_BOX_WITH_OBJECT_TYPE_IMAGE_OVERRIDE then keeps the type's icon, RW 0x6D1305)
+	Dictionary get_template_button_image(const String &name) const;
 	// { loaded, sides: [ { name, scripts, groups } ], scripts, groups, updates, scripts_evaluated, scripts_fired, false_fired, actions_run, conditions_evaluated,
 	// unported_conditions: { name: count }, unported_actions, client_requests, notes, end_requests: [ { frame, player, victory, action } ], setup (the sides' lists) }
 	Dictionary get_script_report() const;
@@ -498,7 +512,7 @@ public:
 
 	// ---- lane MP-1: a LAN game (GameNetwork/LANLobby.h, NetGameSession.h). net_host / net_join open the lobby; net_poll returns {state: "lobby" | "started" |
 	// "error", message (the NewGameMessage Dictionary every peer starts, for prepare_new_game), local_slot, error}; prepare_new_game then takes the lobby's local
-	// slot; after start_new_game, net_begin({record: path, script: bool}) installs the lockstep driver; advance() then services the network and runs a frame
+	// slot; after start_new_game, net_begin({record: path, script: bool, early_orders: bool (lane NETLAG-2, default true)}) installs the lockstep driver; advance() then services the network and runs a frame
 	// only when every player's commands for it are in. net_status: frame, CRC checks, desync reports, waiting slots, stalls, errors.
 	Dictionary net_host(int64_t port, const Dictionary &message, int64_t run_ahead, int64_t crc_interval);
 	Dictionary net_join(const String &address, const String &name);
@@ -509,6 +523,9 @@ public:
 	String net_profile_digest() const;
 	Dictionary net_begin(const Dictionary &options);
 	Dictionary net_status() const;
+	// lane ANTICHEAT-1 (C++ only, from the HUD): the local player's view for the relay's log of an online game it plays (not a spectator, not LAN):
+	// Network::submitView with the logic frame shown; ignored otherwise
+	void net_submit_view(float cameraX, float cameraY, float cursorX, float cursorY, bool cursorOverWorld);
 	// the local player leaves the game (PLAYERLEAVE after the frames it announced), the recording is closed; waits up to 2 s for the acks
 	void net_finish();
 	// lane MP-3: the per-frame census of a net_begin({"census": true}) game as CSV (frame, sim_us, battalions, troops, objects); {ok, rows | error}
@@ -522,6 +539,22 @@ public:
 	// catch-up (the relay's log, no rendering of the skipped frames) until net_status().rejoin.state is "live" (or "failed", with the reason)
 	void net_pause();
 	void net_resume();
+	// ---- lane CHAT-1: the in-game chat over the game's network (GameNetwork/Network.h sendChat / takeChat; GameClient/InGameChat.h) ----
+	// net_chat_info: { network (a LAN / online game this client plays in: not single player, a replay, a spectator or a rejoin's catch-up), local_slot,
+	// local_active, slots: [{ player, local, active, allied (both ways with the local player), muted, name, color (0xRRGGBB) }] }.
+	// net_chat_send(line, mask): Network::sendChat of the formatted line ("<Team> hi") to the slots of `mask`: { ok | error }.
+	// net_chat_take: the lines shown since the last call [{ slot, name, text, color }] (the sender's player colour; -1 without a player).
+	// net_chat_set_muted: the players screen's mute of a slot (GameSlot + 0xA); net_chat_stats: the network's chat counters
+	Dictionary net_chat_info() const;
+	Dictionary net_chat_send(const String &line, int64_t mask);
+	int64_t net_chat_mask(int64_t mode) const; ///< InGameChat::recipientMask of the window's mode over net_chat_info's slots (RW 0x8ECF3E)
+	Array net_chat_take();
+	void net_chat_set_muted(int64_t slot, bool muted);
+	Dictionary net_chat_stats() const;
+	// lane CHAT-1: the disconnect screen's chat (Network::sendDisconnectChat; NETCOMMANDTYPE_DISCONNECTCHAT): send a line { ok | error }, take the lines
+	// received [{ slot, name, text }]
+	Dictionary net_disconnect_chat(const String &text);
+	Array net_disconnect_chat_take();
 	// lane ONLINE-3: a spectator START (net_online with the lobby's /v1/games/<id>/spectate START: {ok, spectator, delay}) makes net_begin watch the game:
 	// no slot, the ReplayObserver side is the local player (the map revealed, RW 0x62F91A), _process catches up from the relay's log and then follows
 	// it (NetGameSession::spectateStep; nothing is sent, the local input is ignored); net_status().spectate: state ("binding" / "catching_up" / "live" /
@@ -592,6 +625,7 @@ public:
 
 	// lane HUD-1 (C++ only, not bound): what the in-game HUD node needs of the game; null until setup() / load_map() ran
 	LiveGame *hud_game() const { return m_game.get(); }
+	LiveFX *live_fx() const { return m_liveFX.get(); } // lane FX-4: the HUD takes the camera shakes (LiveFX::takeViewShakes)
 	// AUDIO-2: connects the loaded game to the installed audio manager (a booted GameAudio): object / drawable owned sounds follow their owners, the
 	// player filter knows the local player, the objects' ambient sounds run. { ok, error }
 	Dictionary attach_audio();
@@ -629,6 +663,18 @@ private:
 		bool fogLook = false;               ///< lane VISUAL-2: the instance is drawn with the fogged light (a last-seen object in the fog)
 		int64_t fogLookInstance = -1;       ///< the instance it was handed to
 		std::uint32_t colorsRevision = 0;   ///< lane CAH-2: Drawable::customColorRevision the model choice saw
+		// lane HCKEY-1: a static entry's model key (lowered name + floor swap suffix + palette) and the inputs it was made from, rebuilt only
+		// when one of them changes (community PR #60 made it every frame for every coloured static drawable)
+		bool staticKeyValid = false;
+		std::string staticKeySource;       ///< DrawEntry::staticModel the key was made from
+		const void *staticKeyData = nullptr; ///< DrawEntry::data (the floor swaps' module data)
+		int staticKeyKind = -1, staticKeyWeather = -1, staticKeyCustomKind = -1;
+		bool staticKeyHouse = false;        ///< m_houseColors when it was made
+		std::uint32_t staticKeyOwner = 0, staticKeyCustom[3] = { 0u, 0u, 0u };
+		std::string staticKey;             ///< the key
+		HouseColorParams staticKeyPalette; ///< and what it was made from (used when a new model is built)
+		bool staticKeyColored = false;
+		std::vector<std::pair<std::string, std::string>> staticKeySwaps;
 	};
 	struct DrawableView
 	{
@@ -664,11 +710,15 @@ private:
 	std::string m_videosError;             // lane CAMP-1H: why the Video INIs did not load
 	std::unique_ptr<GameLogicSettings> m_settings;   ///< GameData / AIData / MultiplayerSettings (and the lobby colours), read once by setup()
 	std::unique_ptr<MapObjectOptions> m_options;
-	std::unique_ptr<ArchiveW3DFileSource> m_source;
+	std::unique_ptr<W3DFileSource> m_source;
 	std::unique_ptr<WW3DAssetManager> m_assets;
 	mutable UnsignedInt m_netHashFrame = 0;   ///< lane RENDERWAIT-1: net_status's last state hash (computed where the logic is held) and its frame
 	mutable std::uint32_t m_netHash = 0;
+	std::string m_heroStatsProfile;
 	std::unique_ptr<LiveGame> m_game;
+	// Per loaded game/map; cleared alongside m_game, including data-source resets.
+	mutable bool m_cahCameraOffsetValid = false;
+	mutable Vector3 m_cahCameraOffset;
 	std::unique_ptr<TributeSource> m_tribute; ///< lane PLAY-1 (tribute_source)
 	std::unique_ptr<SpellStoreModel> m_spellStore;     // lane SPELL-2
 	void waitSpellIdle(const char *file = __builtin_FILE(), int line = __builtin_LINE());
@@ -722,6 +772,7 @@ private:
 	std::unique_ptr<EndGameController> m_endGame;
 	std::unique_ptr<ScriptCameraDirector> m_scriptView;     // lane SCRIPT-1
 	std::vector<ScriptClientRequest> m_pendingScriptRequests; // lane SCRIPT-1: taken from the game, not applied to the director yet
+	Dictionary m_objectivesView; // lane CAMPUI-1: the tracker as last read in a held frame (get_mission_objectives)
 	std::vector<ScriptClientRequest> m_pendingScriptAudio;    // lane RENDERWAIT-1 r2: taken, their audio not applied yet (waits for a held logic)
 	unsigned long long m_scriptAudioApplied = 0; // RENDERWAIT-1 r3: requests handed to the audio side (test counter)
 	void applyPendingScriptAudio();

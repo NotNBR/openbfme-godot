@@ -79,6 +79,9 @@ public:
 	// The retail flag at +0x6C2: the popup's accept button is disabled (an empty raw text).
 	bool profileAcceptDisabled() const { return m_acceptDisabled; }
 	GameWindow *slotGadget(int slot, const std::string &leaf) const;
+	GameWindow *slotScrollWindow() const { return m_slotScroll; }
+	GameWindow *slotRangeWindow() const { return m_slotRange; }
+	int firstVisibleSlot() const { return m_firstVisibleSlot; }
 	// lane ONLINE-5: the state the slot's Ready box was last given (SetReadyState: "_none", "_enabledChecked" ...; "" before the first)
 	const std::string &readyIcon(int slot) const
 	{
@@ -86,6 +89,7 @@ public:
 		return slot >= 0 && slot < MAX_SLOTS ? m_readyIcon[(size_t)slot] : none;
 	}
 	GameWindow *mapListWindow() const { return m_mapList; }
+	GameWindow *mapCapacityFilterWindow() const { return m_mapCapacityFilter; }
 	const std::vector<GameWindow *> &mapStartSpotWindows() const { return m_currentMapChildren; } // lane FB7-1 (tests)
 	// lane UI-2: the map preview window (MpGameSetup's CurrentMap, MpMapWindow.wnd) and its start-spot buttons
 	GameWindow *currentMapWindow() const { return m_currentMap; }
@@ -134,6 +138,7 @@ public:
 	int profileState() const { return m_profileState; } // lane MENUWORK-1: the menu inventory's evidence
 
 protected:
+	void updateExtendedRows();
 	WindowMsgHandledType gadgetMessage(GameWindow *from, std::uint32_t msg, WindowMsgData data1, WindowMsgData data2) override;
 
 	// ---- lane MP-2: the LAN lobby (AptLanLobby, LanLobby.apt) hosts the same MpGameSetup movie with a network model ----
@@ -178,15 +183,23 @@ protected:
 	// may the slot's combos be changed now: lobbyEditable, and (RW 0x843F6E UpdateSlot, BFME2 0x441B15: a local player who accepted and is not the host
 	// has every gadget disabled, RW 0x8404AC(false, -1)) not after the local player's own Ready
 	bool slotGadgetsEnabled(int slot) const;
-	// lane ONLINE-5: may a slot's Hero combo be used at all (the online lobby carries no Create-a-Hero record yet, S-4076: shown locked there)
+	// lane ONLINE-5: may a slot's Hero combo be used at all (false: shown locked; every lobby carries the record since lane ONLINEMENU-1)
 	virtual bool heroChoiceAvailable() const { return true; }
-	// lane OWNERFIX-2: whether the lobby can carry a slot's handicap to the game (the skirmish and LAN lobbies: NetPacket's GameInfo); the online staging room's
-	// start (GameNetwork/OnlineStart.cpp) has no handicap, so its combo stays empty and locked (S-4552)
+	// lane OWNERFIX-2: whether the lobby can carry a slot's handicap to the game (false: its combo stays empty and locked; the skirmish and LAN lobbies through
+	// NetPacket's GameInfo, the online one through the lobby's START since lane ONLINEMENU-1)
 	virtual bool handicapChoiceAvailable() const { return true; }
 	// lane ONLINE-5: the chat panel's Players list (AptMpChat's "ChatPlayers", RW 0x9BEA20): the human players of the network game, in slot order.
 	// INFERENCE [S-4551]: retail's chat helper fills it with the chat's recipients (the room's players; its fill, RW 0x9BECCB's source, was not read)
 	// and sends a line only to the ones selected; here it lists who is in the room and every line goes to everyone
 	void refreshChatPlayers();
+	// lane ONLINEMENU-1 (owner, 2026-10-20: "the player can just see their ping on the side"): a second column after a player's name in that list (the
+	// online room: the ping); "" none (the list keeps one column)
+	virtual UnicodeString chatPlayerNote(int slot, Color *color) const
+	{
+		(void)slot;
+		(void)color;
+		return UnicodeString();
+	}
 	// lane UI-1: AptMpGameRules::ShowChat (RW 0x845AE2 id 0): the host interface's answer; the skirmish lobby has no chat
 	virtual bool showChat() const { return false; }
 	// lane RULES-1: the panel's ruleChanged (RW 0x8421E0) on the host posts "GUI:RuleChangeWarning" + the rule's name (kind 10 with a reset:
@@ -227,6 +240,8 @@ private:
 	};
 
 	void registerAll();
+	void setFirstVisibleSlot(int first);
+	void destroySlotScroll();
 	void registerLobby();
 	void registerProfileCommands();
 	// ---- gadget initialisation (the `_Init` screen references) ----
@@ -242,6 +257,7 @@ private:
 	int heroSide(int slot) const;                    ///< the slot's faction side as a Create-a-Hero faction index (-1: any)
 	bool heroUsable(int slot, const CreateAHeroHero &hero) const;
 	void populateMapList();
+	void createMapCapacityFilter();
 	void setMapSort(int mode);
 	void refreshAll();
 	void refreshSlot(int slot);
@@ -310,7 +326,15 @@ private:
 	// MpGameSetup state
 	std::map<const GameWindow *, SlotGadget> m_slotGadgets;
 	GameWindow *m_slots[MAX_SLOTS][6] = {};
+	const AptCharacterInst *m_extendedRowsParent = nullptr;
+	std::array<float, LEGACY_MAX_SLOTS> m_retailRowY{};
+	GameWindow *m_slotScroll = nullptr;
+	GameWindow *m_slotRange = nullptr;
+	int m_firstVisibleSlot = 0;
+	int m_layoutCapacity = LEGACY_MAX_SLOTS;
 	GameWindow *m_mapList = nullptr;
+	GameWindow *m_mapCapacityFilter = nullptr;
+	bool m_largeMapsOnly = false;
 	std::vector<std::string> m_mapKeys;     // the map key of each MapList row (MpGameSetup +0x398)
 	std::vector<int> m_mapStates;           // lane OWNERFIX-3: each row's conquest state
 	std::vector<std::string> m_mapImages;   // lane OWNERFIX-3: each row's column 0 image

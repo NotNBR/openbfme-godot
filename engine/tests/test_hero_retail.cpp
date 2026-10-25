@@ -21,6 +21,8 @@
 #include "GameLogic/Damage.h"
 #include "GameClient/ControlBarCommands.h"
 #include "GameClient/LiveScripting.h"
+#include "GameClient/ClientEvents.h"
+#include "GameClient/DrawableManager.h"
 #include "GameLogic/Economy.h"
 #include "GameLogic/EconomySettings.h"
 #include "GameLogic/GameLogic.h"
@@ -2309,4 +2311,149 @@ TEST_CASE("hero retail: DualWeaponBehavior's UseRealVictimRange reads the AI's c
 	}
 	data->m_useRealVictimRange = saved;
 	CHECK(closeSeen);
+}
+
+TEST_CASE("capture flag presentation: authored capture events select one faction and snapshot the capturer colour")
+{
+	REQUIRE_RETAIL_WORLD(sh);
+	Game g(sh, "FactionMen", "FactionMordor", true);
+	ArchiveW3DFileSource source(*sh.mount->fs);
+	WW3DAssetManager assets(source);
+	DrawableManager drawables(assets, *g.logic);
+	ClientEventRecorder events(*g.logic);
+	g.logic->setClientHooks(&events);
+	struct Detach { GameLogic &logic; ~Detach() { logic.setClientHooks(nullptr); } } detach{ *g.logic };
+	Object *flag = g.make(sh.world->things().findTemplate("CaptureFlag"), g.players.getNeutralPlayer(), 1000, 1000);
+	Object *men = g.make(sh.world->things().findTemplate("MenPorter"), g.me, 1100, 1000);
+	Object *mordor = g.make(sh.world->things().findTemplate("MordorPorter"), g.enemy, 1200, 1000);
+	g.me->setPlayerColor(0xFF123456u);
+	g.enemy->setPlayerColor(0xFFABCDEFu);
+	for (int i = 0; i < 3; ++i) g.logic->runLogicFrame();
+	drawables.applyEvents(events.take());
+	AIUpdateInterface *flagAI = flag->getAIUpdateInterface();
+	REQUIRE(flagAI);
+	// Hold the AI asleep across START_CAPTURE and the five-frame cancellation.
+	g.logic->friend_awakenUpdateModule(flag, flagAI, g.logic->getFrame() + 100);
+	for (Object *porter : { men, mordor })
+	{
+		REQUIRE(porter->getAIUpdateInterface());
+		g.logic->friend_awakenUpdateModule(porter, porter->getAIUpdateInterface(), g.logic->getFrame() + 100);
+	}
+	const auto modelChanges = g.scripting->stats().modelConditionChanges;
+	REQUIRE(flag->isKindOfName("CAPTUREFLAG"));
+	const int start = 0x6E; // RW START_CAPTURE (SpecialAbilityModules.cpp)
+	for (const auto &capturer : { std::make_pair(men, std::string("Men")), std::make_pair(mordor, std::string("Mordor")) })
+	{
+		flag->setCapturerID(capturer.first->getID());
+		std::string side;
+		CHECK(g.scripting->objectCapturingPlayerSide((int)flag->getID(), &side));
+		CHECK(side == capturer.second);
+		flag->setModelConditionState(start, true);
+		CHECK(flag->testModelCondition(start));
+		g.logic->runLogicFrame();
+		CHECK(g.scripting->stats().modelConditionChanges == modelChanges);
+		const auto captured = events.take();
+		drawables.applyEvents(captured);
+		const Drawable *drawable = drawables.findByObject(flag->getID());
+		REQUIRE(drawable);
+		CHECK(drawable->getHouseColor() == capturer.first->getControllingPlayer()->getPlayerColor());
+		for (const DrawEntry &entry : drawable->entries())
+		{
+			if (!entry.draw) continue;
+			const auto frame = entry.draw->frame();
+			for (const std::string &faction : { "MEN", "MORDOR", "ISENGARD", "WILD", "ELVES", "DWARVES", "ANGMAR" })
+			{
+				const std::string flagName = "FLAG_" + faction;
+				bool hidden = false;
+				for (const std::string &name : frame.hiddenSubObjects)
+					if (name == flagName || (name.size() > flagName.size() && name.substr(name.size() - flagName.size()) == flagName)) hidden = true;
+				CHECK(hidden == (faction != (capturer.first == men ? "MEN" : "MORDOR")));
+			}
+		}
+		std::vector<std::string> shown;
+		std::uint32_t colour = 0;
+		for (const ClientEvent &event : captured)
+		{
+			if (event.object != flag->getID()) continue;
+			if (event.kind == ClientEvent::SHOW_SUB_OBJECT && event.visible) shown.push_back(event.name);
+			if (event.kind == ClientEvent::MODEL_FLUSH && event.hasHouseColor)
+			{
+				CHECK(shown == std::vector<std::string>{ capturer.first == men ? "FLAG_MEN" : "FLAG_MORDOR" });
+				colour = event.houseColor;
+			}
+		}
+		CHECK(shown == std::vector<std::string>{ capturer.first == men ? "FLAG_MEN" : "FLAG_MORDOR" });
+		CHECK(colour == capturer.first->getControllingPlayer()->getPlayerColor());
+		flag->setCapturerID(INVALID_ID);
+		flag->setModelConditionState(start, false);
+		flag->setModelConditionState(0x6F, true); // CANCEL_CAPTURE
+		g.logic->runLogicFrame();
+		CHECK(g.scripting->stats().modelConditionChanges == modelChanges);
+		// The explicit mid-frame flush uses the same dispatch boundary.
+		events.flushModelConditions(*flag);
+		const auto cancelled = events.take(false);
+		drawables.applyEvents(cancelled);
+		CHECK(drawables.findByObject(flag->getID())->getHouseColor() == g.players.getNeutralPlayer()->getPlayerColor());
+		shown.clear();
+		for (const ClientEvent &event : cancelled)
+		{
+			if (event.object != flag->getID()) continue;
+			if (event.kind == ClientEvent::SHOW_SUB_OBJECT && event.visible) shown.push_back(event.name);
+			if (event.kind == ClientEvent::MODEL_FLUSH) CHECK(event.houseColor == g.players.getNeutralPlayer()->getPlayerColor());
+		}
+		CHECK(shown == std::vector<std::string>{ "FLAG_NEUTRAL" });
+		// Cancellation must already be visible while the AI sleeps through its lifetime.
+		for (int i = 0; i < 5; ++i) g.logic->runLogicFrame();
+		CHECK(g.scripting->stats().modelConditionChanges == modelChanges);
+		flag->setModelConditionState(0x6F, false);
+		drawables.applyEvents(events.take());
+	}
+	flag->setCapturedTeam(g.me->getDefaultTeam());
+	flag->setModelConditionState(0x77, true); // CAPTURED
+	CHECK(g.scripting->objectPlayerSide((int)flag->getID()) == "Men");
+	std::vector<std::string> completedFlags;
+	const auto completed = events.take();
+	drawables.applyEvents(completed);
+	CHECK(drawables.findByObject(flag->getID())->getHouseColor() == g.me->getPlayerColor());
+	for (const ClientEvent &event : completed)
+	{
+		if (event.object != flag->getID()) continue;
+		if (event.kind == ClientEvent::SHOW_SUB_OBJECT && event.visible) completedFlags.push_back(event.name);
+		if (event.kind == ClientEvent::MODEL_FLUSH) CHECK(event.houseColor == g.me->getPlayerColor());
+	}
+	CHECK(completedFlags == std::vector<std::string>{ "FLAG_MEN" });
+	// A later AI condition check must not replay animation-state LuaEvents.
+	std::array<std::uint32_t, 19> staleAIConditions{};
+	g.logic->scriptModelConditionEvents(*flag, staleAIConditions);
+	CHECK(events.take().empty());
+
+	CHECK(g.logic->notedStopHits().count("[S-090] capture flag condition-state LuaEvents run on the logic owner; render-frame and script-transition event timing remain unported") == 1);
+
+}
+
+TEST_CASE("capture flag presentation: callbacks append dirty objects during the same flush")
+{
+	REQUIRE_RETAIL_WORLD(sh);
+	Game g(sh, "FactionMen", "FactionMordor", true);
+	ClientEventRecorder events(*g.logic);
+	g.logic->setClientHooks(&events);
+	struct Detach { GameLogic &logic; ~Detach() { logic.setClientHooks(nullptr); logic.setAnimationConditionEventProc({}); } } detach{ *g.logic };
+	Object *flag = g.make(sh.world->things().findTemplate("CaptureFlag"), g.players.getNeutralPlayer(), 1000, 1000);
+	std::vector<Object *> others;
+	for (int i = 0; i < 64; ++i)
+		others.push_back(g.make(sh.world->things().findTemplate("MenPorter"), g.me, 1100, 1000));
+	events.take();
+	g.logic->setAnimationConditionEventProc([&](Object &, const std::array<std::uint32_t, 19> &) {
+		for (Object *obj : others) obj->setModelConditionState(0x6E, true);
+	});
+	flag->setModelConditionState(0x6E, true);
+	const auto batch = events.take();
+	for (Object *obj : others)
+	{
+		int flushes = 0;
+		for (const auto &event : batch)
+			if (event.kind == ClientEvent::MODEL_FLUSH && event.object == obj->getID()) ++flushes;
+		CHECK(flushes == 1);
+	}
+	CHECK(events.take().empty());
 }

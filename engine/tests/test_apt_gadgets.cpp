@@ -1564,3 +1564,35 @@ TEST_CASE("TextEntry: RotWK's character validator (RW 0x75E4DF) refuses the Thai
 	CHECK(GadgetTextEntryValidateCharacter(u'Q', 0x40));
 	CHECK(GadgetTextEntryValidateCharacter(u'Q', 0x100)); // only the low byte is read
 }
+
+TEST_CASE("menufix2 gadgets: a list box that outlives its screen's owner window owns itself again; a mouse move over it reaches no freed window")
+{
+	// lane MENUFIX-2: the menu inventory crashed (SIGSEGV in winSendSystemMsg from GadgetListBoxInput, a mouse move) after Create-a-Hero's owner window
+	// was destroyed while one of its list boxes lived on. An Apt screen's gadgets are owned by a hidden window that is not their parent
+	// (AptGadgetLayer::createOwnerWindow); AptGadgetLayer::destroyOwnerWindow now hands them back to themselves (GameWindowManager::winReleaseOwned)
+	GadgetFx fx;
+	std::vector<Msg> screenMsgs;
+	WinInstanceData inst;
+	inst.m_style = GWS_USER_WINDOW;
+	GameWindow *screen = fx.gwm.winCreate(nullptr, WIN_STATUS_HIDDEN | WIN_STATUS_NO_INPUT, 0, 0, 0, 0, [&screenMsgs](GameWindow *w, std::uint32_t msg, WindowMsgData d1, WindowMsgData d2) {
+		if (msg != GWM_CREATE)
+		{
+			screenMsgs.push_back({ msg, w, d1, d2 });
+		}
+		return MSG_HANDLED;
+	}, &inst);
+	GameWindow *list = fx.load(listboxWnd(160, 100), 10, 10);
+	list->winSetOwner(screen);
+	fx.move(50, 50); // over the list box: its owner hears the pointer come in
+	CHECK(GadgetFx::count(screenMsgs, GBM_MOUSE_ENTERING) == 1);
+	fx.move(500, 500);
+	fx.gwm.winReleaseOwned(screen);
+	CHECK(list->winGetOwner() == list);
+	fx.gwm.winDestroy(screen);
+	fx.gwm.processDestroyList();
+	screenMsgs.clear();
+	fx.move(50, 50);
+	fx.move(500, 500);
+	CHECK(screenMsgs.empty());
+	CHECK(list->winGetOwner() == list);
+}

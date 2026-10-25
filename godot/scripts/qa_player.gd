@@ -12,6 +12,16 @@
 ## G1: the run animation plays in place) and a unit the AI calls moving that has not moved for 30 s of game time (stuck: lost infantry, F4 / G2).
 extends Node
 
+const ScenarioPlayer := preload("res://scripts/scenario_player.gd")
+
+class RunGuard extends ScenarioPlayer:
+	func _run(p_game: Node, scenarios: PackedStringArray) -> void:
+		await _run_scenarios(scenarios, [Callable(p_game, "_run_qa_scenario")])
+
+	func _scenario_label() -> String:
+		return "QA-RUN"
+
+
 const DIK_Q := 0x10
 const DIK_ESCAPE := 0x01
 const DIK_A := 0x1E

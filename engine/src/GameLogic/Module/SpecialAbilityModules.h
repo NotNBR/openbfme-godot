@@ -27,7 +27,7 @@
 // Not ported (stops S-859 .. S-863, see stopLines): the special objects (no retail ability names SpecialObject), the capture / garrison /
 // disguise / grab ability enums of the trigger switch, the face command before triggering (no AI face state: the facing check is the AI idle
 // test), the line of sight test of ApproachRequiresLOS, the approach point of RW 0x851607 (the move goes to the target), sounds and voices
-// (client), FleeRangeAfterCompletion, MountedTemplate (the object replacement RW 0x8B140D), the emotion system (Elendil's terror pulse is counted).
+// (client), FleeRangeAfterCompletion, the emotion system (Elendil's terror pulse is counted). MountedTemplate's replacement runs since lane HERO-2 (S-861).
 
 #pragma once
 
@@ -170,6 +170,20 @@ public:
 	bool m_generateUncontrollableFear = false;           // + 0xD5
 	float m_emotionPulseRadius = 50.0f;                  // + 0xD8
 	std::shared_ptr<const ObjectFilter> m_objectFilter;  // + 0xDC
+	static void buildFieldParse(MultiIniFieldParse &p);
+};
+
+// lane SUMMON-1: SummonReplacementSpecialAbilityUpdate (the Thrall Master's summons; data constructor RW 0x8B21DA, 0xF8 bytes, from the data factory
+// RW 0x64F5AF). ModelConditionSpecialAbilityUpdate's data (+ 0xD0 .. + 0xDC, the same defaults) with ToggleMounted's five rows moved to + 0xE0 .. + 0xEC;
+// the field table RW 0xC05AF8 lists all ten in that order.
+class SummonReplacementSpecialAbilityUpdateModuleData : public ModelConditionSpecialAbilityUpdateModuleData
+{
+public:
+	float m_opacityTarget = 0.0f;                              // + 0xE0 (client)
+	bool m_triggerInstantlyOnCreate = false;                   // + 0xE4
+	bool m_cancelDisguiseWhenDismounting = false;              // + 0xE5
+	std::string m_mountedTemplate;                             // + 0xE8
+	std::vector<std::string> m_synchronizeTimerOnSpecialPower; // + 0xEC
 	static void buildFieldParse(MultiIniFieldParse &p);
 };
 
@@ -325,6 +339,8 @@ public:
 	CreateModuleInterface *getCreate() override { return this; }
 	void onCreate() override {}
 	void onBuildComplete() override; // RW 0x8B11FE (create interface slot 1): TriggerInstantlyOnCreate triggers at once
+	// RW 0x8B1FDA (slot 0 of the special power update interface RW 0xC6BCB8, shared with SummonReplacement; lane SUMMON-1)
+	void initiateIntentToDoSpecialPower(const SpecialPowerTemplate *t, Object *target, const Coord3D *loc, unsigned options, int extra) override;
 	void finishAbility(bool ownerDying, bool aborted) override; // RW 0x8B1219
 	unsigned toggles() const { return m_toggles; }
 	ObjectID replacement() const { return m_replacement; }
@@ -392,6 +408,39 @@ protected:
 private:
 	int specialPowerCondition() const;
 	const ModelConditionSpecialAbilityUpdateModuleData *m_mc;
+	unsigned m_emotions = 0;
+};
+
+// lane SUMMON-1: SummonReplacementSpecialAbilityUpdate (vtable RW 0xC6C028, constructor RW 0x8B1F59, 0x90 bytes: + 0x8C the replace-after-packing flag;
+// the create interface RW 0xC6C014 at + 0x88, the special power update interface RW 0xC6BCB8 shared with ToggleMounted). Its slots mix the two classes
+// it merges: ToggleMounted's trigger with the replacement RW 0x8B228C (RW 0x8B140D's twin over the + 0xE8 / + 0xEC fields) and ModelCondition's emotion
+// pulse (RW 0x8B2584), ToggleMounted's finishAfterPacking (RW 0x8B202A) and initiate (RW 0x8B1FDA), ModelCondition's startUnpacking (RW 0x89455B), a
+// finishAbility of both (RW 0x8B208A), and the base continuePreparation (RW 0x852A3E: no early out at the second trigger).
+class SummonReplacementSpecialAbilityUpdate : public SpecialAbilityUpdate, public CreateModuleInterface
+{
+public:
+	OBFME_MODULE_XFER(SummonReplacementSpecialAbilityUpdate)
+	SummonReplacementSpecialAbilityUpdate(Thing *thing, const SummonReplacementSpecialAbilityUpdateModuleData *data); // RW 0x8B1F59
+	CreateModuleInterface *getCreate() override { return this; }
+	void onCreate() override {}
+	void onBuildComplete() override; // RW 0x8B1FBF: TriggerInstantlyOnCreate triggers at once
+	void initiateIntentToDoSpecialPower(const SpecialPowerTemplate *t, Object *target, const Coord3D *loc, unsigned options, int extra) override; // RW 0x8B1FDA
+	void finishAbility(bool ownerDying, bool aborted) override; // RW 0x8B208A
+	unsigned summons() const { return m_summons; }
+	ObjectID replacement() const { return m_replacement; }
+	unsigned emotionRequests() const { return m_emotions; }
+	void crc(StateHasher &h) const override;
+
+protected:
+	void triggerAbilityEffect() override; // RW 0x8B2584
+	void finishAfterPacking() override;   // RW 0x8B202A
+	void startUnpacking() override;       // RW 0x89455B
+
+private:
+	const SummonReplacementSpecialAbilityUpdateModuleData *m_sr;
+	bool m_replaceAfterPacking = false;  // + 0x8C
+	unsigned m_summons = 0;              // the replacements and mount toggles made (hashed)
+	ObjectID m_replacement = INVALID_ID; // the MountedTemplate object of the last replacement (tests; hashed)
 	unsigned m_emotions = 0;
 };
 

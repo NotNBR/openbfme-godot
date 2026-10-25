@@ -21,6 +21,7 @@
 #include "GameLogic/ActionManager.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/BehaviorModule.h"
 #include "GameLogic/Module/GateModules.h"
 #include "GameLogic/Module/PortalModules.h"
 #include "GameLogic/NewGame/NewGame.h"
@@ -815,11 +816,12 @@ TEST_CASE("wall2 raised retail: Minas Tirith: MinisGate1's RaisedWallMesh P1 is 
 		MESSAGE("  " << p);
 	}
 	// the data: MinisGate1's model GBMinGate1 has the sub objects GBMGATE9 and GBMGATE1A only (no P1 .. P3): no walkway and no ramps, as retail's
-	// getPolygon / getRamp find none; the 13 problems name the meshes the Minas Tirith models lack
+	// getPolygon / getRamp find none; the 7 problems name the meshes the Minas Tirith models lack (lane BRIDGE-1: 13 before RW 0x936B7D's KindOf gate;
+	// the other 6 were meshes of structures without WALK_ON_TOP_OF_WALL, which retail never classifies; the wall-top and ramp cells are the same)
 	CHECK(gates == 1);
 	CHECK(overPassage == 0);
 	CHECK(pf.raisedLayerCount() == 0);
-	CHECK(g.game->report().wallMeshProblems.size() == 13);
+	CHECK(g.game->report().wallMeshProblems.size() == 7);
 	CHECK(wallCells == 8291);
 	CHECK(rampCells == 1874);
 	// a hero beside the fortress's command centre walks onto the nearest wall top it reaches and stands at its height
@@ -855,4 +857,122 @@ TEST_CASE("wall2 raised retail: Minas Tirith: MinisGate1's RaisedWallMesh P1 is 
 	CHECK(isWallLayer(ai->adapter().getLayer()));
 	CHECK(at.z == pf.getLayerHeight(at.x, at.y, ai->adapter().getLayer()));
 	CHECK((at.x - top.x) * (at.x - top.x) + (at.y - top.y) * (at.y - top.y) < 900.0f); // tolerance: within the close-enough distance of the goal cell
+}
+
+// From lane BRIDGE-1 (its test "MAP WOR Erebor: DaleBridge ..."): RotWK's classifyObjectFootprint (RW 0x936B7D) calls ClassifyWall (RW 0x9378A3) only with
+// the WALK_ON_TOP_OF_WALL flag (template + 0x10F bit 4, tested at RW 0x937881). Erebor's seven DaleBridges have a WallBoundsMesh and ramps but not the
+// KindOf: their deck cells stay on the ground layer and no wall height comes from their deck (300.6; EreborEdgeBridge's, a WALK_ON_TOP_OF_WALL bridge, is 303.6)
+TEST_CASE("wall2 walls retail: MAP WOR Erebor: DaleBridge (meshes, no WALK_ON_TOP_OF_WALL) is no wall top or ramp: RW 0x936B7D calls ClassifyWall only for the KindOf")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s, false, "maps/map wor erebor/map wor erebor.map");
+	g.frames(2);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	int dale = 0;
+	for (Object *o = g.game->logic().getFirstObject(); o; o = o->getNextObject())
+	{
+		if (o->getTemplate()->getName() != "DaleBridge")
+		{
+			continue;
+		}
+		++dale;
+		CHECK_FALSE(o->isKindOfName("WALK_ON_TOP_OF_WALL"));
+		const PathfindWallGeometry *geo = g.game->ai().adapterFor(*o).getWallGeometry();
+		REQUIRE(geo); // the meshes are there (WallBoundsMesh P1, RampMesh1 R1, RampMesh2 R2) ...
+		for (const PathfindWallSurface &w : geo->walls)
+		{
+			const float cx = (w.loX + w.hiX) * 0.5f, cy = (w.loY + w.hiY) * 0.5f;
+			const PathfindCell *c = pf.cellAt((int)(cx / 10.0f), (int)(cy / 10.0f));
+			REQUIRE(c);
+			CHECK(c->getLayer() == LAYER_GROUND); // ... but the deck's cells stay on the ground layer
+			CHECK(pf.getLayerAt(cx, cy) == LAYER_GROUND);
+		}
+	}
+	CHECK(dale == 7);
+	for (float h : pf.wallHeights())
+	{
+		CHECK(h > 302.0f); // tolerance: no wall height at DaleBridge's deck (300.6); EreborEdgeBridge's is 303.6
+	}
+}
+
+namespace
+{
+// a point on the deck of the wall piece `piece` whose cell is a CLEAR wall-top cell of that piece, and its layer (searched from the deck box's centre outward)
+bool deckPoint(Pathfinder &pf, const PathfindWallSurface &deck, PathfindObjectID piece, Coord3D &out, PathfindLayerEnum &layer)
+{
+	const float cx = (deck.loX + deck.hiX) * 0.5f, cy = (deck.loY + deck.hiY) * 0.5f;
+	for (int r = 0; r < 20; ++r)
+	{
+		for (int dx = -r; dx <= r; ++dx)
+		{
+			for (int dy = -r; dy <= r; ++dy)
+			{
+				const Coord3D p{ cx + (float)dx * 10.0f, cy + (float)dy * 10.0f, 0.0f };
+				float z = 0.0f;
+				const PathfindCell *c = pf.cellAt((int)(p.x / 10.0f), (int)(p.y / 10.0f));
+				if (deck.heightAt(p.x, p.y, z) && c && isWallLayer(c->getLayer()) && c->getType() == PathfindCell::CELL_CLEAR && pf.wallPieceAt(p) == piece)
+				{
+					out = p;
+					layer = c->getLayer();
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+} // namespace
+
+// From lane BRIDGE-1 (its test "on MAP MP Anfalas a GenericTreeBridge ... deleted with a hero on its deck ..."): AIMover::refreshLayer, on the frame a
+// unit's settled layer becomes the ground (its wall top or bridge deck went away), puts a NO_Z_MOTIVE_FORCE non-horde unit at the terrain height there, as
+// RotWK's NO_Z_MOTIVE_FORCE height (RW 0x5E76AC case 0, RW 0x5E774A .. 0x5E7816; maintainCurrentPosition's tail RW 0x5E7CC7 -> RW 0x70BA76 for an idle
+// one) does; RotWK has no fall and no fall damage. An idle hero on a GenericTreeBridge's deck ends on the ground under it, alive and unhurt, when the
+// bridge is deleted (a script's delete, GameLogic::destroyObject)
+TEST_CASE("wall2 walls retail: on MAP MP Anfalas a hero idle on a GenericTreeBridge's deck ends on the ground under it, alive, when the bridge is deleted")
+{
+	OPENBFME_REQUIRE_START(s);
+	PortalGame g(*s, false, "maps/map mp anfalas/map mp anfalas.map");
+	g.frames(2);
+	Player *me = nullptr;
+	for (int i = 0; i < g.game->players().getPlayerCount() && !me; ++i)
+	{
+		Player *p = g.game->players().getNthPlayer(i);
+		me = p && p->getPlayerType() == PLAYER_HUMAN ? p : nullptr;
+	}
+	REQUIRE(me);
+	Pathfinder &pf = g.game->ai().pathfinder();
+	Object *bridge = g.first("GenericTreeBridge");
+	REQUIRE(bridge);
+	const ObjectID bridgeID = bridge->getID();
+	const PathfindWallGeometry *geo = g.game->ai().adapterFor(*bridge).getWallGeometry();
+	REQUIRE(geo);
+	REQUIRE(!geo->walls.empty());
+	Coord3D onDeck;
+	PathfindLayerEnum deckLayer = LAYER_INVALID;
+	REQUIRE(deckPoint(pf, geo->walls.front(), (PathfindObjectID)bridgeID, onDeck, deckLayer));
+	std::string error;
+	Object *hero = g.game->createObject("GondorBoromir", me->getPlayerIndex(), onDeck, 0.0f, &error);
+	REQUIRE_MESSAGE(hero, error);
+	// on the deck's surface (createObject puts it on the terrain; a map's units on walls carry their height)
+	onDeck.z = pf.getLayerHeight(onDeck.x, onDeck.y, deckLayer);
+	hero->setPosition(&onDeck);
+	AIUpdateInterface *ai = hero->getAIUpdateInterface();
+	REQUIRE(ai);
+	ai->aiIdle(CMD_FROM_AI); // not the guard of its creation point on the terrain under the deck
+	g.frames(3);
+	const Coord3D before = *hero->getPosition();
+	REQUIRE(ai->adapter().getLayer() == deckLayer);
+	REQUIRE(before.z > g.game->logic().getGroundHeight(before.x, before.y) + 5.0f); // tolerance: up on the deck
+	const float healthBefore = hero->getBodyModule()->getHealth();
+	g.game->logic().destroyObject(bridge);
+	g.frames(1);
+	CHECK(g.game->logic().findObjectByID(bridgeID) == nullptr);
+	g.frames(5);
+	const Coord3D after = *hero->getPosition();
+	INFO("the hero at " << after.x << ", " << after.y << ", " << after.z << " on layer " << (int)ai->adapter().getLayer());
+	CHECK_FALSE(hero->isEffectivelyDead());
+	CHECK(hero->getBodyModule()->getHealth() == healthBefore);
+	CHECK(ai->adapter().getLayer() == LAYER_GROUND);
+	CHECK(after.z == g.game->logic().getGroundHeight(after.x, after.y));
+	CHECK(pf.cellAt((int)(onDeck.x / 10.0f), (int)(onDeck.y / 10.0f))->getLayer() == LAYER_GROUND);
 }

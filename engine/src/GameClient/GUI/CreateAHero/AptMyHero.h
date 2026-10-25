@@ -39,6 +39,7 @@
 #pragma once
 
 #include "Common/CreateAHeroRecord.h"
+#include "GameClient/CreateAHeroStats.h"
 
 #include <array>
 #include <cstdint>
@@ -78,6 +79,7 @@ public:
 
 	CreateAHeroHero &hero() { return m_hero; }
 	const CreateAHeroHero &hero() const { return m_hero; }
+	CreateAHeroStats statistics; // client profile data, separate from the record
 	bool isNew() const { return m_new; }
 
 	// RW 0x9C0E03 (with RW 0x80BC55 copying the displayed hero): edit `hero`; a new hero (`fresh`) gets its attributes at their minimum and its default

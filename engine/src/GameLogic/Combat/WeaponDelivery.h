@@ -55,6 +55,10 @@ struct ProjectileShot
 // model space and composes it with the launcher's transform (RW 0x70BCE7). The answer is a pure function of the template's draw data, the drawable's model condition
 // flags (set by the logic, synchronously), its scale and its angle: the bones come from a pristine pose (the animation state's first animation at
 // FrameForPristineBonePositions, RW 0x4BD9A7), never from the animation frame the client is showing (lane RENDER-2, stop S-360).
+// RW 0x70BCE7 Object::convertBonePosToWorldPos (position only, no transform out): `obj`'s transform applied to the model-space point `bone`, retail's SSE
+// order (per row: z then y, then x, then the translation). Shared by the fire FX aim (RW 0x6CB85A) and TransitionDamageFX (RW 0x8BE077, lane FX-4)
+Coord3D ConvertBonePosToWorldPos(const Object &obj, const Coord3D &bone);
+
 class ProjectileLaunchOffsets
 {
 public:
@@ -94,6 +98,8 @@ public:
 };
 
 // RW 0x6CB779 (lane DECOMP-1): any nugget of `t` applicable to `victim` for a weapon owned by `ownerId` (each kind's slot 1; see WeaponDelivery.cpp)
+// RW 0x90D6F5 (a nugget's upgrade test: no forbidden upgrade, every required one on the source or its player); lane TARGET-1 exposes it for RW 0x6CB9F7
+bool WeaponNuggetUpgradeAllows(const WeaponNugget &n, const Object *source);
 bool WeaponTemplateAnyNuggetApplicable(GameLogic &logic, const WeaponTemplate &t, ObjectID ownerId, Object *victim, int depth = 0);
 
 // the damage a nugget list does to `victim` (when it is not null) or around `pos`: DamageNugget, DOTNugget (lane DECOMP-1) and MetaImpactNugget; every other kind is counted as unported by the caller's stats
@@ -113,7 +119,8 @@ public:
 	void requestAssistance(const WeaponShotTarget &target) override;
 
 private:
-	void emitFireFX(int curBarrel, const Object *victim, const Coord3D &victimPos); // lane FX-2: the fire FX block of RW 0x6CC915
+	void emitFireFX(int curBarrel, Object *victim, const Coord3D &victimPos); // lane FX-2: the fire FX block of RW 0x6CC915
+	Coord3D scatterTargetPos(Object *victim, Coord3D pos);                     // RW 0x6CC399 (lane FLANK-1)
 	Coord3D fireFXAimPosition(const Object &victim);                             // RW 0x6CB85A(source, victim, flag 1)
 	Object *m_source;
 	ObjectWeapons *m_weapons;

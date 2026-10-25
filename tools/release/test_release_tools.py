@@ -311,19 +311,23 @@ def test_known_issue_naming_a_vanished_stop_fails(tmp_path):
 
 def tar_bytes(members: dict[str, bytes], compression: str = "") -> bytes:
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:" + compression) as t:
+    # gzip headers carry a timestamp: compress separately with mtime 0 so the bytes (parametrize ids) never change
+    with tarfile.open(fileobj=buf, mode="w:" + ("" if compression == "gz" else compression)) as t:
         for n, data in members.items():
             info = tarfile.TarInfo(n)
             info.size = len(data)
             t.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    return __import__("gzip").compress(buf.getvalue(), mtime=0) if compression == "gz" else buf.getvalue()
 
 
 def zip_bytes(members: dict[str, bytes]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for n, data in members.items():
-            z.writestr(n, data)
+            info = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))  # fixed time: the bytes are parametrize ids
+            info.external_attr = 0o600 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
     return buf.getvalue()
 
 
@@ -333,7 +337,7 @@ def zip_bytes(members: dict[str, bytes]) -> bytes:
     ("data.bin", tar_bytes({"pkg/y.bin": BIG}, "bz2")),                  # a renamed .tar.bz2
     ("data.bin", tar_bytes({"pkg/y.bin": BIG}, "xz")),                   # a renamed .tar.xz
     ("plain.dat2", tar_bytes({"y.bin": WAV})),                           # an uncompressed tar
-    ("stream.res", __import__("gzip").compress(BIG)),                    # a gzip stream of a raw archive
+    ("stream.res", __import__("gzip").compress(BIG, mtime=0)),                    # a gzip stream of a raw archive
     ("deep.txt", zip_bytes({"a.bin": zip_bytes({"b.bin": tar_bytes({"c.bin": DDS}, "gz")})})),  # nested three deep
 ])
 def test_renamed_containers_are_opened(tmp_path, name, blob):

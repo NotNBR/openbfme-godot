@@ -153,6 +153,21 @@ void ActiveBody::setInitialHealth(int initialPercent)
 	updateDamageState();
 }
 
+// lane SUMMON-1: RW 0x8C47DE (vt[0x58]) with its second argument 0. A percent above 100.0 (RW 0xBD88D8, comiss) first scales the max health (interface + 0x10)
+// by percent * 0.01 (RW 0xBE5600; SSE: (max * percent) * 0.01); then the health moves to percent * 0.01 of the revive reference (interface + 0x1C) through
+// internalChangeHealth (vt[0x84], RW 0x8C31A5) by (percent * 0.01) * reference - health. The second argument's branch (RW 0x8C481D: the health set with three
+// random draws and RW 0x8C3CB8) is not a caller's here
+void ActiveBody::setInitialHealthPercent(float percent)
+{
+	const float scale = 0.01f; // RW 0xBE5600
+	if (percent > 100.0f)
+	{
+		m_maxHealth = SimMath::mulf32(SimMath::mulf32(m_maxHealth, percent), scale);
+	}
+	const float fraction = SimMath::mulf32(percent, scale);
+	internalChangeHealth(SimMath::subf32(SimMath::mulf32(fraction, m_reviveReference), m_currentHealth));
+}
+
 void ActiveBody::crc(StateHasher &h) const
 {
 	h.addFloat(m_currentHealth);
@@ -178,6 +193,10 @@ void ActiveBody::crc(StateHasher &h) const
 		h.addU32(m_lastDamagerPlayerMask ^ 0xCA391u); // lane CAMP-1: hashed only when set (a game without player damage keeps its hash)
 	}
 	h.addU32((std::uint32_t)m_curDamageState);
+	if (m_lastDamageType != DAMAGE_UNDEFINED)
+	{
+		h.addU32((std::uint32_t)m_lastDamageType ^ 0xFA40u); // lane FX-4: hashed only when a hit set it (a game without hits keeps its hash)
+	}
 }
 
 // RW 0x8C2A5D (setCorrectDamageState). TARGET FACTS read from the binary: the damage state field (+0x30) is rewritten from calcDamageState (RW 0x8C1B79); when it changed vslot 0x34 runs
@@ -220,13 +239,7 @@ void ActiveBody::updateDamageState(bool initial)
 	{
 		obj.clearAndSetModelConditionFlags(clear, set);
 	}
-	for (const std::unique_ptr<BehaviorModule> &m : obj.modules())
-	{
-		if (DamageModuleInterface *d = m->getDamage())
-		{
-			d->onBodyDamageStateChange(old, now); // ZH setCorrectDamageState tells the damage modules (RW CastleMemberBehavior RW 0x79A0ED)
-		}
-	}
+	// lane FX-4: RotWK's setCorrectDamageState does not tell the damage modules (ZH's does); attemptDamage / attemptHealing do (notifyDamageStateChange)
 	if (!obj.isKindOf((unsigned)CombatNames::kinds().structure))
 	{
 		return;
@@ -428,6 +441,7 @@ void ActiveBody::attemptDamage(DamageInfo &info)
 			amount = m_currentHealth;
 		}
 		// (13) internalChangeHealth(-amount) (the info goes down with it in RW: DelayedDeathBody's override reads and clears its kill flag)
+		const BodyDamageType stateBefore = m_curDamageState; // lane FX-4: RW 0x8C3FA3 keeps + 0x30 (EBP - 0x1C) before the health change (vslot 0x84, RW 0x8C4257)
 		m_currentInfo = &info;
 		internalChangeHealth(SimMath::subf32(0.0f, amount));
 		m_currentInfo = nullptr;
@@ -438,6 +452,7 @@ void ActiveBody::attemptDamage(DamageInfo &info)
 		m_lastDamageFrame = logic.getFrame();
 		m_lastDamager = info.m_input.m_sourceID;
 		m_lastDamagerPlayerMask = info.m_input.m_sourcePlayerMask; // lane CAMP-1
+		m_lastDamageType = info.m_input.m_damageType;               // lane FX-4: the record's + 0x10 (RW 0x7441E0 copies the whole input)
 		m_lastAttackerTaken = false; // lane PLAY-4: RW 0x8C42FA (+ 0xB6 cleared with the record)
 		// lane CAMP-1, RW 0x8C430F .. 0x8C4341: the last damage record's source object, when it exists, marks its controlling player as an attacker of the
 		// victim's controlling player (RW 0x6AAC05). INFERENCE: retail runs this after the record block whether or not the record changed this hit; here only
@@ -466,6 +481,12 @@ void ActiveBody::attemptDamage(DamageInfo &info)
 					d->onDamage(info);
 				}
 			}
+		}
+		// lane FX-4, RW 0x8C4389 .. 0x8C43C1: the damage state changed by this hit: every damage module's slot 2 (info, old, new), after the record copy and the
+		// onDamage loop, before the death
+		if (m_curDamageState != stateBefore)
+		{
+			notifyDamageStateChange(&info, stateBefore, m_curDamageState);
 		}
 		// (18) death: health <= 0 and the hit took health
 		if (m_currentHealth <= 0.0f && previous > 0.0f)
@@ -572,6 +593,20 @@ void ActiveBody::setMaxHealth(float newMax, int changeType)
 	}
 }
 
+// lane FX-4: the loops RW 0x8C4395 (attemptDamage) / RW 0x8C3139 (attemptHealing) run over the object's modules in list order: each module's DAMAGE
+// interface (module slot 0x10) slot 2, onBodyDamageStateChange(info, old, new). setCorrectDamageState (RW 0x8C2A5D) makes no such call: a health change by
+// any other path (construction, repair, scripts, the maximum health) tells no damage module
+void ActiveBody::notifyDamageStateChange(const DamageInfo *info, BodyDamageType oldState, BodyDamageType newState)
+{
+	for (const std::unique_ptr<BehaviorModule> &m : getObject()->modules())
+	{
+		if (DamageModuleInterface *d = m->getDamage())
+		{
+			d->onBodyDamageStateChange(info, oldState, newState);
+		}
+	}
+}
+
 // RW 0x8C2FC1 attemptHealing
 void ActiveBody::attemptHealing(DamageInfo &info)
 {
@@ -584,6 +619,7 @@ void ActiveBody::attemptHealing(DamageInfo &info)
 	const float amount = info.m_input.m_amount; // adjustDamage returns the amount for HEALING
 	if (amount > 0.0f)
 	{
+		const BodyDamageType stateBefore = m_curDamageState; // lane FX-4: RW 0x8C3080 keeps + 0x30 before the health change (vslot 0x84, RW 0x8C308A)
 		internalChangeHealth(amount);
 		info.m_output.m_actualDamageDealt = amount;
 		info.m_output.m_actualDamageClipped = SimMath::subf32(m_previousHealth, m_currentHealth);
@@ -603,6 +639,11 @@ void ActiveBody::attemptHealing(DamageInfo &info)
 				logic.fxEvents().emit(FXEventLog::objectEvent(FXEvent::OBJECT_FX, "HealingBuffFx", logic.getFrame(), fx, obj));
 			}
 		}
+		// lane FX-4, RW 0x8C3131 .. : the damage state changed by the healing: every damage module's slot 2 (info, old, new)
+		if (m_curDamageState != stateBefore)
+		{
+			notifyDamageStateChange(&info, stateBefore, m_curDamageState);
+		}
 	}
 }
 
@@ -612,7 +653,8 @@ void ActiveBody::attemptHealing(DamageInfo &info)
 // current DamageInfo pointer is null outside a hit (a snapshot is taken between frames); the armour report flag is the report's.
 void ActiveBody::xfer(Xfer &x)
 {
-	SnapshotXfer::version(x, 1, 1);
+	XferVersion v{ 1, 2 }; // 2: lane FX-4's last damage type
+	x.xferVersion(v);
 	xferBehaviorModule(x);
 	x.xferReal(&m_currentHealth);
 	x.xferReal(&m_previousHealth);
@@ -631,6 +673,10 @@ void ActiveBody::xfer(Xfer &x)
 	SnapshotXfer::enumIn(x, m_curDamageState, BODY_PRISTINE, BODY_RUBBLE, "a body's damage state");
 	SnapshotXfer::enumIn(x, m_lastDamageFXType, 0, SnapshotXfer::nameCount(TheDamageFXTypeNames) - 1, "a body's last damage FX type");
 	x.xferUnsignedInt(&m_damageFXThrottleUntil);
+	if (v.current >= 2)
+	{
+		SnapshotXfer::enumIn(x, m_lastDamageType, 0, SnapshotXfer::nameCount(TheDamageNames) - 1, "a body's last damage type");
+	}
 }
 
 void ImmortalBody::xfer(Xfer &x)

@@ -220,10 +220,15 @@ std::string AptCharacterInst::targetPath() const
 		}
 		else
 		{
-			out += "." + (c->m_instName.empty() ? "instance" + std::to_string(c->m_depth) : c->m_instName);
+			out += "." + c->pathSegment();
 		}
 	}
 	return out;
+}
+
+std::string AptCharacterInst::pathSegment() const
+{
+	return m_instName.empty() ? "instance" + std::to_string(m_depth) : m_instName;
 }
 
 void AptCharacterInst::trace(AptGC &gc)

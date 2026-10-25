@@ -96,7 +96,7 @@ bool isSingleLineKeyword(const std::string &keyword)
 }
 }
 
-void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &recorder, const std::vector<std::string> &skip, StubExtent mode)
+void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &recorder, const std::vector<std::string> &skip, StubExtent mode, bool realParsers)
 {
 	for (const std::string &keyword : RotwkBlockKeywords())
 	{
@@ -104,13 +104,17 @@ void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &r
 		{
 			continue;
 		}
-		if (keyword == "Locomotor")
+		if (!realParsers)
+		{
+			// fall through to the recording stub below
+		}
+		else if (keyword == "Locomotor")
 		{
 			// HORDE-1: a real parser (RW 0x5E8276) into TheLocomotorStore, not a recording stub.
 			registry.registerBlock(keyword, [](INI *ini) { LocomotorStore::parseLocomotorTemplateDefinitionGlobal(ini); });
 			continue;
 		}
-		if (keyword == "FXList")
+		else if (keyword == "FXList")
 		{
 			// FX-1: a real parser (RW 0x5e2518) into TheFXListStore; the recorder's store stands in when none is installed.
 			registry.registerBlock(keyword, [&recorder](INI *ini) {
@@ -136,7 +140,7 @@ void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &r
 			});
 			continue;
 		}
-		if (keyword == "FXParticleSystem")
+		else if (keyword == "FXParticleSystem")
 		{
 			// FX-1: a real parser (RW 0x5fc7db) into the template store of TheFXParticleSystemManager.
 			registry.registerBlock(keyword, [&recorder](INI *ini) {
@@ -162,18 +166,18 @@ void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &r
 			});
 			continue;
 		}
-		if (keyword == "Weapon")
+		else if (keyword == "Weapon")
 		{
 			// WEAPON-1: a real parser (RW 0x6CED65) into TheWeaponStore, not a recording stub.
 			registry.registerBlock(keyword, [](INI *ini) { WeaponStore::parseWeaponTemplateDefinitionGlobal(ini); });
 			continue;
 		}
-		if (keyword == "Armor")
+		else if (keyword == "Armor")
 		{
 			registry.registerBlock(keyword, [](INI *ini) { ArmorStore::parseArmorDefinitionGlobal(ini); }); // RW 0x5D8D1F
 			continue;
 		}
-		if (keyword == "DamageFX")
+		else if (keyword == "DamageFX")
 		{
 			registry.registerBlock(keyword, [](INI *ini) { DamageFXStore::parseDamageFXDefinitionGlobal(ini); }); // RW 0x762799
 			continue;

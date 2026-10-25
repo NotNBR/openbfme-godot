@@ -1,0 +1,38 @@
+{
+    "v": 1,
+    "detector": "D5-input-rate",
+    "detector_version": 1,
+    "game_id": "00000000000ac001",
+    "status": "ok",
+    "abstain_reason": null,
+    "frames": 1701,
+    "crc_parity": "match",
+    "settings": {
+        "window_frames": 25,
+        "threshold": 100
+    },
+    "players": [
+        {
+            "player_index": 3,
+            "slot": 0,
+            "name": "Player_1",
+            "band": "review",
+            "score": 1.0,
+            "encounters": 1,
+            "commands_total": 343,
+            "peak_5s": 155,
+            "peak_frame": 1220,
+            "events": [
+                {
+                    "frame": 1220,
+                    "time_s": 244.0,
+                    "command": "MSG_DO_MOVETO",
+                    "count": 155,
+                    "start_frame": 1204,
+                    "end_frame": 1226,
+                    "encounter": 1
+                }
+            ]
+        }
+    ]
+}

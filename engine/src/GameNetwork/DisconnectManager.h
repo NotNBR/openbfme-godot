@@ -199,7 +199,7 @@ private:
 	{
 		int sender = -1, target = -1;
 		std::uint32_t frame = 0;
-		std::uint8_t gone = 0;
+		std::uint16_t gone = 0;
 		std::uint64_t arrived = 0; ///< lane MP-DROP-1: when it arrived (a claim not confirmed within NetworkPlayerTimeoutTime is refused)
 	};
 	std::vector<PendingDrop> m_pendingDrops;

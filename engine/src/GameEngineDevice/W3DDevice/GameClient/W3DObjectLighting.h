@@ -48,6 +48,9 @@ struct W3DObjectLighting
 
 namespace W3DObjectLightingUtil
 {
+// RW 0x4AC97F / 0x54CFD0: shared SAS colour scale, also used by terrain.fxo.
+float effectColorScale(const GlobalLightingData &lighting);
+
 // The light sets of the map's current time of day. Fails (with *error) when the time of day is not 1..4.
 bool fromMap(const GlobalLightingData &lighting, W3DObjectLighting &out, std::string *error);
 

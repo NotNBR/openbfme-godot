@@ -683,7 +683,9 @@ void LiveGameAudio::drainDeferredAudio()
 bool LiveGameAudio::applyScriptRequest(const ScriptClientRequest &r)
 {
 	const std::string &a = r.action;
-	const bool sound = a == "PLAY_SOUND_EFFECT" || a == "SPEECH_PLAY" || a == "SOUND_PLAY_NAMED" || a == "PLAY_SOUND_EFFECT_AT";
+	// lane CAMPUI-1: MISSION_OBJECTIVE_SOUND is the tracker's ObjectiveAdded / ObjectiveCompletedSound (RW 0x835FAE / 0x836097: an AudioEventRTS with the local
+	// player's index, TheAudio vslot 100), played as PLAY_SOUND_EFFECT plays
+	const bool sound = a == "PLAY_SOUND_EFFECT" || a == "SPEECH_PLAY" || a == "SOUND_PLAY_NAMED" || a == "PLAY_SOUND_EFFECT_AT" || a == "MISSION_OBJECTIVE_SOUND";
 	const bool music = a == "MUSIC_SET_TRACK" || a == "MUSIC_PLAY_TRACK_FINITE_TIMES";
 	const bool volume = a == "MUSIC_SET_VOLUME" || a == "SOUND_SET_VOLUME" || a == "SPEECH_SET_VOLUME";
 	if (!sound && !music && !volume)

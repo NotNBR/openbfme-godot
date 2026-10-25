@@ -412,6 +412,15 @@ bool HordeContain::acceptCreatedMember(Object *obj)
 	return true;
 }
 
+bool HordeContain::hasFreeSlotFor(const Object &member)
+{
+	if (!m_core->built())
+	{
+		m_core->buildSlots(true);
+	}
+	return m_core->hasFreeSlotFor(member.getTemplate()->getName());
+}
+
 std::string HordeContain::getPayloadMemberTemplateName() const
 {
 	const std::vector<InitialPayloadEntry> &payload = m_data->horde.m_transport.m_initialPayload;

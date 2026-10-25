@@ -288,9 +288,12 @@ void Pathfinder::xfer(Xfer &x)
 		infoCount += c.hasInfo() ? 1u : 0u;
 	}
 	x.xferCount(&infoCount, 10, sizeof(LoadedInfo)); // index, obstacle, flags, kinds
-	if (loading && infoCount > (std::uint32_t)std::max(m_pool.capacity(), m_pool.growthLimit())) // lane PATHPERF-4: the pool grows up to its limit
+	// lane PATHPERF-4: the pool grows up to its limit, which is the SNAPSHOT's profile (its Uber flag comes after the infos, checked there); here only
+	// the most any profile holds, so a count no pool can take is refused before it is read
+	if (loading && infoCount > (std::uint32_t)std::max(m_pool.capacity(), (int)kCellInfoPoolMax))
 	{
-		throw XferException("pathfinder: the snapshot holds " + std::to_string(infoCount) + " cell infos, more than the pool of " + std::to_string(m_pool.capacity()));
+		throw XferException("pathfinder: the snapshot holds " + std::to_string(infoCount) + " cell infos, more than any pool of " +
+			std::to_string(std::max(m_pool.capacity(), (int)kCellInfoPoolMax)));
 	}
 	std::uint32_t index = 0, last = 0;
 	for (std::uint32_t n = 0; n < infoCount; ++n)
@@ -436,6 +439,27 @@ void Pathfinder::xfer(Xfer &x)
 	{
 		return;
 	}
+	// the snapshot's profile decides the pool's limit (setGrowthLimit below), not the loading game's (review of #62: a game whose profile is set after
+	// its map, AIWorld's setUberLimits when it differs, would check against the wrong one)
+	const std::size_t most = (std::size_t)std::max(m_pool.capacity(), uberLimits ? (int)kCellInfoPoolMax : 0);
+	if (infos.size() > most)
+	{
+		throw XferException("pathfinder: the snapshot holds " + std::to_string(infos.size()) + " cell infos, more than the pool of " + std::to_string(most));
+	}
+	// review of #63: the raised layers' cell infos come from the same pool as the ground's (applyWalls allocates them after the ground's); each count was
+	// checked alone, so a snapshot whose two together pass the pool is refused here, before anything changes
+	{
+		std::size_t raisedInfos = 0;
+		for (const WallState::Raised &r : walls.raised)
+		{
+			raisedInfos += r.used ? r.infos.size() : 0;
+		}
+		if (infos.size() + raisedInfos > most)
+		{
+			throw XferException("pathfinder: the snapshot holds " + std::to_string(infos.size()) + " ground and " + std::to_string(raisedInfos) +
+				" raised cell infos, more than the pool of " + std::to_string(most));
+		}
+	}
 	// the references: the zones name zones of the loaded table; the obstacles, the occupants and the reserving units are objects of the game (the
 	// pathfinder's world); request rings hold any id (a unit that died while queued stays queued; the handler skips it)
 	auto object = [&](PathfindObjectID id, const char *what) {
@@ -536,6 +560,8 @@ void Pathfinder::xfer(Xfer &x)
 	{
 		c.reset(nullptr); // the infos go with the pool below (nothing is released into the old free list)
 	}
+	// as setUberLimits: only an Uber pool grows. Set before the infos are taken again: an Uber snapshot's may pass the configured pool
+	m_pool.setGrowthLimit(uberLimits ? (int)kCellInfoPoolMax : 0);
 	m_pool.allocate(m_pool.capacity());
 	for (std::uint32_t i = 0; i < cells; ++i)
 	{
@@ -548,7 +574,7 @@ void Pathfinder::xfer(Xfer &x)
 		ICoord2D pos;
 		pos.x = (int)(li.index / (std::uint32_t)m_stride);
 		pos.y = (int)(li.index % (std::uint32_t)m_stride);
-		c.allocateInfo(m_pool, pos); // the count is within the pool (checked above)
+		c.allocateInfo(m_pool, pos); // the count is within the pool (checked above, against the snapshot's limit)
 		PathfindCellInfo *info = c.info();
 		info->m_obstacleID = li.obstacle;
 		info->m_blockedByAlly = li.flags & 1;
@@ -587,7 +613,7 @@ void Pathfinder::xfer(Xfer &x)
 	m_stops = std::move(stops);
 	m_uberBurst = uberBurst;
 	m_uberLimits = uberLimits;
-	applyWalls(walls, version >= 3);
+	applyWalls(walls, version >= 3); // its raised infos come from the pool after the ground's (the limit set above)
 }
 
 void Path::xfer(Xfer &x)

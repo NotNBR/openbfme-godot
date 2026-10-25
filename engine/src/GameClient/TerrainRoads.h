@@ -1,15 +1,18 @@
 // OpenBFME. GPL-3.0.
 // Derived from Command & Conquer Generals Zero Hour, (c) 2001-2003 Electronic Arts Inc., GPL-3.0.
 //
-// Road types (roads.ini) and the straight road segments of a map.
+// Road types (roads.ini), connected straight segments and atlas curve pieces.
 //   donor: ZH GameClient/TerrainRoads.cpp (Road <name>: Texture, RoadWidth, RoadWidthInTexture) and
 //     W3DRoadBuffer.cpp addMapObjects :1606-1686 (a FLAG_ROAD_POINT1 object immediately followed by a
 //     FLAG_ROAD_POINT2 object is one segment; identical locations are nudged by 0.25; identical segments
 //     are dropped), preloadRoadSegment :1142-1170 and loadFloat4PtSection :567-780 (corners = locations +-
 //     normal * (RoadWidth * RoadWidthInTexture / 2); columns every MAP_XY_FACTOR; u = U/(scale*4),
 //     v = 85/512 - V/(scale*4); z = the maximum cell height across the segment's width).
-//   target: Open-BFME-2 .../W3DRoadBuffer.cpp and W3DRoadBufferAdjustStacking.cpp exist for BFME2 but the
-//     tee/curve/cross-join machinery they extend is NOT ported here (stop S-036): only SEGMENT geometry.
+//   higher-priority donor: Open-BFME-2 Code/GameEngineDevice/Source/W3DDevice/GameClient/W3DRoadBuffer.cpp:
+//     miter, insertCurveSegmentAt and loadCurve supply the connected
+//     degree-two corner rules and atlas pieces. See docs/PATH_RENDERING.md for adaptations.
+//     Tee/four-way stubs and authored JOIN caps use the BFME2 atlas layout.
+//     Y/H junctions, cross-type alignment and BFME2 stacking remain S-036.
 //
 // Name-level INI scan, not the INI system (another lane).
 
@@ -49,6 +52,12 @@ struct RoadStrip
 
 struct RoadBuildReport
 {
+	int teeJoins = 0;
+	int fourWayJoins = 0;
+	int endCaps = 0;
+	int specialJunctionsPending = 0;
+	int miteredJoins = 0;
+	int roundedJoins = 0;
 	int pairs = 0;            // valid POINT1/POINT2 pairs
 	int orphanPoints = 0;     // road-flagged objects that do not form a pair
 	int duplicateSegments = 0;

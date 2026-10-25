@@ -663,7 +663,7 @@ TEST_CASE("online3: the relay reports silent slots (STATUS), binds a newer rejoi
 	RelayLogFile log;
 	std::string error;
 	REQUIRE_MESSAGE(RelayLogFile::load(relay.closedLogs().front(), log, &error), error);
-	CHECK(log.version == 2);
+	CHECK(log.version == 4); // lane ANTICHEAT-1 with ONLINE16-FIX: v4 for every game (u16 mask), kind-7 INPUT records before END (RelayCore.h)
 	REQUIRE(log.rejoins.size() == 1);
 	CHECK(log.rejoins[0].slot == 2);
 	CHECK(log.rejoins[0].generation == 1);

@@ -13,6 +13,7 @@
 // exists (no partial snapshots, SAVES.md T4). State the load rebuilds from the game's START and the data is declared by its hash section with the reason.
 
 #include "GameLogic/GameLogic.h"
+#include "Common/ModEngineFeatures.h"
 #include "GameLogic/SnapshotXfer.h"
 #include "Common/MpGameRules.h"
 
@@ -228,4 +229,8 @@ void GameLogic::xferCore(Xfer &x)
 		throw XferException("an execution profile of " + std::to_string((int)m_simulationProfile));
 	}
 	x.xferObjectID(&m_nextObjectID);
+	if (ModEngineFeatures::has(ModEngineFeature::EdainUnchainedUniqueProductionId))
+	{
+		x.xferUnsignedInt(&m_sharedProductionID); // lane MODS-3: a game with the feature (its identity names it; a retail save has no such field)
+	}
 }

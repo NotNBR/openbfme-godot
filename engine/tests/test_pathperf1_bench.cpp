@@ -11,6 +11,8 @@
 #include "PathfindTestUtil.h"
 
 #include "Common/Player.h"
+#include "Common/XferLoad.h"
+#include "Common/XferSave.h"
 #include "GameClient/LiveGame.h"
 #include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/GameLogic.h"
@@ -22,6 +24,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iterator>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -442,6 +446,120 @@ TEST_CASE("pathperf4 save: the pathfinder's configuration hash is the one earlie
 	CHECK(pf.configHash() == 56852104u);
 	pf.setUberLimits(true);
 	CHECK(pf.configHash() == 56852104u);
+}
+
+// review of #62 (Greptile P1 on 210a92a82): the cell-info pool grows only with the Uber limits on (Pathfinder::setUberLimits). A Faithful pathfinder keeps retail's fixed pool
+// (gamedata 60,000 records, PathfindConfig::cellInfoPoolSize): the 60,001st info fails; an Uber one (or a Faithful one switched to Uber) adds a block of
+// half the capacity (PathfindCellInfoPool::get). The snapshot keeps the limits: an Uber pathfinder's 60,001 infos load into a fresh Faithful game (the
+// snapshot's flag turns the growth on), a Faithful one's load with the pool still fixed, and a snapshot claiming Faithful with more infos is refused
+TEST_CASE("pathperf4: a Faithful pathfinder's cell-info pool never grows past its 60,000 records, an Uber one's does, and the snapshot keeps the limit")
+{
+	pathtest::SyntheticTerrain terrain{ 300, 300 }; // 90,000 cells
+	pathtest::TestWorld world;
+	PathfindConfig config = pathtest::testConfig();
+	config.cellInfoPoolSize = 60000; // gamedata.ini's (AIPathfindConfig.cpp)
+	// a cell info on every cell in index order until the pool runs out or `limit` are taken; the count taken
+	auto fill = [](Pathfinder &pf, int limit) {
+		int taken = 0;
+		for (int x = 0; x < 300 && taken < limit; ++x)
+		{
+			for (int y = 0; y < 300 && taken < limit; ++y)
+			{
+				PathfindCell *c = pf.getCell(LAYER_GROUND, x, y);
+				REQUIRE(c != nullptr);
+				if (c->hasInfo())
+				{
+					continue;
+				}
+				ICoord2D pos;
+				pos.x = x;
+				pos.y = y;
+				if (!c->allocateInfo(pf.pool(), pos))
+				{
+					return taken;
+				}
+				++taken;
+			}
+		}
+		return taken;
+	};
+	auto save = [](Pathfinder &pf) {
+		XferSave xs;
+		pf.xfer(xs);
+		return xs.data();
+	};
+	auto load = [&](const std::vector<std::uint8_t> &bytes, std::string *error) {
+		auto pf = std::make_unique<Pathfinder>(config, &world);
+		pf->newMap(terrain);
+		try
+		{
+			XferLoad xl(bytes);
+			pf->xfer(xl);
+		}
+		catch (const XferException &e)
+		{
+			*error = e.what();
+		}
+		return pf;
+	};
+
+	Pathfinder faithful(config, &world);
+	faithful.newMap(terrain);
+	REQUIRE(!faithful.uberLimits());
+	REQUIRE(faithful.pool().freeCount() == 60000);
+	CHECK(fill(faithful, 90000) == 60000);
+	CHECK(faithful.pool().capacity() == 60000);
+	CHECK(faithful.pool().growthLimit() == 0);
+	CHECK(faithful.pool().growths() == 0);
+	CHECK(faithful.pool().exhaustedOnce());
+	CHECK(fill(faithful, 90000) == 0); // still full: the search fails, the reservation is dropped
+	const std::vector<std::uint8_t> faithfulBytes = save(faithful);
+
+	Pathfinder uber(config, &world);
+	uber.newMap(terrain);
+	uber.setUberLimits(true);
+	CHECK(uber.pool().growthLimit() == (int)Pathfinder::kCellInfoPoolMax);
+	CHECK(fill(uber, 60001) == 60001);
+	CHECK(uber.pool().capacity() == 90000); // one block of half the capacity
+	CHECK(uber.pool().growths() == 1);
+	CHECK(!uber.pool().exhaustedOnce());
+	const std::vector<std::uint8_t> uberBytes = save(uber);
+
+	// a Faithful game switched to Uber grows from then on; switched back, it grows no further
+	faithful.setUberLimits(true);
+	CHECK(fill(faithful, 1) == 1);
+	CHECK(faithful.pool().capacity() == 90000);
+	faithful.setUberLimits(false);
+	CHECK(faithful.pool().growthLimit() == 0);
+
+	std::string error;
+	std::unique_ptr<Pathfinder> fromFaithful = load(faithfulBytes, &error);
+	REQUIRE_MESSAGE(error.empty(), error);
+	CHECK(!fromFaithful->uberLimits());
+	CHECK(fromFaithful->pool().capacity() == 60000);
+	CHECK(fromFaithful->pool().growthLimit() == 0);
+	CHECK(fill(*fromFaithful, 90000) == 0); // the loaded Faithful pool is full and stays fixed
+	CHECK(fromFaithful->pool().growths() == 0);
+
+	std::unique_ptr<Pathfinder> fromUber = load(uberBytes, &error);
+	REQUIRE_MESSAGE(error.empty(), error);
+	CHECK(fromUber->uberLimits());
+	CHECK(fromUber->pool().growthLimit() == (int)Pathfinder::kCellInfoPoolMax);
+	CHECK(fromUber->pool().capacity() == 90000);
+	CHECK(fromUber->pool().freeCount() == 90000 - 60001);
+	std::vector<std::uint8_t> again = save(*fromUber);
+	CHECK(again == uberBytes);
+
+	// the Uber snapshot with its limits flag cleared (the flag and the two ring lengths, 16,384 each, follow the cell infos): refused, a Faithful pool
+	// holds no 60,001 infos
+	std::vector<std::uint8_t> claimsFaithful = uberBytes;
+	const std::uint8_t tail[] = { 1, 0x00, 0x40, 0, 0, 0x00, 0x40, 0, 0 };
+	auto at = std::search(claimsFaithful.begin(), claimsFaithful.end(), std::begin(tail), std::end(tail));
+	REQUIRE(at != claimsFaithful.end());
+	REQUIRE(std::search(at + 1, claimsFaithful.end(), std::begin(tail), std::end(tail)) == claimsFaithful.end());
+	*at = 0;
+	std::unique_ptr<Pathfinder> refused = load(claimsFaithful, &error);
+	CHECK(error == "pathfinder: the snapshot holds 60001 cell infos, more than the pool of 60000");
 }
 
 // review (#64): a game started Faithful that switched to Uber (a loaded save handed over to the player's profile, SAVE-2) and moved its request ring past

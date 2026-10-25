@@ -1,0 +1,11 @@
+# Runs openbfme-integrity.service every 5 minutes (the lobby keeps a game's roster 24 h after its end: findings must be posted within that window).
+[Unit]
+Description=OpenBFME integrity check every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

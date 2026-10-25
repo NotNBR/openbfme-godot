@@ -6,17 +6,15 @@
 ##              unlocked), a left click selects him; the Morgul Blade button before; a right click on it: MSG_DO_AUTO_ABILITY, the button glows; an enemy
 ##              hero walks up and the Witch-king casts the blade by himself (the auto cast count grows, the enemy's health drops); a second right
 ##              click: off, the glow goes
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 var _p1 = null # scripts/play1_player.gd: its input helpers (move_to / press / click, select_object, palantir_button)
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -25,15 +23,7 @@ func run(p_game: Node, scenarios: PackedStringArray) -> void:
 	_p1.hud = hud
 	_p1.world = world
 	_p1.shell = game._shell
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("AUTOCAST1 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("AUTOCAST1 %s: FAIL %s" % [s, r])
-	print("AUTOCAST1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func shot(name: String, around: Vector2 = Vector2(-1, -1)) -> void:

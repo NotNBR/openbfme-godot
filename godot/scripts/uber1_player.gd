@@ -8,13 +8,11 @@
 ## run per second (5 = the logic kept its clock), the living troops at the start and the end of the window, the profile and the renderer; the
 ## owner's bar is 144 fps with the 1% low at 144 or more (the line says met / missed: a measurement, not a failure). "UBER1 RESULT: <n> ok, <m>
 ## failed" ends the run (a failure is a battle that could not be made or measured).
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 
 const HORDES := ["GondorFighterHorde", "GondorFighterHorde", "GondorTowerShieldGuardHorde", "GondorArcherHorde"]
 const FOES := ["MordorFighterHorde", "MordorFighterHorde", "MordorFighterHorde", "MordorArcherHorde"]
@@ -23,7 +21,7 @@ const GAP := 160.0
 const MARGIN := 200.0
 
 
-func run(p_game: Node, troops: int) -> void:
+func _run(p_game: Node, troops: int) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -31,13 +29,11 @@ func run(p_game: Node, troops: int) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--uber1-seconds="):
 			seconds = a.substr(16).to_float()
-	var r: String = await _battle(troops, seconds)
-	if r == "":
-		ok_count += 1
-	else:
-		fail_count += 1
-		print("UBER1 battle %d: FAIL %s" % [troops, r])
-	print("UBER1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(PackedStringArray(["battle %d" % troops]), [_battle.bind(troops, seconds)])
+
+
+func _scenario_names(request: Variant) -> PackedStringArray:
+	return PackedStringArray(["battle %d" % int(request)])
 
 
 func _local_index() -> int:

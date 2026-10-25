@@ -348,6 +348,18 @@ void Apt::installNatives()
 		}
 		AptCharacterInst *copy = nullptr;
 		self->duplicateClip(s, AptValue::object(s), c.args[0], c.args[1], &copy);
+		// Flash 7's optional initializer is used by CahAppearance's tick loop
+		// for {_x: curX, _y: curY}. S-104: the EA native's initializer
+		// enumeration order is not decoded; retain that runtime disclosure.
+		if (copy && c.args.size() > 2 && c.args[2].isObject() && c.args[2].asObject())
+		{
+			if (self->noteCount("duplicate-init-object-unverified") == 0) self->note("duplicate-init-object-unverified", "[S-104] duplicateMovieClip initializer properties applied in enumerable order; EA property-copy order is unverified");
+			std::vector<std::string> names;
+			std::string error;
+			if (!c.args[2].asObject()->enumerateForIn(names, error)) c.vm.reportError(error);
+			else for (const auto &name : names)
+				c.vm.setMember(AptValue::object(copy), name, c.vm.getMember(c.args[2], name));
+		}
 		return copy ? AptValue::object(copy) : AptValue();
 	});
 	vm.defineNative(mc, "removeMovieClip", [self](AptCallInfo &c) -> AptValue {

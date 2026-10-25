@@ -3,6 +3,8 @@
 
 #include "GameClient/GUI/PlayerStatusInfo.h"
 
+#include "Common/ExtendedPlayerColors.h"
+
 #include "GameClient/GUI/GameTextSource.h"
 #include "GameClient/GUI/LoadScreenInfo.h"
 #include "GameClient/GUI/Skirmish/SkirmishSetup.h"
@@ -47,6 +49,14 @@ bool colorOf(const PlayerStatusInput &in, const SkirmishSetupSource &setup, int 
 	{
 		argb = in.observerColor;
 		return true;
+	}
+	if (in.game)
+	{
+		if (const auto *color = ExtendedPlayerColors::find(which, (int)setup.colors().size(), in.game->mapStartCount))
+		{
+			argb = 0xFF000000u | color->rgb;
+			return true;
+		}
 	}
 	if (which < 0 || which >= (int)setup.colors().size())
 	{
@@ -102,7 +112,8 @@ PlayerStatusInfo makePlayerStatusInfo(const PlayerStatusInput &in, const Skirmis
 		{
 			team = "Team:AI";
 		}
-		row.fields[2] = text(source, team);
+		row.fields[2] = game.mapStartCount > LEGACY_MAX_SLOTS && slot.teamNumber >= LEGACY_MAX_SLOTS / 2
+			? std::to_string(slot.teamNumber + 1) : text(source, team);
 		// RW 0x915D0B .. 0x915D66
 		const char *status = nullptr;
 		if (!slot.isAI() && in.network && !live.connected)

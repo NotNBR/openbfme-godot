@@ -84,6 +84,15 @@ void parseShowObjectHealth(INI *ini, void *instance, void *, const void *)
 	State *st = static_cast<State *>(instance);
 	INI::parseBool(ini, nullptr, &st->values.showObjectHealth, nullptr);
 }
+// lane FX-4: the camera shake's GameData fields (CameraSettings.h): user data 0 .. 5 = the intensities by shake type, 6 MaxShakeIntensity, 7 MaxShakeRange
+void parseShake(INI *ini, void *instance, void *, const void *userData)
+{
+	State *st = static_cast<State *>(instance);
+	const int k = (int)(std::uintptr_t)userData;
+	float &f = k < 6 ? st->values.shakeIntensity[k] : k == 6 ? st->values.maxShakeIntensity : st->values.maxShakeRange;
+	INI::parseReal(ini, nullptr, &f, nullptr); // RW 0x42ED00
+	st->values.shakeSeen |= 1u << k;
+}
 // lane UI-4: the selection marker's GameData fields (CameraSettings.h), written through the instance
 void parseShowSelectedUnitMarker(INI *ini, void *instance, void *, const void *)
 {
@@ -198,6 +207,14 @@ FieldParse kFields[] = {
 	{ "UseSimpleMergeDecals", parseUseSimpleMergeDecals, nullptr, 0 },             // RW + 0x9A7
 	{ "OpacityOfSimpleMergeDecals", parseOpacityOfSimpleMergeDecals, nullptr, 0 }, // RW + 0x9A8
 	{ "VeterancyPipDrawObjectFilter", parseVeterancyPipFilter, nullptr, 0 },
+	{ "ShakeSubtleIntensity", parseShake, (const void *)0, 0 },      // RW + 0xB74 (row RW 0xC00610)
+	{ "ShakeNormalIntensity", parseShake, (const void *)1, 0 },      // RW + 0xB78
+	{ "ShakeStrongIntensity", parseShake, (const void *)2, 0 },      // RW + 0xB7C
+	{ "ShakeSevereIntensity", parseShake, (const void *)3, 0 },      // RW + 0xB80
+	{ "ShakeCineExtremeIntensity", parseShake, (const void *)4, 0 }, // RW + 0xB84
+	{ "ShakeCineInsaneIntensity", parseShake, (const void *)5, 0 },  // RW + 0xB88
+	{ "MaxShakeIntensity", parseShake, (const void *)6, 0 },         // RW + 0xB8C
+	{ "MaxShakeRange", parseShake, (const void *)7, 0 },             // RW + 0xB90
 	{ nullptr, skipField, nullptr, 0 }
 };
 

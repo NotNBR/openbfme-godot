@@ -191,18 +191,17 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	{
 		line("uniform sampler2D w3d_hc_tex : " + repeatMipFilter + ", repeat_enable; // housecolor.ini texture: the team colour mask is its alpha");
 	}
-	line("varying vec2 v_uv0;");
-	line("varying vec2 v_uv1;");
+	// Varyings each take a location; Intel Arc (Mesa ANV) offers Forward+ 29 for normal-mapped buildings, Metal 31. The two UV sets
+	// share one vec4 (the same interpolation), and the world position stays a vertex() local: only the vertex lighting reads it.
+	line("varying vec4 v_uv;"); // xy UV, zw UV2
 	line("varying vec4 v_col;");
 	line("varying float v_fade;");
 	line("varying vec3 v_vpos;");
 	line("varying vec3 v_vnrm;");
 	line("varying vec3 v_wnrm;");
 	line("varying vec3 v_wview;");
-	// One flat varying carries per-instance lighting and team colour. Separate
-	// scalars exceed Godot Forward+'s 31-location budget for normal-mapped buildings.
+	// One flat varying carries per-instance lighting and team colour (separate scalars exceed the location budget).
 	line("varying flat vec3 v_instance;"); // x infantry light, y fog fraction, z packed house colour
-	line("varying vec3 v_wpos;");
 	if (k.Fx)
 	{
 		// normalmapped.fxo vs_2_0 (blob 22) oT1..oT3 / oT4..oT6: per light the tangent-space light vector and the normalized
@@ -334,8 +333,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 		line("\tTANGENT = normalize(w3d_to_godot(tg));");
 		line("\tBINORMAL = normalize(w3d_to_godot(bn));");
 	}
-	line("\tv_uv0 = UV;");
-	line(k.Uv2 ? "\tv_uv1 = UV2;" : "\tv_uv1 = UV;");
+	line(k.Uv2 ? "\tv_uv = vec4(UV, UV2);" : "\tv_uv = vec4(UV, UV);");
 	line("\tv_col = COLOR;");
 	line("\tv_fade = INSTANCE_CUSTOM.y;");
 	if (k.HouseColor)
@@ -346,7 +344,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	line("\tv_vnrm = normalize((MODELVIEW_NORMAL_MATRIX * NORMAL));");
 	line("\tv_wnrm = normalize(MODEL_NORMAL_MATRIX * NORMAL);");
 	line("\tv_wview = mat3(INV_VIEW_MATRIX) * normalize(v_vpos);");
-	line("\tv_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;");
+	line("\tvec3 wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;");
 	if (k.Fx)
 	{
 		// blob 22: world normal / binormal / tangent (World * vector, normalized), frame x = -binormal, y = -tangent, z = normal;
@@ -365,7 +363,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 			line("\t\tvec3 fx = normalize(cross(ax, wn));");
 			line("\t\tvec3 fy = cross(wn, fx);");
 		}
-		line("\t\tvec3 vv = normalize(CAMERA_POSITION_WORLD - v_wpos);");
+		line("\t\tvec3 vv = normalize(CAMERA_POSITION_WORLD - wpos);");
 		line("\t\tmat3 ld = v_instance.x > 0.5 ? w3d_ldir_inf : w3d_ldir_obj;");
 		for (int i = 0; i < 3; ++i)
 		{
@@ -383,7 +381,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 		// oD0.a = vertex alpha * Opacity, oD1.rgb = sum(colour * lit.z) * ColorSpecular * 0.5; the interpolators saturate both
 		line("\t{");
 		line("\t\tvec3 wn = normalize(MODEL_NORMAL_MATRIX * NORMAL);");
-		line("\t\tvec3 vv = normalize(CAMERA_POSITION_WORLD - v_wpos);");
+		line("\t\tvec3 vv = normalize(CAMERA_POSITION_WORLD - wpos);");
 		line("\t\tbool inf = v_instance.x > 0.5;");
 		line("\t\tmat3 lc = inf ? w3d_lcol_inf : w3d_lcol_obj;");
 		line("\t\tmat3 ld = inf ? w3d_ldir_inf : w3d_ldir_obj;");
@@ -424,7 +422,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 		switch ((W3DTexGen)k.TexGen[s])
 		{
 		case W3D_TEXGEN_UV:
-			in = std::string("vec4(") + (s == 0 ? "v_uv0" : "v_uv1") + ", 1.0, 0.0)";
+			in = std::string("vec4(") + (s == 0 ? "v_uv.xy" : "v_uv.zw") + ", 1.0, 0.0)";
 			break;
 		case W3D_TEXGEN_CAMERA_NORMAL:
 			in = k.ViewDependent[s] ? "vec4(vec3(v_wnrm.x, -v_wnrm.z, v_wnrm.y), 1.0)" : "vec4(v_vnrm.x, v_vnrm.y, -v_vnrm.z, 1.0)";

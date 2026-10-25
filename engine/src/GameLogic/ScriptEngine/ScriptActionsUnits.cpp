@@ -21,7 +21,7 @@
 //   * IDLE_ALL_UNITS RW 0x7BC631: the players of the parameter (an empty mask: every player whose + 0x5C is 0, a human) -> RW 0x6AFBBC(1): every member
 //     of the player's teams that is not a STRUCTURE and has an AI moves to its own position (aiMoveToPosition(pos, CMD_FROM_SCRIPT), RW 0x66C4CA).
 //   * NAMED_STOP_FLUSH RW 0x7C9CA2: an AI object: RW 0x756C87(3, id), RW 0x68DF11(1), aiIdle(CMD_FROM_SCRIPT).
-//   * NAMED_ATTACK_NAMED RW 0x7C8D86: aiAttackObject(victim, 0x7FFFFFFF shots, CMD_FROM_SCRIPT) (RW 0x66C536; a horde member: RW 0x77131B).
+//   * NAMED_ATTACK_NAMED RW 0x7C8D86: aiAttackObject(victim, 0x7FFFFFFF shots, CMD_FROM_SCRIPT) (RW 0x66C536; a GiantBirdAIUpdate, AI vslot 0x168: command 0x39 RW 0x77131B).
 //     TEAM_ATTACK_NAMED RW 0x7C4613: an AI group of the team (RW 0x70042A / 0x7A3D3D) attacks the object (RW 0x77208A).
 //   * ATTACK_MOVE_NAMED_UNIT_TO RW 0x7C858F / ATTACK_MOVE_TEAM_TO RW 0x7BF594: the waypoint by name (TheTerrainLogic vslot 0x88); the attack move.
 //   * NAMED_FOLLOW_WAYPOINTS RW 0x7C9196 / _EXACT RW 0x7C928D / NAMED_ATTACK_FOLLOW_WAYPOINTS RW 0x7C920F: the waypoint of the path label closest to
@@ -43,6 +43,12 @@
 //     RW 0x7C62BF: every slot of the unit's command set holding a button of that name runs Object::doCommandButton (RW 0x696FD2) / doCommandButtonAtObject
 //     (RW 0x697890) with CMD_FROM_SCRIPT; TEAM_USE_COMMANDBUTTON_ABILITY (team, button) RW 0x7C11EE: the button by name for every member of the team's AI
 //     group (RW 0x76F9FF), whatever its command set. The ported command types: S-4841.
+//   * lane CASTLE-UNPACK: NAMED_BASE_UNPACK (unit, reference) RW 0x7CE925 and NAMED_BASE_UNPACK_FREE RW 0x7CE928 -> RW 0x7BED64(param 0, param 1's
+//     string, free = 0 / 1): the unit by name (RW 0x75A3D8), controlled by the script engine's current player (RW 0x68B678 == RW 0x6057EE), its CastleBehavior
+//     (RW 0x68BDA5, RW 0x797AC1's key): canUnpack(true) (RW 0x7983E3), isPlayerAllowedToPackOrUnpack(the controller) (RW 0x79A472), and unless free
+//     canAffordUnpack(the controller) (RW 0x79969F): initiateUnpack(free, no template) (RW 0x79C17D: a free unpack is the instant one, nothing paid); then a
+//     non-empty reference (RW 0x401E64) names the castle in the script engine's object references (RW 0x608397, ScriptEngine::setReference). Any failed
+//     step does nothing.
 //
 // INFERENCE / NOT PORTED (stops): the AI states without a port (hunt, attitude, attack-team, the waypoint path states with their per-waypoint link
 // choice, face-object) -> S-1186 (docs/STOPS.md); the noted stand-ins below each report themselves.
@@ -59,10 +65,14 @@
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/AI/AICommandSink.h"
 #include "GameLogic/AI/AIGroupFormations.h"
+#include "GameLogic/Damage.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/CastleModules.h"
 #include "GameLogic/Module/DozerAIUpdate.h"
+#include "GameLogic/Module/GiantBirdAIUpdate.h"
+#include "GameLogic/AI/AIGarrisonStates.h"
 #include "GameLogic/Module/EmotionModules.h"
 #include "GameLogic/Module/HeroAbilityModules.h"
 #include "GameLogic/Module/SpecialPowerModules.h"
@@ -224,8 +234,9 @@ std::vector<Object *> aiGroupOf(Team &t)
 // lane SCRIPT-3: RW 0x77208A AIGroup::groupAttackObject(force, victim, shots, source): the group's members but DISABLED_HELD ones (+ 0x1C8 bit 3), by
 // the squared 2D distance to the victim (the list RW 0x95204E sorted ascending, RW 0x952EE1(1): MSVC's std::sort, an insertion sort, stable, up to 32
 // members; INFERENCE beyond), each: the passengers of a contain that lets them fire (contain vslot 0xB4, RW 0x772157) attack too (not ported: S-1186);
-// then a member with an AI that is not the victim attacks it: a GiantBirdAIUpdate (AI vslot 0x168, RW 0x68BA5C) through command 0x39 (not ported:
-// S-1186), else force ? RW 0x771380 : aiAttackObject (RW 0x66C536)
+// then a member with an AI that is not the victim attacks it: a GiantBirdAIUpdate (AI vslot 0x168, RW 0x68BA5C) through command 0x39 (RW 0x7721EF ..
+// 0x772212: only when ActionManager::getCanAttackObject RW 0x82CFD4(member, victim, source, 0) says POSSIBLE or POSSIBLE_AFTER_MOVING, then RW 0x77131B;
+// lane STEALTHFLY1), else force ? RW 0x771380 : aiAttackObject (RW 0x66C536)
 void groupAttackObject(ScriptEngine &engine, Team &team, Object &victim, bool force, CommandSourceType source)
 {
 	std::vector<std::pair<Object *, float>> order;
@@ -255,9 +266,12 @@ void groupAttackObject(ScriptEngine &engine, Team &team, Object &victim, bool fo
 		{
 			continue;
 		}
-		if (isKindOfName(*o, "GIANT_BIRD"))
+		if (GiantBirdAIUpdate *bird = dynamic_cast<GiantBirdAIUpdate *>(ai))
 		{
-			engine.note("[S-1186] TEAM_ATTACK_NAMED: a GiantBirdAIUpdate member's attack (command 0x39) is not ported");
+			if (GarrisonRules::canAttackAsNewTarget(*o, victim, source))
+			{
+				bird->aiSwoopAttackObject(&victim, source);
+			}
 			continue;
 		}
 		if (force)
@@ -487,6 +501,11 @@ bool ScriptActions::teamAttackNamedAsPlayerFirst(const ScriptActionRec &a)
 	return param(a, 0).stringValue == "Aragorn 2";
 }
 
+std::vector<Object *> ScriptActions::teamAIGroup(Team &t)
+{
+	return aiGroupOf(t);
+}
+
 bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRec &a, const std::string &name)
 {
 	GameLogic &logic = engine.logic();
@@ -634,7 +653,11 @@ bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRe
 		}
 		for (Object *o : unitOrTeam(engine, param(a, 0).stringValue, false))
 		{
-			if (AIUpdateInterface *ai = o->getAIUpdateInterface())
+			if (GiantBirdAIUpdate *bird = dynamic_cast<GiantBirdAIUpdate *>(o->getAIUpdateInterface()))
+			{
+				bird->aiSwoopAttackObject(victim, CMD_FROM_SCRIPT); // RW 0x7C8DC6 .. 0x7C8DD5 (lane STEALTHFLY1): AI vslot 0x168 -> RW 0x77131B(victim, 1)
+			}
+			else if (AIUpdateInterface *ai = o->getAIUpdateInterface())
 			{
 				ai->aiAttackObject(victim, CMD_FROM_SCRIPT);
 			}
@@ -753,7 +776,7 @@ bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRe
 		{
 			return true;
 		}
-		engine.note("[S-1186] " + name + ": the attack-follow state (RW 0x754A3C / 0x754AAA) runs as an attack move to the end of the path along each waypoint's first link");
+		engine.note("[S-1186] " + name + ": the attack-follow state (RW 0x754A3C / 0x754AAA) runs as a move to the path's closest waypoint, then an attack move to the end of the path along each waypoint's first link");
 		for (Object *o : unitOrTeam(engine, param(a, 0).stringValue, name[0] == 'T'))
 		{
 			AIUpdateInterface *ai = o->getAIUpdateInterface();
@@ -765,7 +788,12 @@ bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRe
 			const std::vector<Coord3D> path = waypointChain(*terrain, start);
 			if (!path.empty())
 			{
-				ai->aiMoveToPosition(path.back(), CMD_FROM_SCRIPT); // the march starts at once (a sequential script sees the unit busy)
+				// lane OFFMAP-1: the march starts at once (a sequential script sees the unit busy) toward the path's closest waypoint, where retail's
+				// attack-follow state starts (RW 0x754A3C, ZH AIFollowWaypointPathState: the first goal is the waypoint itself); the armed attack move then
+				// takes the unit on to the path's end when it stands idle there (AIIdleState::update -> resumeAttackMove). The stand-in went straight to the
+				// end: from a unit the map placed off the map (MAP ANG Angmar's 'BNWest WR 1', y -166) that line entered the grid over a cliff cell, no path
+				// was found and the horde stayed OFF_MAP (untargetable) for good
+				ai->aiMoveToPosition(path.front(), CMD_FROM_SCRIPT);
 				ai->armAttackMove(path.back(), CMD_FROM_SCRIPT);
 			}
 		}
@@ -993,7 +1021,7 @@ bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRe
 		const bool unnamedOnly = name == "SET_REF_TO_NEREST_TEAM_OF_UNNAMED_TYPE_OWNED_BY_PLAYER";
 		// RW 0x7C3E5E (types, player, team, reference name): the first player of the mask, the team's centre (RW 0x7A02E1: the mean of the live members'
 		// positions), the closest object of the player of the type (TheParitionManager RW 0xA39090, FROM_CENTER_2D, within 1e6; an object list: the
-		// closest per type by 3D distance, RW 0x7C2F85); its name in the cache (RW 0x608397 / 0x60A1D5)
+		// closest per type by 3D distance, RW 0x7C2F85); the reference names it (RW 0x608397, lane CASTLE-UNPACK: the side's object references)
 		Player *p = ScriptConditions::firstPlayer(engine, param(a, 1).stringValue);
 		Team *t = ScriptConditions::team(engine, param(a, 2).stringValue);
 		if (!p || !t)
@@ -1057,7 +1085,49 @@ bool ScriptActions::executeUnitAction(ScriptEngine &engine, const ScriptActionRe
 		}
 		if (found)
 		{
-			engine.nameInCache(param(a, 3).stringValue, *found);
+			engine.setReference(param(a, 3).stringValue, *found); // RW 0x7C3FAD
+			engine.nameInCache(param(a, 3).stringValue, *found);  // RW 0x7C3FBB -> RW 0x60A1D5: also the named cache entry (the UNNAMED form skips it next time)
+		}
+		return true;
+	}
+	if (name == "NAMED_DAMAGE")
+	{
+		// lane MODS-3: RW 0x7CC387 -> RW 0x7C050A(param 0, param 1's int): the unit by name (RW 0x75A3D8); a fresh DamageInfo (RW 0x66365E) with no source
+		// (D+0x08 = 0), DAMAGE_UNRESISTABLE (D+0x10 = 8), DEATH_NORMAL (D+0x1C = 0) and the amount (float) param 1 (cvtsi2ss, D+0x20); Object::attemptDamage
+		// (RW 0x698E7D). Edain's player libraries kill their 1-health fortress placeholders with it (the real flag spawns from their CreateObjectDie)
+		if (Object *o = engine.getUnitNamed(param(a, 0).stringValue))
+		{
+			DamageInfo d;
+			d.m_input.m_sourceID = 0;
+			d.m_input.m_damageType = DAMAGE_UNRESISTABLE;
+			d.m_input.m_deathType = DEATH_NORMAL;
+			d.m_input.m_amount = (float)param(a, 1).intValue;
+			o->attemptDamage(d);
+		}
+		return true;
+	}
+	if (name == "NAMED_BASE_UNPACK" || name == "NAMED_BASE_UNPACK_FREE")
+	{
+		// lane CASTLE-UNPACK: RW 0x7BED64 (see the file comment); the push order (RW 0x7CE925 / 0x7CE928): the flag, param 1's string, param 0
+		const bool free = name == "NAMED_BASE_UNPACK_FREE";
+		Object *o = engine.getUnitNamed(param(a, 0).stringValue);
+		if (!o || o->getControllingPlayer() != engine.currentPlayer()) // RW 0x7BED95
+		{
+			return true;
+		}
+		CastleBehavior *castle = dynamic_cast<CastleBehavior *>(o->findModule("CastleBehavior"));
+		if (!castle || !castle->canUnpack(true) || !castle->isPlayerAllowedToPackOrUnpack(o->getControllingPlayer()))
+		{
+			return true;
+		}
+		if (!free && !castle->canAffordUnpack(o->getControllingPlayer())) // RW 0x7BEDCE
+		{
+			return true;
+		}
+		castle->initiateUnpack(free, nullptr); // RW 0x7BEDEE
+		if (!param(a, 1).stringValue.empty()) // RW 0x7BEDF6 (RW 0x401E64)
+		{
+			engine.setReference(param(a, 1).stringValue, *o); // RW 0x7BEE09 -> RW 0x608397
 		}
 		return true;
 	}

@@ -1,0 +1,23 @@
+# OpenBFME automatic integrity check (lane ANTICHEAT-1): one pass over the finished online games not checked yet (integrity_check.py watch --once).
+# Install on the host that has the game files (dev): copy tools/integrity to ~/openbfme-integrity/tools, this unit and the timer to
+# ~/.config/systemd/user/, set the paths in the Environment lines, then  systemctl --user daemon-reload && systemctl --user enable --now openbfme-integrity.timer
+# Checkers: ~/openbfme-integrity/peers/<profile>/openbfme_peer, one per release the players run (built from that release's tree: a peer replays only
+# its own build's games; `openbfme_peer --print-profile` names the directory). A game of a profile without a checker waits (state.json "unsupported").
+# Keys are files (0600), never in this unit: the lobby's INTEGRITY_KEY signs both the worker read routes and the intake (ADMINFIX-1, f27dd93a3).
+[Unit]
+Description=OpenBFME integrity check of finished online games
+
+[Service]
+Type=oneshot
+Nice=10
+Environment=INTEGRITY_PEERS=%h/openbfme-integrity/peers
+Environment="ROTWK_INSTALL=%h/BFME Games/RotWK"
+Environment="BFME2_INSTALL=%h/BFME Games/BFME2"
+Environment=INTEGRITY_ROOT=%h/openbfme-integrity
+Environment=LOBBY=https://play.openbfme.com
+Environment=INTEGRITY_READ_KEY_FILE=%h/openbfme-integrity/keys/integrity.key
+Environment=INTEGRITY_KEY_FILE=%h/openbfme-integrity/keys/integrity.key
+Environment=INTEGRITY_DETECTORS=D1-orders-into-fog,D5-input-rate,D6-command-integrity
+ExecStart=/usr/bin/env python3 %h/openbfme-integrity/tools/integrity_check.py watch --once --peers ${INTEGRITY_PEERS} --root ${INTEGRITY_ROOT} \
+  --lobby ${LOBBY} --read-key-file ${INTEGRITY_READ_KEY_FILE} --url ${LOBBY}/v1/internal/integrity/findings --key-file ${INTEGRITY_KEY_FILE} \
+  --detectors ${INTEGRITY_DETECTORS}

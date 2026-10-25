@@ -77,8 +77,8 @@ static func date_text(iso: String) -> String:
 	return "%d %s %d" % [int(d.day), months[int(d.month) - 1], int(d.year)]
 
 
-## "v0.3.0-preview.2" -> "Preview 2 of 0.3.0"; "v0.4.5" -> "Alpha 0.4.5" and "v0.4.0-alpha.3" -> "v0.4.0 Alpha 3" (lane VERSION-1,
-## Semver.display)
+## "v0.3.0-preview.2" -> "Preview 2 of 0.3.0"; "v0.4.5" -> "Alpha 0.4.5", "v0.4.0-alpha.3" -> "v0.4.0 Alpha 3" and (lane NIGHTLY-1, owner,
+## 2026-10-21) "v0.4.13-nightly.20261022" -> "Nightly 0.4.13 (2026-10-22)" (lane VERSION-1, Semver.display)
 static func title_of(tag: String) -> String:
 	var m := RegEx.create_from_string("^v(\\d+\\.\\d+\\.\\d+)-preview\\.(\\d+)$").search(tag)
 	if m == null:

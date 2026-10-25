@@ -28,6 +28,11 @@
 #include "GameLogic/GameLogicDispatch.h"
 #include "GameLogic/HeroSystem.h"
 #include "GameLogic/Module/ProductionUpdate.h"
+#include "GameLogic/Module/UpgradeModuleClasses.h"
+#include "GameLogic/Combat/ObjectWeapons.h"
+#include "GameLogic/Weapon.h"
+#include "GameLogic/WeaponSetToggle.h"
+#include "GameLogic/WeaponState.h"
 #include "GameLogic/Object/ExperienceTracker.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/Object/RetailObjectWorld.h"
@@ -710,4 +715,80 @@ TEST_CASE("cah2 retail: a Create-a-Hero's creation hands its three record colour
 	const CreateAHeroHero *rec = g.logic->createAHeroes().heroOf(*g.me);
 	REQUIRE(rec);
 	CHECK((rec->flags & 8u) == 0u); // consumed
+}
+
+// lane CAHBOW-1: DoCommandUpgrade (lane SUMMON-1's port: RW 0x8B8E2E / 0x8B8DFC -> Object::doCommandButton RW 0x696FD2(button, 0, false)). The owner's playtest: a Create-a-Hero
+// archer fought melee only. Retail's createahero.ini:173-177 (ModuleTag_CreateAHeroMakeSureArcherUsesBowInitially) does Command_CreateAHero_A_ToggleWeapon
+// (TOGGLE_WEAPONSET, FlagsUsedForToggle WEAPONSET_TOGGLE_1) when Upgrade_CreateAHero_ClassArcher arrives and again when it goes; the bow weapon set of
+// createaheroweaponupgrades.inc is WEAPONSET_CREATE_A_HERO_WS_08 + WEAPONSET_TOGGLE_1, the melee one WS_08 alone.
+namespace
+{
+bool toggle1(const Object &o)
+{
+	const int bit = WeaponSetToggle::WEAPONSET_TOGGLE_1;
+	return ((o.getWeaponSetFlags()[(size_t)bit >> 5] >> (bit & 31)) & 1u) != 0;
+}
+
+const WeaponTemplate *currentWeapon(const Object &o)
+{
+	const ObjectWeapons *w = o.getWeapons();
+	REQUIRE(w);
+	const Weapon *cur = w->currentWeapon();
+	REQUIRE(cur);
+	return cur->getTemplate();
+}
+} // namespace
+
+TEST_CASE("cahbow1 retail: a Create-a-Hero archer (Idrial) starts with WEAPONSET_TOGGLE_1 and its bow (DoCommandUpgrade, RW 0x8B8E2E -> RW 0x696FD2 case "
+	"0x2D); removing the class upgrade toggles back (RW 0x8B8DFC); a Hero of the West (Berethor) keeps its melee weapon")
+{
+	REQUIRE_RETAIL(sh);
+	std::vector<std::string> errors;
+	const std::vector<CreateAHeroHero> heroes = CreateAHeroLibrary::systemHeroes(*sh.mount->fs, &errors);
+	const CreateAHeroHero *idrial = heroNamed(heroes, u"Idrial");
+	const CreateAHeroHero *berethor = heroNamed(heroes, u"Berethor");
+	REQUIRE(idrial);
+	REQUIRE(berethor);
+	const CreateAHeroSystem &sys = sh.world->createAHeroSystem();
+	CHECK(sys.classes().at(idrial->classIndex).upgradeName == "Upgrade_CreateAHero_ClassArcher");
+	const ThingTemplate *cah = sh.world->things().findTemplate("CreateAHero");
+	REQUIRE(cah);
+	const unsigned notPorted = UpgradeModuleClasses::stats().doCommandsNotPorted;
+
+	{
+		Game g(sh, "FactionElves");
+		g.logic->createAHeroes().assign(*g.me, *idrial);
+		g.logic->createAHeroes().startGame();
+		Object *hero = g.make(cah, g.me, 500.0f, 500.0f);
+		CHECK(hero->hasUpgrade("Upgrade_CreateAHero_ClassArcher"));
+		CHECK(toggle1(*hero)); // the module ran at the class upgrade's grant
+		g.logic->runLogicFrame();
+		const WeaponTemplate *bow = currentWeapon(*hero);
+		MESSAGE("Idrial's weapon: " << bow->getName());
+		CHECK_FALSE(bow->m_meleeWeapon);
+		CHECK(bow->getName() == "CreateAHeroBasicRangedWeapon");
+		// the same object without the toggle holds the melee weapon of the weapon set: the flag is what picks the bow
+		const UpgradeTemplate *archer = TheUpgradeCenter->findUpgrade("Upgrade_CreateAHero_ClassArcher");
+		REQUIRE(archer);
+		hero->removeUpgrade(archer); // RW 0x691438 -> the mux removal -> RW 0x8B8DFC: RemoveUpgradeCommandButtonName, the same toggle
+		CHECK_FALSE(toggle1(*hero));
+		g.logic->runLogicFrame();
+		const WeaponTemplate *melee = currentWeapon(*hero);
+		MESSAGE("without the toggle: " << melee->getName());
+		CHECK(melee->m_meleeWeapon);
+		CHECK(melee->getName() == "CreateAHeroBasicMeleeWeapon");
+	}
+	{
+		Game g(sh, "FactionMen");
+		g.logic->createAHeroes().assign(*g.me, *berethor);
+		g.logic->createAHeroes().startGame();
+		Object *hero = g.make(cah, g.me, 500.0f, 500.0f);
+		CHECK_FALSE(hero->hasUpgrade("Upgrade_CreateAHero_ClassArcher"));
+		CHECK_FALSE(toggle1(*hero));
+		g.logic->runLogicFrame();
+		const WeaponTemplate *w = currentWeapon(*hero);
+		MESSAGE("Berethor's weapon: " << w->getName());
+		CHECK(w->m_meleeWeapon);
+	}
+	CHECK(UpgradeModuleClasses::stats().doCommandsNotPorted == notPorted); // TOGGLE_WEAPONSET is ported: no S-5145 stop
 }

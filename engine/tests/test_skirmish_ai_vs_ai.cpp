@@ -13,6 +13,7 @@
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
+#include "Common/Science.h"
 #include "Common/StateHash.h"
 #include "GameLogic/SimMath.h"
 #include "GameClient/GUI/Skirmish/IniSkirmishSetupSource.h"
@@ -132,6 +133,15 @@ std::string summary(GameLogic &logic, const Player *p)
 		   << " tactics " << ai->brain.tactics.size() << " started " << ai->brain.tacticsStarted << " attacks " << ai->brain.attacksLaunched << " ended " << ai->brain.tacticsEnded
 		   << " dozersQueued " << ai->build.dozerManager.queued;
 		os << " cp " << p->commandPoints().getUsage() << "/" << p->commandPointLimit();
+		// lane AI5: the upgrade builders (records made, handed to the queue) and the spell book (purchase points, sciences owned)
+		os << " unitUpgrades " << ai->build.unitUpgrader.registered << "/" << ai->build.unitUpgrader.submitted << "/" << ai->build.unitUpgrader.declined
+		   << " structureUpgrades " << ai->build.scienceBuilder.registered << "/" << ai->build.scienceBuilder.upgradesSubmitted << " expansions "
+		   << ai->build.scienceBuilder.expansionsSubmitted;
+		os << " pp " << p->science().getSciencePurchasePoints() << " sciences";
+		for (ScienceType st : p->science().sciences())
+		{
+			os << " " << (TheScienceStore ? TheScienceStore->getInternalNameForScience(st) : std::to_string((int)st));
+		}
 		const AISkirmishPlayer *owner = ai->brain.chooser ? ai : ai->groupFirst;
 		for (const AITarget &t : owner ? owner->brain.targets : ai->brain.targets)
 		{
@@ -248,9 +258,19 @@ void runVersus(starttest::Shared &s, const NewGameMessage &message, int frames, 
 	const Player *players[2] = { playerAtStart(logic, 0), playerAtStart(logic, 1) };
 	REQUIRE(players[0] != nullptr);
 	REQUIRE(players[1] != nullptr);
+	// lane FLANK-1: the first frame each of the lane's mechanisms acted (a projectile contact hit, a pre-landing emotion, a landing, a flank), for the pin notes
+	int firstContactHit = -1, firstPreLanding = -1, firstLanding = -1, firstFlank = -1;
 	for (int i = 0; i < frames; ++i)
 	{
 		game.advance(0.2);
+		{
+			const CombatState::Counters &cc = logic.combat().counters();
+			const int fr = (int)logic.getFrame();
+			firstContactHit = firstContactHit < 0 && cc.projectileContactHits > 0 ? fr : firstContactHit;
+			firstPreLanding = firstPreLanding < 0 && cc.projectilePreLandingEmotions > 0 ? fr : firstPreLanding;
+			firstLanding = firstLanding < 0 && cc.projectilesLanded > 0 ? fr : firstLanding;
+			firstFlank = firstFlank < 0 && cc.flanks > 0 ? fr : firstFlank;
+		}
 		if (hashEveryFrame)
 		{
 			out.hashes.push_back(logic.computeStateHash());
@@ -285,6 +305,13 @@ void runVersus(starttest::Shared &s, const NewGameMessage &message, int frames, 
 		}
 	}
 	out.log += "end frame " + std::to_string(logic.getFrame()) + "\n  " + summary(logic, players[0]) + "\n  " + summary(logic, players[1]) + "\n";
+	{
+		const CombatState::Counters &cc = logic.combat().counters();
+		out.log += "  flank1: projectile contacts " + std::to_string(cc.projectileContacts) + " hits " + std::to_string(cc.projectileContactHits) + " (first frame " +
+			std::to_string(firstContactHit) + "), pre-landing emotions " + std::to_string(cc.projectilePreLandingEmotions) + " (" + std::to_string(firstPreLanding) +
+			"), landings " + std::to_string(cc.projectilesLanded) + " (" + std::to_string(firstLanding) + "), flank tests " + std::to_string(cc.flankTests) + " flanked " +
+			std::to_string(cc.flanks) + " (" + std::to_string(firstFlank) + "), crushes " + std::to_string(cc.crushes) + "\n";
+	}
 	for (Object *h = logic.getFirstObject(); h; h = h->getNextObject())
 	{
 		const ContainModuleInterface *c = h->getContain();
@@ -766,7 +793,49 @@ TEST_CASE("skirmish ai vs ai: Evendim, 30 game-minutes: every pairing ends - Mor
 	// and measured once on the merged tree (remote-measure.sh on a CI host; the messages by another host's run of the same build): the losers are unchanged, seed 7 (Mordor,
 	// start position 1) ends at 4103 (6763), seed 1234 (Mordor, start position 0) at 5701 (5289), seed 2 stays open at 9000 with the table changed from the
 	// 2000 window on. Engine pins, not retail values.
-	for (const Game &g : { Game{ "FactionMordor", "FactionMen", 2u, -1, -1 }, Game{ "FactionMen", "FactionMordor", 7u, 1, 4103 }, Game{ "FactionMordor", "FactionMen", 1234u, 0, 5701 } })
+	// Lane STEALTHFLY1 (a giant bird's exit path: GiantBirdAIUpdate's follow path state 0x3F6, RW 0x76B491): in seed 2 Mordor recruits MorgomirFellBeast at
+	// frame 7145, which now leaves the fortress flying its exit path instead of running the ground path state; the table is unchanged up to the 7000 window
+	// and changes from the 8000 window on. Seeds 7 and 1234 are unchanged (no bird leaves a building before their ends). Engine pins, not retail values.
+	// Lane SUMMON-1 (the CreateObject nuggets' retail random draws and dispositions, DoCommandUpgrade's rock-throw toggle on every troll, ent and giant
+	// scripts.lua grants Upgrade_SwitchToRockThrowing at creation, the Thrall Master's summons), measured on the lane's tree (Deck, the test alone): the losers
+	// are unchanged, seed 7 (Mordor, start position 1) ends at 3790 (4103), seed 1234 (Mordor, start position 0) at 4095 (5701), seed 2 stays open at 9000
+	// with the table changed from the 2000 window on. Merged with the archive 5f7c6635b (STEALTHFLY-1's bird exit path among it) and measured on the merged
+	// tree (Deck, the test file alone, twice): the same three results. Engine pins, not retail values.
+	// Lane AI5 (the AI's upgrade purchases: AIUnitUpgrader, AIUpgradeScienceBuilder with the plot expansions, the upgrade heuristics, and the money saver /
+	// reserve RW 0x8F0502: new draws at registration and decision, money spent on upgrades and saved for heroes), measured on the lane's tree (Deck): seed 2
+	// stays open at 9000 with a new progress table (changed from the first window), seed 7 is now open at 9000 (Mordor's defeat at 4103 before), seed 1234
+	// ends with Mordor's defeat (start position 0) at 4768 (5701 before). Engine pins, not retail values.
+	// Merge queue q22 (SUMMON-1 + FX-4 + AI5 + NUGGET-1: SUMMON-1's OCL draws / rock-throw toggles together with AI5's upgrade draws, purchases and money
+	// saver; each lane alone measured the values above), measured once on the merged tree (srv1, the test file alone, twice): seed 2 stays open at 9000 with a new
+	// progress table (changed from the first window), seed 7 ends with Mordor's defeat (start position 1) at 5693 (3790 before), seed 1234 is open at 9000
+	// (Mordor's defeat at 4095 before). Engine pins, not retail values.
+	// Lane TARGET-1 (RotWK's target choice: the combat chains' priorities, the reachability test, MoodAttackCheckRate's 2-second default, the one-off
+	// check offsets drawing the logic generator, an attack-move order pushing the mood check back), measured on a CI host (the laptop): seed 2 stays open at
+	// 9000 with a new table (below), seed 7 ends with Mordor's defeat (start position 1) at 6459 (4103), seed 1234 with Mordor's defeat (start position 0)
+	// at 5072 (5701). Engine pins, not retail values.
+	// Lane ATTACKPATH-1 (RotWK's findAttackPath with its view test, own corridor and ranked fallback; the attack path's failure branch; the horde approach goal's
+	// helpers RW 0x6F2F8F / 0x746783 / 0x6FB67A; the towards-goal line's corridor term RW 0x6F6D57 in every path search), measured on the lane's tree bb49bd6a6
+	// (measure.sh's three runs on a CI host, the laptop): all three games are open at 9000 with both armies still fighting (seed 2's table below: every counter
+	// rises through the last window); seed 2's table changed from the 1000 window on. Engine pins, not retail values.
+	// Lane FLANK-1 (projectiles that meet objects in flight RW 0x85E52B / 0x6CC79C, a landed thrown unit busy or idle RW 0x85FAA4, the flank test at fire time
+	// RW 0x6CCB4D, the crush contact RW 0xAD2CE0 with heights, the charge state's exits, the miss scatter RW 0x6CC399), measured on the lane's tree (dev): seed 2 is no
+	// longer open: Men (start position 1) are defeated at 8035; its progress is identical through the 1000 window and differs from the 2000 window (the first
+	// fire-time flank at frame 1481, the first landing of a thrown unit at 3123, the first in-flight hit at 3174). Seed 7 (Mordor, start position 1) ends at 4027 (4103;
+	// first in-flight hit 2174, first flank 1849). Seed 1234 (Mordor, start position 0) ends at 6317 (5701) with no projectile contact or landing in the game, so its move
+	// comes from the flank timing (first flank 1999), the crush contact or the scatter. The `flank1:` line of each run's log has the counts. Engine pins, not retail values.
+	// Lane FLANK-1 alone (dev): seed 2 Men defeated at 8035, seed 7 Mordor at 4027, seed 1234 Mordor at 6317. Merge queue q23 (TARGET-1's target choice and
+	// mood scan, ATTACKPATH-1's attack paths and horde approach, FLANK-1's in-flight hits / fire-time flank / crush contact / scatter, PRODUCTION1's levelled
+	// build speed, LUMBER1's evil lumber mills, on q22's tree; each lane alone measured the results above), measured once on the merged tree (the test file
+	// alone, the Mac and the laptop): all three games are open at 9000 with both armies still fighting; seed 2's table below. Engine pins, not retail values.
+	// Lane CAMPUI-1 (OFF_MAP, Object + 0x458 bit 3 from the map's extent, RW 0x69355D: the mood scan RW 0x66845E and the closest-enemy filter RW 0x6FF7A4
+	// skip an object outside the active boundary; the lane's only change a skirmish runs), measured once on the lane (a Linux CI host): seed 2's table is
+	// unchanged up to the 7000 window and changes from the 8000 window on (an object first stands outside the boundary after frame 7000; which one is not
+	// named here). Seeds 7 and 1234 are unchanged (4103 / 5701). Engine pins, not retail values.
+	// Merge queue q24 (CAMPUI-1's OFF_MAP gates, OFFMAP-1's retail idle-state start RW 0x745A64 (no ZH frame <= 1 snap: every start unit stays where it was
+	// made), SCRIPT-4, MODS-3's DoCommandUpgrade / PLAYER_UPGRADE buttons and library teams, and the amoeba reach that skips an enclosed occupant, on q23's
+	// tree; measured once on the merged tree, a CI host, the test file alone, twice): seed 2 stays open at 9000 with a new table (changed from the first window),
+	// seed 7 ends with the Men's defeat (start position 0) at 6368, seed 1234 stays open at 9000. Engine pins, not retail values.
+	for (const Game &g : { Game{ "FactionMordor", "FactionMen", 2u, -1, -1 }, Game{ "FactionMen", "FactionMordor", 7u, 0, 6368 }, Game{ "FactionMordor", "FactionMen", 1234u, -1, -1 } })
 	{
 		INFO(g.a << " vs " << g.b << " seed " << g.seed);
 		VersusRun run;
@@ -787,17 +856,17 @@ TEST_CASE("skirmish ai vs ai: Evendim, 30 game-minutes: every pairing ends - Mor
 		CHECK(run.defeatFrame == g.defeatFrame);
 		if (g.seed == 2u)
 		{
-			// the game that stays open: no late stall, every counter still rises in each of the last windows (a sample every 1000 frames, cumulative)
+			// merge queue q23: seed 2's table (every side keeps attacking, building and destroying through the windows; a sample every 1000 frames, cumulative)
 			CHECK(run.progress ==
-		"frame 1000: [0 attacks 1 built 82u/8s destroyed 7u/0s] [1 attacks 2 built 75u/7s destroyed 9u/1s]\n"
-		"frame 2000: [0 attacks 4 built 293u/11s destroyed 115u/2s] [1 attacks 3 built 187u/11s destroyed 151u/2s]\n"
-		"frame 3000: [0 attacks 8 built 567u/14s destroyed 260u/2s] [1 attacks 6 built 333u/13s destroyed 428u/2s]\n"
-		"frame 4000: [0 attacks 9 built 726u/17s destroyed 412u/2s] [1 attacks 8 built 450u/15s destroyed 654u/3s]\n"
-		"frame 5000: [0 attacks 12 built 928u/18s destroyed 487u/4s] [1 attacks 9 built 577u/16s destroyed 848u/3s]\n"
-		"frame 6000: [0 attacks 15 built 1088u/19s destroyed 641u/4s] [1 attacks 10 built 721u/17s destroyed 1009u/3s]\n"
-		"frame 7000: [0 attacks 17 built 1212u/21s destroyed 662u/6s] [1 attacks 10 built 765u/20s destroyed 1164u/4s]\n"
-		"frame 8000: [0 attacks 18 built 1337u/22s destroyed 692u/7s] [1 attacks 11 built 793u/24s destroyed 1237u/4s]\n"
-		"frame 9000: [0 attacks 20 built 1676u/22s destroyed 863u/11s] [1 attacks 15 built 940u/26s destroyed 1522u/4s]\n");
+		"frame 1000: [0 attacks 2 built 90u/8s destroyed 8u/1s] [1 attacks 1 built 85u/7s destroyed 37u/2s]\n"
+		"frame 2000: [0 attacks 5 built 319u/11s destroyed 156u/3s] [1 attacks 4 built 231u/10s destroyed 216u/2s]\n"
+		"frame 3000: [0 attacks 8 built 504u/12s destroyed 354u/3s] [1 attacks 8 built 415u/11s destroyed 394u/3s]\n"
+		"frame 4000: [0 attacks 10 built 701u/15s destroyed 520u/4s] [1 attacks 9 built 616u/13s destroyed 647u/3s]\n"
+		"frame 5000: [0 attacks 13 built 985u/15s destroyed 667u/4s] [1 attacks 12 built 733u/15s destroyed 871u/4s]\n"
+		"frame 6000: [0 attacks 17 built 1238u/15s destroyed 769u/4s] [1 attacks 13 built 835u/17s destroyed 1191u/4s]\n"
+		"frame 7000: [0 attacks 21 built 1520u/16s destroyed 922u/4s] [1 attacks 16 built 973u/18s destroyed 1426u/4s]\n"
+		"frame 8000: [0 attacks 23 built 1684u/18s destroyed 1044u/5s] [1 attacks 17 built 1092u/19s destroyed 1565u/4s]\n"
+		"frame 9000: [0 attacks 25 built 1904u/18s destroyed 1150u/7s] [1 attacks 19 built 1228u/19s destroyed 1828u/4s]\n");
 		}
 	}
 }
@@ -953,7 +1022,9 @@ TEST_CASE("skirmish ai tactics: the offensive bodies make retail's draws in orde
 	// 18 seeds on the merged tree found seeds 29 and 67 (one Pincer each)
 	// Merge of IDLE-1 (update phases) into MOVE-3 r4: none of these ten hands a Pincer team its waypoints within 2600 frames (1234 and 11 start one); a probe of
 	// 15 seeds on the merged tree found seeds 37 and 41
-	for (std::uint32_t seed : { 1234u, 2u, 7u, 11u, 13u, 17u, 19u, 31u, 29u, 67u, 37u, 41u })
+	// Lane SUMMON-1 (the OCLs' retail random draws, DoCommandUpgrade's rock-throw toggles): none of these twelve hands a Pincer team its waypoints within 2600
+	// frames; a probe of 16 seeds on the lane's tree (Deck) found 53 (two distances), 71, 101 and 113 (one each)
+	for (std::uint32_t seed : { 1234u, 2u, 7u, 11u, 13u, 17u, 19u, 31u, 29u, 67u, 37u, 41u, 53u, 71u })
 	{
 		NewGameStart start(RandomAlgorithm::ZH_CarryChain);
 		REQUIRE_MESSAGE(NewGame::prepareNewGame(versusMessage(*s, "FactionMen", -1, "FactionMordor", 2, seed), s->world->playerTemplates(), s->settings, cache,
@@ -1203,6 +1274,8 @@ TEST_CASE("skirmish ai vs ai (S-420): an unfinished structure whose builder is g
 	CHECK(CombatQueries::isAttackable(*cage));
 	AIUpdateInterface *ai = knights->getAIUpdateInterface();
 	REQUIRE(ai != nullptr);
+	// lane TARGET-1: the attack-move scan is RotWK's mood scan (RW 0x66844A(1, 0)), which keeps its own cadence (AI + 0x21C): it is made due now
+	ai->setNextMoodCheckTime(logic.getFrame());
 	CHECK(ai->attackMoveTarget() == cage);
 }
 

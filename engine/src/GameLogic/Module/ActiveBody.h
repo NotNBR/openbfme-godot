@@ -28,6 +28,7 @@
 
 #include "Common/INI.h"
 #include "Common/INIDataTypes.h"
+#include "GameLogic/Damage.h"
 #include "GameLogic/Module/BehaviorModule.h"
 
 #include <string>
@@ -83,6 +84,8 @@ public:
 	BodyDamageType getDamageState() const override { return calcDamageState(); }
 	void applyInitialDamageState() override { updateDamageState(true); }
 	void setInitialHealth(int initialPercent) override;
+	// lane SUMMON-1: RW 0x8C47DE (vt[0x58]) with its second argument 0 (the ObjectCreationList's health)
+	void setInitialHealthPercent(float percent) override;
 	const ActiveBodyModuleData *data() const { return m_data; }
 
 	// ---- lane COMBAT-1: the damage pipeline (RW 0x8C3FA3; scratch/weapon1/damage.md 2.7) ----
@@ -122,6 +125,13 @@ public:
 	}
 	// lane CAMP-1: the last damage record's source player mask (RW body vslot 0x40 record + 0xC, DamageInfo::m_sourcePlayerMask; TEAM_ATTACKED_BY_PLAYER RW 0x7E7361)
 	std::uint32_t lastDamagerPlayerMask() const { return m_lastDamagerPlayerMask; }
+	// lane FX-4: body interface slot 0x40 (RW 0x715914: the last damage record, ActiveBody + 0x40, never null) and its damage type (+ 0x10; the record's
+	// constructor RW 0x66341C: 0x16 = UNDEFINED)
+	bool lastDamageRecordType(int &type) const override
+	{
+		type = m_lastDamageType;
+		return true;
+	}
 	// lane COMBAT-2: the damage state the body last applied (RW + 0x30, written by setCorrectDamageState RW 0x8C2A5D)
 	BodyDamageType appliedDamageState() const { return m_curDamageState; }
 	void crc(StateHasher &hasher) const override;
@@ -134,6 +144,8 @@ protected:
 	// state means to the object: the model conditions DAMAGED / REALLYDAMAGED / RUBBLE and, for a STRUCTURE entering or leaving RUBBLE, the rubble effects (see ActiveBody.cpp)
 	// `initial`: the first application after the object was built (no position yet: the pathfinder footprint is registered later by whoever places the object, and sees the state)
 	void updateDamageState(bool initial = false);
+	// lane FX-4: the damage modules hear of a damage state change (RW 0x8C4395 / 0x8C3139)
+	void notifyDamageStateChange(const DamageInfo *info, BodyDamageType oldState, BodyDamageType newState);
 	float m_currentHealth = 0.0f;  // RW +0x18
 	float m_previousHealth = 0.0f; // the previous health of internalChangeHealth (damage accounting)
 	float m_reviveReference = 0.0f; // lane HERO-1: RW module + 0x2C (see getReviveReference)
@@ -156,6 +168,7 @@ private:
 	ObjectID m_lastDamager = INVALID_ID;
 	bool m_lastAttackerTaken = false; // RW + 0xB6 of the body interface (lane PLAY-4)
 	std::uint32_t m_lastDamagerPlayerMask = 0; // lane CAMP-1: the record's + 0xC
+	int m_lastDamageType = DAMAGE_UNDEFINED;   // lane FX-4: the record's + 0x10
 	mutable bool m_armorReported = false;
 	// lane FX-2: the damage FX throttle of RW 0x8C2F02 (+0x3C the last DamageFX type played, +0x38 the frame until which that type stays throttled). Only the
 	// client output depends on them; not hashed (the event queue boundary of FXEvents.h)

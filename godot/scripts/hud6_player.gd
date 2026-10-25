@@ -7,28 +7,18 @@
 ##   sidebar  a builder selected: the build list in the side bar's carved frame (retail-3.png)
 ##   queue    (lane OWNERFIX-3) a Men barracks of the player's: three presses of its soldiers' bubble, the bubble and the Palantir show "3" (RW 0x4A4CD3 / 0x9D7054)
 ##   enemy    (lane OWNERFIX-3) the enemy's barracks and hero, selected by a click: the Palantir shows their command set, every button disabled (RW 0x94397F)
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("HUD6 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("HUD6 %s: FAIL %s" % [s, r])
-	print("HUD6 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 # ---- helpers ----------------------------------------------------------------------------------------------------------------------------------------------

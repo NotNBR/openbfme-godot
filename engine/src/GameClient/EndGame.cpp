@@ -676,7 +676,8 @@ ScoreScreenData ScoreScreenData::build(GameLogic &logic, int type, const std::ve
 			e.result = 0; // vslot 0x38
 		}
 		const ScoreKeeper &s = p->getScoreKeeper();
-		e.score = s.computeScore(logic.settings(), logic.getFrame());
+		int shownBonus = 0;
+		e.score = s.computeScore(logic.settings(), logic.getFrame(), logic.missionObjectives().countShownBonus(shownBonus)); // lane CAMPUI-1: RW 0x79DE90
 		e.perFrame = s.perFrameStats();
 		e.fortressMarks = s.fortressMarks();
 		e.unitsBuilt = s.unitsBuilt();

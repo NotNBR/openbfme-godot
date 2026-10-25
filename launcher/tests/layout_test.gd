@@ -54,8 +54,8 @@ static func _cases() -> Dictionary:
 	var c := {
 		"main": _case("main", "play", ["Up to date", "PLAY", "Check for updates", "In ~/Games/BFME", "What's New"]),
 		"news": _case("news", "news", ["News & patch notes", "PLAY"]),
-		"multiplayer": _case("multiplayer", "multiplayer", ["Multiplayer", "Online play is coming"]),
-		"mods": _case("mods", "mods", ["Edain Mod", "none installed"]),
+		"multiplayer": _case("multiplayer", "multiplayer", ["Multiplayer", "Sign in", "Use a recovery code on this PC"]),
+		"mods": _case("mods", "mods", ["PLAY WITH", "Example Realms", "Installed: ready", "Refresh", "Realms No Intro 1.0.0 (ready)", "Needs engine features:*"]),
 		"games": _case("games", "games", ["NOT FOUND", "Download"]),
 		"games-bfme1": _case("games-bfme1", "games", ["BATTLE FOR MIDDLE-EARTH I (OPTIONAL)", "Downloaded from BFME Arena (bfmeladder.com)*", "Download"]),
 		"games-downloading": _case("games-downloading", "games", ["Pause", "Cancel", "RotWK: game files 412 of 1 830*"]),
@@ -66,7 +66,7 @@ static func _cases() -> Dictionary:
 		"downloading": _case("downloading", "play", ["Pause", "Cancel", "Updating to*"]),
 		"error": _case("error", "play", ["Update to*"], ["Update not installed", "Copy details", "Open log folder", "Close"]),
 		"glibc": _case("glibc", "play", ["PLAY"], ["The game did not start", "Close"]),
-		"first-run": _case("first-run", "play", ["Not installed", "Download the games", "No preview release yet"]),
+		"first-run": _case("first-run", "play", ["Not installed", "Download the games", "No nightly release yet"]),
 		"offline": _case("offline", "play", ["Could not check for updates"]),
 		"verifying": _case("verifying", "play", ["Checking*", "Pause", "Cancel"]),
 		"paused": _case("paused", "play", ["Resume", "Cancel"]),
@@ -401,6 +401,10 @@ func _check_nodes(all: Array, top: Node, bounds: Rect2, where: String, ours := t
 			var edges := []
 			if x_overlap and y_overlap <= EPS and (_region(a, top) == _region(b, top) or minf(ra.size.x, rb.size.x) >= 150.0):
 				edges = [["left", ra.position.x, rb.position.x], ["right", ra.end.x, rb.end.x]]
+				# lane NIGHTLY-2: a wrapping row's line ends where its last item ends, ragged by design, also against a block above or
+				# below it (the Play card's chips over YOUR GAMES: a long version name fills a line to a few px short of the card's edge)
+				if a.get_parent() is FlowContainer or b.get_parent() is FlowContainer:
+					edges = [edges[0]]
 			elif not x_overlap and y_overlap >= 0.5 * minf(ra.size.y, rb.size.y) and a.get_class() == b.get_class() \
 					and _lca(a, b) is HBoxContainer:
 				edges = [["top", ra.position.y, rb.position.y], ["bottom", ra.end.y, rb.end.y]]

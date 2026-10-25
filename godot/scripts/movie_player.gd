@@ -19,6 +19,7 @@ extends Node
 signal finished(title: String)
 
 const ERROR_SHOW_MS := 4000
+const MenuText := preload("res://scripts/menu_text.gd") # lane MENUFIX-1 / MENUFIX-2
 
 var playing := ""          # the title on screen ("" none)
 var skipped := false
@@ -180,7 +181,7 @@ func _error(title: String, error: String) -> void:
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.set_anchors_preset(Control.PRESET_FULL_RECT)
-	label.add_theme_font_size_override("font_size", 20)
+	_size_error(label)
 	label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.6))
 	var black := ColorRect.new()
 	black.color = Color.BLACK
@@ -193,8 +194,16 @@ func _error(title: String, error: String) -> void:
 	var until := Time.get_ticks_msec() + ERROR_SHOW_MS
 	while Time.get_ticks_msec() < until and not skipped:
 		await get_tree().process_frame
+		_size_error(label) # lane MENUFIX-2: follows a resize while it shows
 	skipped = false
 	layer.queue_free()
+
+
+## lane MENUFIX-1: 14 stage pixels scaled as the menus are (scripts/menu_text.gd; the start-up movies play before the shell, so Godot's face)
+func _size_error(label: Label) -> void:
+	var px := roundi(14 * MenuText.scale_of(get_viewport().get_visible_rect().size))
+	if label.get_theme_font_size("font_size") != px:
+		label.add_theme_font_size_override("font_size", px)
 
 
 func _input(event: InputEvent) -> void:

@@ -3,8 +3,13 @@
 
 #include "GameNetwork/RelayLog.h"
 
+#include "GameNetwork/RelayFrameBundle.h"
+#include "GameNetwork/RelayMembership.h"
+
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <map>
 
 namespace
 {
@@ -31,7 +36,26 @@ bool RelayLogFile::load(const std::string &path, RelayLogFile &out, std::string 
 		return fail(error, "cannot read " + path);
 	}
 	const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-	return parse(bytes, out, error);
+	if (!parse(bytes, out, error))
+	{
+		return false;
+	}
+	// online batch r4: a version-2 log's INPUT records in its sidecar (RelayCore.h "INPUT sidecar"), when the relay wrote one
+	std::ifstream side(path + ".input", std::ios::binary | std::ios::ate);
+	if (out.version >= 4 || !side)
+	{
+		return true;
+	}
+	// online batch r6 (Sol): bounded before it is buffered: a valid sidecar of an eight-slot game is at most 527 bytes
+	const std::streamoff sideSize = side.tellg();
+	if (sideSize < 0 || sideSize > (std::streamoff)kMaxInputSidecarBytes)
+	{
+		return fail(error, "the INPUT sidecar of " + path + " is " + std::to_string((long long)sideSize) + " bytes (at most " +
+			std::to_string(kMaxInputSidecarBytes) + ")");
+	}
+	side.seekg(0);
+	const std::vector<std::uint8_t> sideBytes((std::istreambuf_iterator<char>(side)), std::istreambuf_iterator<char>());
+	return parseInputSidecar(sideBytes, path.substr(path.find_last_of("/\\") + 1), out, error);
 }
 
 bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &out, std::string *error, bool partialTail)
@@ -44,17 +68,25 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 	NetByteReader r(bytes.data() + 8, bytes.size() - 8);
 	RelayLogFile l;
 	const std::uint32_t version = r.u32();
-	if (version != 1 && version != 2)
+	if (version != 1 && version != 2 && version != 4)
 	{
-		return fail(error, "log version " + std::to_string(version) + " (this build reads 1 and 2)");
+		return fail(error, "log version " + std::to_string(version) + " (this build reads 1, 2 and 4)");
 	}
 	l.version = (int)version;
 	l.gameId = u64(r);
 	l.slotMask = r.u8();
+	if (version == 4)
+	{
+		l.slotMask = (std::uint16_t)(l.slotMask | ((std::uint16_t)r.u8() << 8));
+	}
 	l.startUnix = r.u32();
 	if (r.failed())
 	{
 		return fail(error, "truncated header");
+	}
+	if (l.slotMask == 0 || (version != 4 && (l.slotMask & 0xff00u)))
+	{
+		return fail(error, "invalid slot mask");
 	}
 	static const char *kEvents[] = { "?", "bound", "rebound", "bye" };
 	// lane ONLINE-3: the record sizes, to tell a record cut at the end of a log still being written (partialTail) from a malformed one
@@ -63,15 +95,18 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 	{
 		const size_t remainingBefore = r.remaining();
 		const std::uint8_t kind = bytes[bytes.size() - remainingBefore];
-		const size_t fixed = kind == 1 ? 10 : kind == 2 ? 7 : kind == 3 ? 8 : kind == 4 ? 6 + 8 * 24 : kind == 5 ? 8 : 1;
+		const size_t wireSlots = l.slotMask <= 0xff ? 8 : RelayProtocol::kMaxSlots;
+		const size_t fixed = kind == 1 ? 10 : kind == 2 ? 7 : kind == 3 ? 8 : kind == 4 ? 6 + wireSlots * 24 : kind == 5 ? 8 : kind == 6 ? 5 : kind == 7 ? 3 + 7 * 8 : 1;
 		if (cutHere(fixed))
 		{
 			break;
 		}
-		if (kind == 1 && partialTail)
+		if ((kind == 1 || kind == 6) && partialTail)
 		{
 			const size_t at = bytes.size() - remainingBefore;
-			const std::uint32_t len = (std::uint32_t)bytes[at + 6] | ((std::uint32_t)bytes[at + 7] << 8) | ((std::uint32_t)bytes[at + 8] << 16) | ((std::uint32_t)bytes[at + 9] << 24);
+			const size_t lenAt = at + (kind == 1 ? 6 : 1);
+			const std::uint32_t len = (std::uint32_t)bytes[lenAt] | ((std::uint32_t)bytes[lenAt + 1] << 8) | ((std::uint32_t)bytes[lenAt + 2] << 16)
+				| ((std::uint32_t)bytes[lenAt + 3] << 24);
 			if (cutHere(fixed + (size_t)len))
 			{
 				break;
@@ -84,7 +119,7 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 			c.sender = r.u8();
 			c.ms = r.u32();
 			const std::uint32_t len = r.u32();
-			if (r.failed() || len > r.remaining() || c.sender >= 8)
+			if (r.failed() || len > r.remaining() || c.sender >= wireSlots || !(l.slotMask & (std::uint16_t(1) << c.sender)))
 			{
 				return fail(error, "truncated or malformed COMMAND record");
 			}
@@ -104,13 +139,27 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 		{
 			const int slot = r.u8(), event = r.u8();
 			const std::uint32_t ms = r.u32();
-			l.events.push_back(std::to_string(ms) + " slot " + std::to_string(slot) + " " + kEvents[event >= 1 && event <= 3 ? event : 0]);
+			if (r.failed() || slot >= wireSlots || event < 1 || event > 3 || !(l.slotMask & (std::uint16_t(1) << slot)))
+			{
+				return fail(error, "invalid EVENT slot " + std::to_string(slot));
+			}
+			l.events.push_back(std::to_string(ms) + " slot " + std::to_string(slot) + " " + kEvents[event]);
 		}
 		else if (kind == 3)
 		{
 			const int sender = r.u8(), target = r.u8();
 			const std::uint32_t ms = r.u32();
 			const int reason = r.u8();
+			if (r.failed() || sender >= wireSlots || target >= wireSlots || !(l.slotMask & (std::uint16_t(1) << sender))
+				|| !(l.slotMask & (std::uint16_t(1) << target)))
+			{
+				return fail(error, "invalid GAP slot");
+			}
+			if (reason != 1 && reason != 2)
+			{
+				// lane NETDIAG-1 (from a contributor's parser hardening): RelayCore::gap writes reason 1 (reorder buffer) or 2 (malformed) only
+				return fail(error, "invalid GAP reason " + std::to_string(reason));
+			}
 			l.gaps.push_back("sender " + std::to_string(sender) + " target " + std::to_string(target) + " at " + std::to_string(ms) + " ms: "
 				+ (reason == 1 ? "the reorder buffer overflowed" : "a malformed record"));
 		}
@@ -122,18 +171,44 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 			j.generation = r.u16();
 			const std::uint32_t ms = r.u32();
 			j.firstCommand = l.commands.size();
-			if (j.slot >= 8)
+			if (r.failed() || j.slot >= wireSlots || !(l.slotMask & (std::uint16_t(1) << j.slot)))
 			{
 				return fail(error, "a REJOINED record of slot " + std::to_string(j.slot));
 			}
 			l.rejoins.push_back(j);
 			l.events.push_back(std::to_string(ms) + " slot " + std::to_string(j.slot) + " rejoined generation " + std::to_string(j.generation));
 		}
+		else if (kind == 6)
+		{
+			// lane ROUTER-1: a canonical game's committed OBRC record (authority append): u32 length, then the record bytes
+			const std::uint32_t len = r.u32();
+			if (r.failed() || len > r.remaining() || len > 64 * 1024 * 1024)
+			{
+				return fail(error, "truncated or malformed CANONICAL record");
+			}
+			const std::vector<std::uint8_t> rec(bytes.end() - (long)r.remaining(), bytes.end() - (long)r.remaining() + (long)len);
+			for (std::uint32_t i = 0; i < len; ++i)
+			{
+				r.u8();
+			}
+			RelayCommit::Record decoded;
+			std::string why;
+			if (!RelayCommit::decode(rec, rec.size(), decoded, why))
+			{
+				return fail(error, "a CANONICAL record does not decode: " + why);
+			}
+			l.canonical.push_back(std::move(decoded));
+		}
 		else if (kind == 4)
 		{
 			r.u32();
 			l.endReason = r.u8();
-			for (int s = 0; s < 8; ++s)
+			if (!r.failed() && (l.endReason < 1 || l.endReason > 3))
+			{
+				// lane NETDIAG-1 (from a contributor's parser hardening): RelayCore::close writes 1 (every BYE), 2 (silence) or 3 (shutdown) only
+				return fail(error, "invalid END reason " + std::to_string(l.endReason));
+			}
+			for (size_t s = 0; s < wireSlots; ++s)
 			{
 				l.datagramsIn[(size_t)s] = u64(r);
 				l.bytesIn[(size_t)s] = u64(r);
@@ -144,6 +219,29 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 			{
 				return fail(error, "bytes after the END record");
 			}
+		}
+		else if (kind == 7 && version >= 4)
+		{
+			// lane ANTICHEAT-1: INPUT: a slot's c2r datagrams as AUTH-1 verified them (RelayCore.h "u8 7 INPUT")
+			RelayLogFile::Input in;
+			in.slot = r.u8();
+			in.hadKey = r.u8() != 0;
+			in.signedIn = u64(r);
+			in.plainIn = u64(r);
+			in.badTag = u64(r);
+			in.replayed = u64(r);
+			in.unsignedRefused = u64(r);
+			in.slotMismatch = u64(r);
+			in.malformed = u64(r);
+			if (r.failed() || in.slot >= (int)wireSlots)
+			{
+				return fail(error, "an INPUT record of slot " + std::to_string(in.slot));
+			}
+			l.inputs.push_back(in);
+		}
+		else if (kind == 5)
+		{
+			return fail(error, "a REJOINED record in a log of version " + std::to_string(version));
 		}
 		else
 		{
@@ -156,6 +254,126 @@ bool RelayLogFile::parse(const std::vector<std::uint8_t> &bytes, RelayLogFile &o
 	}
 	out = std::move(l);
 	return true;
+}
+
+bool RelayLogFile::parseInputSidecar(const std::vector<std::uint8_t> &bytes, const std::string &logName, RelayLogFile &io, std::string *error)
+{
+	static const char kMagic[8] = { 'O', 'B', 'F', 'M', 'E', 'R', 'L', 'I' };
+	if (bytes.size() < 8 || std::string(bytes.begin(), bytes.begin() + 8) != std::string(kMagic, 8))
+	{
+		return fail(error, "not an INPUT sidecar (magic)");
+	}
+	NetByteReader r(bytes.data() + 8, bytes.size() - 8);
+	if (r.u32() != 1)
+	{
+		return fail(error, "INPUT sidecar version (this build reads 1)");
+	}
+	const std::uint64_t gameId = u64(r);
+	const int flags = r.u8();
+	const int opener = r.u8();
+	const std::uint32_t hellos = r.u32();
+	const std::uint32_t nameBytes = r.u16();
+	std::string name;
+	for (std::uint32_t i = 0; i < nameBytes && !r.failed(); ++i)
+	{
+		name += (char)r.u8();
+	}
+	const int count = r.u8();
+	if (r.failed() || gameId != io.gameId || name != logName || (flags & ~1) != 0 || opener >= (int)RelayProtocol::kMaxSlots)
+	{
+		return fail(error, "the INPUT sidecar (" + name + ") is not this log's (" + logName + ") or is malformed");
+	}
+	std::vector<RelayLogFile::Input> inputs;
+	for (int i = 0; i < count; ++i)
+	{
+		RelayLogFile::Input in;
+		const int kind = r.u8();
+		in.slot = r.u8();
+		in.hadKey = r.u8() != 0;
+		in.signedIn = u64(r);
+		in.plainIn = u64(r);
+		in.badTag = u64(r);
+		in.replayed = u64(r);
+		in.unsignedRefused = u64(r);
+		in.slotMismatch = u64(r);
+		in.malformed = u64(r);
+		if (r.failed() || kind != 7 || in.slot >= (int)RelayProtocol::kMaxSlots || !(io.slotMask & (1u << in.slot)))
+		{
+			return fail(error, "the INPUT sidecar's record " + std::to_string(i) + " is malformed");
+		}
+		inputs.push_back(in);
+	}
+	if (!r.atEnd())
+	{
+		return fail(error, "bytes after the INPUT sidecar's records");
+	}
+	io.inputs = std::move(inputs);
+	io.inputSidecar = true;
+	io.legacyAuthAnomaly = (flags & 1) != 0;
+	io.openerSlot = opener;
+	io.authenticatedHellos = hellos;
+	return true;
+}
+
+std::string RelayLog::packetIntegrityReport(const RelayLogFile &log, const NetworkConfig &config, const Assembled &assembled, const std::string &gameId)
+{
+	auto js = [](const std::string &t) {
+		std::string o = "\"";
+		for (unsigned char c : t)
+		{
+			if (c == '"' || c == '\\')
+			{
+				o += '\\';
+				o += (char)c;
+			}
+			else if (c >= 0x20)
+			{
+				o += (char)c;
+			}
+		}
+		return o + "\"";
+	};
+	std::map<int, int> malformedRecords; // the stream gaps a malformed record caused, by sender
+	for (const std::string &gap : log.gaps)
+	{
+		if (gap.find("a malformed record") != std::string::npos && gap.rfind("sender ", 0) == 0)
+		{
+			++malformedRecords[std::atoi(gap.c_str() + 7)];
+		}
+	}
+	// online batch r4: a version-2 log's records come from its sidecar; a player that authenticated under a version-2 log is a finding: the slot whose
+	// HELLO chose version 2 (a previous-release HELLO, which kept every INPUT record out of the log) is the one to review
+	const bool haveInputs = log.version >= 4 || log.inputSidecar;
+	const std::string anomaly = log.legacyAuthAnomaly ? "a version-2 (previous-release) relay log, yet " + std::to_string(log.authenticatedHellos) +
+		" authenticated player HELLO(s): one release per game is the honest case; slot " + std::to_string(log.openerSlot) +
+		"'s HELLO opened the game in the previous release's envelope" : std::string();
+	std::string j = "{\"v\":1,\"detector\":\"D7-packet-integrity\",\"detector_version\":1,\"game_id\":" + (gameId.empty() ? std::string("null") : js(gameId)) +
+		",\"status\":\"" + std::string(haveInputs ? "ok" : "abstained") + "\",\"abstain_reason\":" +
+		(haveInputs ? std::string("null") : js("the relay log (version " + std::to_string(log.version) + ") has no INPUT records" +
+			(log.version == 2 ? " and no INPUT sidecar" : ""))) +
+		",\"anomaly\":" + (anomaly.empty() ? std::string("null") : js(anomaly)) +
+		",\"frames\":" + std::to_string(assembled.lastCompleteFrame) + ",\"crc_parity\":\"" + (assembled.crcDisagreements ? "mismatch" : "match") +
+		"\",\"settings\":{},\"players\":[";
+	bool first = true;
+	for (const RelayLogFile::Input &in : log.inputs)
+	{
+		const unsigned long long refused = in.badTag + in.replayed + in.unsignedRefused + in.slotMismatch + in.malformed +
+			(unsigned long long)malformedRecords[in.slot];
+		const char *input = in.signedIn && !in.plainIn ? "signed" : in.plainIn && !in.signedIn ? "plain" : in.signedIn ? "mixed" : "none";
+		const bool opened = !anomaly.empty() && in.slot == log.openerSlot;
+		const bool review = refused || opened;
+		j += (first ? "" : ",") + std::string("{\"player_index\":") + std::to_string(config.slotPlayerIndex[(size_t)in.slot]) + ",\"slot\":" +
+			 std::to_string(in.slot) + ",\"name\":\"\",\"band\":\"" + (!haveInputs ? "abstained" : review ? "review" : "none") +
+			 "\",\"score\":" + (review ? "1.000000" : "0.000000") + ",\"encounters\":" + (review ? "1" : "0") + ",\"input\":\"" + input +
+			 "\",\"signed_datagrams\":" + std::to_string(in.signedIn) + ",\"plain_datagrams\":" + std::to_string(in.plainIn) +
+			 ",\"bad_tag\":" + std::to_string(in.badTag) + ",\"replayed\":" + std::to_string(in.replayed) + ",\"unsigned_refused\":" +
+			 std::to_string(in.unsignedRefused) + ",\"slot_mismatch\":" + std::to_string(in.slotMismatch) + ",\"malformed\":" +
+			 std::to_string(in.malformed) + ",\"malformed_records\":" + std::to_string(malformedRecords[in.slot]) + ",\"anomaly\":" +
+			 (opened ? js(anomaly) : std::string("null")) + ",\"events\":[]}";
+		first = false;
+	}
+	j += "]}\n";
+	return j;
 }
 
 int RelayLog::Assembled::runAheadAfter(UnsignedInt frame, int initial) const
@@ -174,13 +392,14 @@ int RelayLog::Assembled::runAheadAfter(UnsignedInt frame, int initial) const
 
 // S-1064: replay the native relay's DROP / REJOIN flags for score presentation (RW 0x90313E), not simulation. assemble appends REJOIN events after
 // collecting drops, so vector order is not execution order. A rejoin completes on its frame; a drop excludes the slot from the start of its frame.
-std::uint8_t RelayLog::Assembled::disconnectedSlotsAt(UnsignedInt nextFrame) const
+std::uint16_t RelayLog::Assembled::disconnectedSlotsAt(UnsignedInt nextFrame) const
 {
-	std::array<std::uint64_t, 8> latest{};
-	std::uint8_t disconnected = 0;
+	// ONLINE16-FIX: sixteen slots wide (the u8 mask ignored the drops of slots 8 .. 15)
+	std::array<std::uint64_t, RelayProtocol::kMaxSlots> latest{};
+	std::uint16_t disconnected = 0;
 	for (const Network::MembershipEvent &e : membership)
 	{
-		if (e.slot < 0 || e.slot >= 8 || (e.kind != Network::MembershipEvent::DROP && e.kind != Network::MembershipEvent::REJOIN))
+		if (e.slot < 0 || e.slot >= RelayProtocol::kMaxSlots || (e.kind != Network::MembershipEvent::DROP && e.kind != Network::MembershipEvent::REJOIN))
 		{
 			continue;
 		}
@@ -193,17 +412,157 @@ std::uint8_t RelayLog::Assembled::disconnectedSlotsAt(UnsignedInt nextFrame) con
 			continue;
 		}
 		latest[(size_t)e.slot] = order;
-		const auto bit = (std::uint8_t)(1u << e.slot);
-		disconnected = drop ? (std::uint8_t)(disconnected | bit) : (std::uint8_t)(disconnected & ~bit);
+		const auto bit = (std::uint16_t)(1u << e.slot);
+		disconnected = drop ? (std::uint16_t)(disconnected | bit) : (std::uint16_t)(disconnected & ~bit);
 	}
 	return disconnected;
 }
 
+// lane ROUTER-1: a canonical game's log is its committed OBRC stream: each Frame record's bundle is the frame's command
+// list in order (no FRAMEINFO to announce and no incarnations to interleave), Membership records stage the membership
+// snapshots the frames ran with, and End closes it. The rejoining client feeds the same records to its canonical cursor.
+static bool assembleCanonical(const RelayLogFile &log, const NetworkConfig &config, RelayLog::Assembled &a, std::string *error)
+{
+	RelayMembership::Snapshot prev;
+	std::array<int, 16> crcCount{};
+	std::map<UnsignedInt, std::map<int, std::uint32_t>> crcsOf;
+	for (const RelayCommit::Record &rec : log.canonical)
+	{
+		if (rec.stamp.game != log.gameId)
+		{
+			return fail(error, "a CANONICAL record of game " + std::to_string(rec.stamp.game) + " in the log of game " + std::to_string(log.gameId));
+		}
+		if (rec.kind == RelayCommit::Kind::Frame)
+		{
+			RelayFrameBundle::Frame bundle;
+			std::string why;
+			if (!RelayFrameBundle::decode(rec.payload, bundle, why))
+			{
+				return fail(error, "frame " + std::to_string(rec.stamp.frame) + "'s CANONICAL record does not decode: " + why);
+			}
+			CommandList &list = a.frames[rec.stamp.frame];
+			for (const RelayFrameBundle::Order &o : bundle.orders)
+			{
+				if (o.slot >= 16 || !(log.slotMask & (1u << o.slot)))
+				{
+					return fail(error, "frame " + std::to_string(rec.stamp.frame) + " carries an order of slot " + std::to_string(o.slot)
+						+ ", which is not a network slot");
+				}
+				NetByteReader r(o.bytes.data(), o.bytes.size());
+				std::unique_ptr<GameMessage> msg = NetPacket::readGameMessage(r, &why);
+				if (!msg)
+				{
+					return fail(error, "frame " + std::to_string(rec.stamp.frame) + " order of slot " + std::to_string(o.slot) + ": " + why);
+				}
+				// NetGameCommandMsg::constructGameMessage: the sender's player — ONLINE16-FIX: the validated sixteen-entry mapping for every
+				// network slot (slots 8 .. 15 got -1, so their orders ran as nobody's on rejoin, spectating and --relay-log)
+				const int player = config.slotPlayerIndex[(size_t)o.slot];
+				if (player < 0)
+				{
+					return fail(error, "network slot " + std::to_string(o.slot) + " has no player in the loaded game");
+				}
+				msg->friend_setPlayerIndex(player);
+				if (msg->getType() == MSG_LOGIC_CRC && config.crcInterval > 0)
+				{
+					const GameMessageArgument *arg = msg->getArgument(0);
+					const UnsignedInt described = (UnsignedInt)(++crcCount[(size_t)o.slot]) * (UnsignedInt)config.crcInterval;
+					crcsOf[described][(int)o.slot] = arg ? (std::uint32_t)arg->integer : 0u;
+				}
+				list.append(*msg);
+			}
+			for (const RelayFrameBundle::Deferral &d : bundle.deferrals)
+			{
+				a.problems.push_back("frame " + std::to_string(rec.stamp.frame) + ": the relay moved slot " + std::to_string(d.slot)
+					+ "'s order " + std::to_string(d.id) + " to frame " + std::to_string(d.toFrame) + " (budget)");
+			}
+			for (const RelayFrameBundle::Refusal &o : bundle.refusals)
+			{
+				a.problems.push_back("frame " + std::to_string(rec.stamp.frame) + ": the relay refused slot " + std::to_string(o.slot)
+					+ "'s order " + std::to_string(o.id) + " (" + RelayFrameBundle::refusalMessage(o.code) + ")");
+			}
+			a.anyComplete = true;
+			a.lastCompleteFrame = std::max(a.lastCompleteFrame, rec.stamp.frame);
+		}
+		else if (rec.kind == RelayCommit::Kind::Membership)
+		{
+			RelayMembership::Snapshot snap;
+			std::string why;
+			if (!RelayMembership::decode(rec.payload, snap, why))
+			{
+				return fail(error, "membership record of frame " + std::to_string(rec.stamp.frame) + " does not decode: " + why);
+			}
+			for (int s = 0; s < 16; ++s)
+			{
+				const std::uint16_t bit = (std::uint16_t)(1u << s);
+				if (!(snap.slotMask & bit))
+				{
+					continue;
+				}
+				// the slot's incarnation count is its ticket generation + 1 (the generation a rejoin ticket bumps)
+				a.incarnations[(size_t)s] = 1 + (int)snap.ticketGenerations[(size_t)s];
+				if (snap.ticketGenerations[(size_t)s] != prev.ticketGenerations[(size_t)s] && (snap.active & bit))
+				{
+					// a new incarnation went live with this membership (a rejoin)
+					a.membership.push_back({ Network::MembershipEvent::REJOIN, s, rec.stamp.frame });
+					a.joinFrame[(size_t)s] = rec.stamp.frame;
+				}
+				if (!(prev.departed & bit) && (snap.departed & bit))
+				{
+					a.membership.push_back({ Network::MembershipEvent::DROP, s, rec.stamp.frame });
+					a.leaveFrame[(size_t)s] = rec.stamp.frame;
+				}
+			}
+			prev = snap;
+		}
+		else if (rec.kind == RelayCommit::Kind::End)
+		{
+			// the committed end: the replay runs to the last frame recorded (a problem-free tail is what separates it from a cut log)
+			continue;
+		}
+	}
+	for (const auto &kv : crcsOf)
+	{
+		if (kv.first > a.lastCompleteFrame + 1 || kv.second.empty())
+		{
+			continue;
+		}
+		bool agree = true;
+		const std::uint32_t value = kv.second.begin()->second;
+		for (const auto &sv : kv.second)
+		{
+			agree = agree && sv.second == value;
+		}
+		++a.crcFrames;
+		if (!agree)
+		{
+			++a.crcDisagreements;
+			a.problems.push_back("the players' CRCs of frame " + std::to_string(kv.first) + " differ: the game desynced there");
+			continue;
+		}
+		a.hashes[kv.first] = value;
+	}
+	return true;
+}
+
 bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, Assembled &out, std::string *error, bool live)
 {
+	const std::uint32_t currentMask = MAX_SLOTS >= 16 ? 0xffffu : ((std::uint32_t(1) << MAX_SLOTS) - 1);
+	if (log.slotMask == 0 || log.slotMask > currentMask)
+	{
+		return fail(error, "relay log has slots beyond this game's capacity");
+	}
 	Assembled a;
 	a.leaveFrame.fill(0xFFFFFFFFu);
 	a.joinFrame.fill(0);
+	if (!log.canonical.empty())
+	{
+		if (!assembleCanonical(log, config, a, error))
+		{
+			return false;
+		}
+		out = std::move(a);
+		return true;
+	}
 	// lane CONTRIB-1 (GitHub #23): static, so the local structs below may name it; MSVC 19.44 refused the automatic one in a default member initializer (C2065)
 	static constexpr UnsignedInt kNever = 0xFFFFFFFFu;
 	struct FrameOfSlot
@@ -223,8 +582,8 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		int generation = 0; ///< lane ONLINE-3: the REJOINED record's generation (0: the first incarnation)
 		UnsignedInt end() const { return std::min(leave, drop); }
 	};
-	std::array<std::vector<Incarnation>, 8> inc;
-	for (int s = 0; s < 8; ++s)
+	std::array<std::vector<Incarnation>, MAX_SLOTS> inc;
+	for (int s = 0; s < MAX_SLOTS; ++s)
 	{
 		if ((log.slotMask & (1u << s)) && config.slotPlayerIndex[(size_t)s] < 0)
 		{
@@ -232,7 +591,7 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		}
 		inc[(size_t)s].resize(1);
 	}
-	std::array<std::vector<UnsignedInt>, 8> rejoinRan; // per slot, the frames its REJOINs ran on, in log order
+	std::array<std::vector<UnsignedInt>, MAX_SLOTS> rejoinRan; // per slot, the frames its REJOINs ran on, in log order
 	std::vector<std::pair<int, UnsignedInt>> drops;     // (slot, frame) in log order
 	size_t nextRejoin = 0;
 	for (size_t ci = 0; ci < log.commands.size(); ++ci)
@@ -256,11 +615,25 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		if (m.type == NETCOMMANDTYPE_DISCONNECTPLAYER)
 		{
 			// lane ONLINE-3: the decider's drop (logged once by the relay): the target runs no frame from m.frame on
-			if (m.targetSlot < 8 && (log.slotMask & (1u << m.targetSlot)))
+			if (m.targetSlot < MAX_SLOTS && (log.slotMask & (1u << m.targetSlot)))
 			{
 				drops.push_back({ (int)m.targetSlot, m.frame });
 				a.membership.push_back({ Network::MembershipEvent::DROP, (int)m.targetSlot, m.frame });
 			}
+			continue;
+		}
+		if (m.type == NETCOMMANDTYPE_VIEW)
+		{
+			// lane ANTICHEAT-1: the player's reported view (its log-only stream): kept for the replay, never a frame entry
+			ReplayFile::View v;
+			v.frame = m.executionFrame;
+			v.slot = (std::uint8_t)s;
+			v.cameraX = m.view[0];
+			v.cameraY = m.view[1];
+			v.cursorX = m.view[2];
+			v.cursorY = m.view[3];
+			v.flags = m.viewFlags;
+			a.views.push_back(v);
 			continue;
 		}
 		if (m.executionFrame >= in.leave)
@@ -282,7 +655,7 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		}
 		case NETCOMMANDTYPE_DESTROYPLAYER:
 		{
-			const int victim = m.targetSlot < 8 ? config.slotPlayerIndex[m.targetSlot] : -1;
+			const int victim = m.targetSlot < MAX_SLOTS ? config.slotPlayerIndex[m.targetSlot] : -1;
 			auto msg = std::make_shared<GameMessage>(MSG_SELF_DESTRUCT, victim >= 0 ? victim : config.slotPlayerIndex[(size_t)s]);
 			if (victim >= 0)
 			{
@@ -337,7 +710,7 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 			}
 		}
 	};
-	for (int s = 0; s < 8; ++s)
+	for (int s = 0; s < MAX_SLOTS; ++s)
 	{
 		applyDrops(s);
 	}
@@ -352,8 +725,8 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 			}
 		}
 	}
-	std::array<bool, 8> gone{};
-	std::array<int, 8> crcCount{};            // per slot, the CRCs its first incarnation sent (the n-th describes frame (n + 1) x interval)
+	std::array<bool, MAX_SLOTS> gone{};
+	std::array<int, MAX_SLOTS> crcCount{};            // per slot, the CRCs its first incarnation sent (the n-th describes frame (n + 1) x interval)
 	std::map<UnsignedInt, UnsignedInt> crcFrameOfExecution;
 	std::map<UnsignedInt, std::map<int, std::uint32_t>> crcsOf; // CRC frame -> slot -> value
 	struct LateCrc
@@ -368,7 +741,8 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		bool complete = true;
 		std::vector<int> rejoinedNow;
 		bool anyLive = false;
-		for (int s = 0; s < 8; ++s)
+		bool anyMember = false; // lane NETDIAG-1: a slot ran this frame (an incarnation it is a member of)
+		for (int s = 0; s < MAX_SLOTS; ++s)
 		{
 			if (!(log.slotMask & (1u << s)) || gone[(size_t)s])
 			{
@@ -392,6 +766,7 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 				continue;
 			}
 			anyLive = true;
+			anyMember = true;
 			Incarnation &in = inc[(size_t)s][(size_t)k];
 			const auto it = in.frames.find(frame);
 			if (it == in.frames.end() || it->second.count < 0)
@@ -478,7 +853,7 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		for (int t : rejoinedNow)
 		{
 			// the slot's next incarnation without a join frame yet starts at the frame after this one
-			if (t < 0 || t >= 8)
+			if (t < 0 || t >= MAX_SLOTS)
 			{
 				continue;
 			}
@@ -499,8 +874,16 @@ bool RelayLog::assemble(const RelayLogFile &log, const NetworkConfig &config, As
 		}
 		a.lastCompleteFrame = frame;
 		a.anyComplete = true;
+		if (!anyMember || frame == last)
+		{
+			// lane NETDIAG-1 (a fuzzer's log: every slot gone but one held for a REJOIN, a command naming frame 0xFFFFFFFE: four billion empty frames,
+			// and `frame <= last` never ends at 0xFFFFFFFF): with no member this frame no REJOIN can come (only a member's frame carries one) and
+			// nothing changes any more, so every frame up to `last` is this one again: the walk ends there at once, with the same result
+			a.lastCompleteFrame = last;
+			break;
+		}
 	}
-	for (int s = 0; s < 8; ++s)
+	for (int s = 0; s < MAX_SLOTS; ++s)
 	{
 		if (!(log.slotMask & (1u << s)))
 		{
@@ -574,6 +957,10 @@ bool RelayLog::writeReplay(const std::string &path, const ReplayHeader &header, 
 	for (; h != a.hashes.end(); ++h)
 	{
 		w.recordHash(h->first, h->second);
+	}
+	for (const ReplayFile::View &v : a.views)
+	{
+		w.recordView(v); // lane ANTICHEAT-1
 	}
 	if (!w.errors().empty())
 	{

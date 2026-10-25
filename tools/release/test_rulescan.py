@@ -293,8 +293,12 @@ def test_binary_hits_are_the_reference_in_every_encoding_and_alignment():
 def test_binary_hits_are_the_reference_on_a_real_binary():
     """this Python's own executable (machine code, string tables, UTF-16 resources on Windows) with the planted values spread inside"""
     import sysconfig  # noqa: PLC0415
-    lib = Path(sysconfig.get_config_var("LIBDIR") or "", sysconfig.get_config_var("LDLIBRARY") or "")
-    exe = (lib if lib.is_file() and lib.stat().st_size > 1 << 19 else Path(sys.executable).resolve()).read_bytes()[:1 << 19]
+    ldlibrary = sysconfig.get_config_var("LDLIBRARY") or ""
+    # lane MACGATE-1: a macOS framework build's executable is a 34 KB stub; its machine code is the framework's library
+    # (PYTHONFRAMEWORKPREFIX/LDLIBRARY, e.g. Python.framework/Versions/3.12/Python)
+    candidates = [Path(sysconfig.get_config_var(var) or "", ldlibrary) for var in ("LIBDIR", "PYTHONFRAMEWORKPREFIX") if sysconfig.get_config_var(var)]
+    lib = next((c for c in candidates if c.is_file() and c.stat().st_size > 1 << 19), Path(sys.executable).resolve())
+    exe = lib.read_bytes()[:1 << 19]
     assert len(exe) == 1 << 19
     rng = random.Random(3)
     for k in range(3):

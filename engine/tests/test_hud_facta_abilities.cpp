@@ -12,7 +12,9 @@
 #include "FactATestUtil.h"
 #include "FactAEffects.h"
 
+#include "Common/SpecialPower.h"
 #include "Common/Thing/ThingTemplate.h"
+#include "GameLogic/ActionManager.h"
 #include "GameLogic/Object/ExperienceTracker.h"
 #include "Common/ModelState.h"
 #include "GameLogic/System/ShroudManager.h"
@@ -377,6 +379,24 @@ void runObject(FactRig &r, const std::string &faction, const std::string &name, 
 					// Area powers target the battalion's ground, not an individual soldier's occupied approach cell.
 					Coord3D ground = *enemy->getPosition();
 					ground.z = r.logic().getGroundHeight(ground.x, ground.y);
+					// lane SUMMONLOC-1: the hero power click issues nothing where the location test refuses (RW 0x81E9C5 -> RW 0x6A4260 -> RW 0x82DFB7);
+					// a LIMIT_DISTANCE power (Dain's Royal Guard 150, Aragorn's Oathbreakers 200) is clicked on the way to the enemy, as a player would
+					const SpecialPowerTemplate *pw = b->m_command == GUI_COMMAND_SPECIAL_POWER && TheSpecialPowerStore
+						? TheSpecialPowerStore->findSpecialPowerTemplate(b->m_specialPowerName) : nullptr;
+					if (pw && !ActionManager::canDoSpecialPowerAtLocation(*o, ground, pw, b->m_options))
+					{
+						const Coord3D *c = o->getPosition();
+						for (float k : { 0.6f, 0.4f })
+						{
+							Coord3D p{ c->x + (ground.x - c->x) * k, c->y + (ground.y - c->y) * k, 0.0f };
+							p.z = r.logic().getGroundHeight(p.x, p.y);
+							if (ActionManager::canDoSpecialPowerAtLocation(*o, p, pw, b->m_options))
+							{
+								ground = p;
+								break;
+							}
+						}
+					}
 					r.clickWorld(ground);
 				}
 			}

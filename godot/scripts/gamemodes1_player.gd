@@ -5,18 +5,16 @@
 ##            "Entering sandbox mode...", RW 0x928482) the game's HUD (gamemodes1-sandbox-game.png), then the ally's structures fall: it is defeated
 ##            (gamemodes1-sandbox-ally-defeated.png), but a sandbox is never won (RW 0x808C64): no victory screen (gamemodes1-sandbox-no-victory.png)
 ## Prints "GAMEMODES1 <what>: ok / FAIL <why>" and "GAMEMODES1 RESULT: <n> ok, <m> failed".
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
 var helper # scripts/hud5_player.gd: the camera helpers
 var scout_template := "GondorBoromir" # the default --faction FactionMen
-var ok_count := 0
-var fail_count := 0
 
 
-func run(p_game: Node, mode: String) -> void:
+func _run(p_game: Node, mode: String) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -24,20 +22,8 @@ func run(p_game: Node, mode: String) -> void:
 	helper.game = game
 	helper.hud = hud
 	helper.world = world
-	var r := ""
-	if mode == "battle":
-		r = await _battle()
-	elif mode == "sandbox":
-		r = await _sandbox()
-	else:
-		r = "unknown mode '%s'" % mode
-	if r == "":
-		ok_count += 1
-		print("GAMEMODES1 %s: ok" % mode)
-	else:
-		fail_count += 1
-		print("GAMEMODES1 %s: FAIL %s" % [mode, r])
-	print("GAMEMODES1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	var action: Callable = {"battle": _battle, "sandbox": _sandbox}.get(mode, Callable())
+	await _run_scenarios(PackedStringArray([mode]), [action])
 
 
 func _other() -> String:

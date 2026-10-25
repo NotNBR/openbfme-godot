@@ -271,7 +271,7 @@ TEST_CASE("review 3: the same castle death gives the same hash for a local owner
 }
 
 // 4: an INI InitialHealth below the thresholds shows its damage state from the first frame
-TEST_CASE("review 4: InitialHealth applies the damage state's model condition, damage modules and structure effects once, for the last body of a template")
+TEST_CASE("review 4: InitialHealth applies the damage state's model condition and structure effects once, for the last body of a template; the damage modules are not told")
 {
 	World w;
 	const int damaged = CombatNames::modelCondition("DAMAGED"), really = CombatNames::modelCondition("REALLYDAMAGED"), rubble = CombatNames::modelCondition("RUBBLE");
@@ -286,12 +286,13 @@ TEST_CASE("review 4: InitialHealth applies the damage state's model condition, d
 	d.m_input.m_damageType = DAMAGE_UNRESISTABLE;
 	wounded->attemptDamage(d);
 	CHECK(wounded->testModelCondition(really));
-	// zero: RUBBLE with NO_COLLISIONS and the castle member's breached flag
+	// zero: RUBBLE with NO_COLLISIONS. Lane FX-4: the body's constructor state (RW 0x8C39D0 -> setCorrectDamageState RW 0x8C2A5D) tells no damage module (only
+	// attemptDamage RW 0x8C4389 / attemptHealing RW 0x8C3131 do), so the castle member's breached flag (+ 0x15, written only by RW 0x79A0ED) stays clear
 	Object *ruin = w.unit("RRuin", 'B', 400, 300);
 	CHECK(ruin->getBodyModule()->getDamageState() == BODY_RUBBLE);
 	CHECK(ruin->testModelCondition(rubble));
 	CHECK(ruin->testStatus((unsigned)CombatNames::statuses().noCollisions));
-	CHECK(dynamic_cast<CastleMemberBehavior *>(ruin->findModule("CastleMemberBehavior"))->breached());
+	CHECK_FALSE(dynamic_cast<CastleMemberBehavior *>(ruin->findModule("CastleMemberBehavior"))->breached());
 	// two bodies: the last one (StructureBody, InitialHealth 50 of 100: DAMAGED) is the body and applies its state
 	Object *two = w.unit("RTwoBodies", 'B', 500, 300);
 	CHECK(two->getBodyModule()->getHealth() == 50.0f);

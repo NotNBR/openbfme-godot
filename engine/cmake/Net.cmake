@@ -17,6 +17,7 @@ set(OPENBFME_NET_HOST_SOURCES
 set(OPENBFME_NET_TESTS
     tests/test_process.cpp
     tests/test_net_core.cpp
+    tests/test_p16_net_soak.cpp
     tests/test_net_retail.cpp)
 
 # called once openbfme_core and openbfme_tests exist: the host sources, the headless peer and the tests' path to it

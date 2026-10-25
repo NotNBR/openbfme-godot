@@ -186,7 +186,7 @@ public:
 	void onDie(const DieModuleInterface::Event &event) override;            // RW 0x8892B0
 	void onDamage(const DamageInfo &info) override;                         // RW 0x88939A
 	void onHealing(const DamageInfo &) override { m_hitFrame = 0; }        // RW 0x889191
-	void onBodyDamageStateChange(BodyDamageType, BodyDamageType) override {} // RW 0x918BA0
+	void onBodyDamageStateChange(const DamageInfo *, BodyDamageType, BodyDamageType) override {} // RW 0x918BA0
 	void crc(StateHasher &h) const override;
 	unsigned created() const { return m_created; }
 

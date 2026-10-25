@@ -16,20 +16,12 @@
 extends "res://scripts/play1_player.gd"
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
 	shell = game._shell
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("DEVPORT7 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("DEVPORT7 %s: FAIL %s" % [s, r])
-	print("DEVPORT7 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 # ---- helpers -------------------------------------------------------------------------------------------------------------------------------------------

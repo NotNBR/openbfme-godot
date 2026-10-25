@@ -224,3 +224,17 @@ TEST_CASE("render lighting: the classic lit power is clamped to +-127.9961 like 
 	const std::string code = Generate_W3D_Shader_Code(k);
 	CHECK(has(code, "pow(ndh, clamp(w3d_shininess, -127.996101, 127.996101))"));
 }
+
+TEST_CASE("render lighting: terrain SAS sun scale respects the overbright version gate")
+{
+	GlobalLightingData g;
+	g.version = 8;
+	g.terrainLightingMultiplier = 2.0f;
+	CHECK(W3DObjectLightingUtil::effectColorScale(g) == 2.0f);
+	g.terrainLightingMultiplier = 1.0f;
+	CHECK(W3DObjectLightingUtil::effectColorScale(g) == 1.0f);
+	g.terrainLightingMultiplier = 1.5f;
+	CHECK(W3DObjectLightingUtil::effectColorScale(g) == 2.0f);
+	g.version = 4;
+	CHECK(W3DObjectLightingUtil::effectColorScale(g) == 1.0f);
+}

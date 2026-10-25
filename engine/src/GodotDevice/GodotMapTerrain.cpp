@@ -16,6 +16,7 @@
 #include "GameClient/UserDataFolder.h"
 #include "GameClient/WaterGeometry.h"
 #include "GameEngineDevice/W3DDevice/GameClient/HeightMapMesh.h"
+#include "GameEngineDevice/W3DDevice/GameClient/W3DObjectLighting.h"
 #include "GameEngineDevice/W3DDevice/GameClient/TerrainComposite.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Object/ObjectNameIndex.h"
@@ -646,7 +647,8 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 	}
 	const GlobalLightingData *lighting = map.chunks.hasGlobalLighting ? &map.chunks.lighting : nullptr;
 	const TimeOfDayLights *tod = lighting ? &lighting->tod[std::max(0, std::min(3, lighting->timeOfDay - 1))] : nullptr;
-	const bool overbright = lighting && lighting->terrainLightingMultiplier > 1.0f; // INFERRED (S-033)
+	const float effectColorScale = lighting ? W3DObjectLightingUtil::effectColorScale(*lighting) : 1.0f;
+	const bool overbright = effectColorScale > 1.0f;
 
 	if (lighting)
 	{
@@ -656,6 +658,7 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		lit["flag_dbd"] = lighting->flagDBD;
 		lit["shadow_color"] = (int64_t)lighting->shadowColor;
 		lit["overbright_assumed"] = overbright;
+		lit["effect_color_scale"] = effectColorScale;
 		Array terrainLights;
 		for (int i = 0; i < 3; ++i)
 		{
@@ -842,7 +845,9 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 				const GlobalLight &sun = tod->terrain[0];
 				// stop S-033: the shader wants the direction TOWARD the light = -lightPos (ZH lightRay)
 				m->set_shader_parameter("sun_dir_sage", Vector3(-sun.lightPos[0], -sun.lightPos[1], -sun.lightPos[2]));
-				m->set_shader_parameter("sun_color", Vector3(sun.diffuse[0], sun.diffuse[1], sun.diffuse[2]));
+				// terrain.fxo MainDirectionalLight binds Sas.DirectionalLight[0]. The
+				// SAS callback RW 0x54CFD0 doubles its colour before the shader's overbright half-scale.
+				m->set_shader_parameter("sun_color", Vector3(sun.diffuse[0], sun.diffuse[1], sun.diffuse[2]) * effectColorScale);
 			}
 			m->set_shader_parameter("overbright", overbright);
 			m->set_shader_parameter("debug_mode", (int)(options.has("debug_mode") ? (int)options["debug_mode"] : 0));
@@ -1022,8 +1027,16 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 			Ref<Shader> additive;
 			if (sh.is_valid())
 			{
-				additive.instantiate();
-				additive->set_code(sh->get_code().replace("blend_mix", "blend_add"));
+				const String mixMode = "render_mode unshaded, blend_mix";
+				if (sh->get_code().contains(mixMode))
+				{
+					additive.instantiate();
+					additive->set_code(sh->get_code().replace(mixMode, "render_mode unshaded, blend_add"));
+				}
+				else
+				{
+					errors.push_back("river.gdshader: no \"" + mixMode + "\" render mode to make the additive copy from");
+				}
 			}
 			int64_t additiveRendered = 0;
 			float waterDiffuse[4];
@@ -1214,6 +1227,12 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		rd["orphan_points"] = rrep.orphanPoints;
 		rd["duplicate_segments"] = rrep.duplicateSegments;
 		rd["unknown_road_types"] = rrep.unknownRoadTypes;
+		rd["mitered_joins"] = rrep.miteredJoins;
+		rd["tee_joins"] = rrep.teeJoins;
+		rd["four_way_joins"] = rrep.fourWayJoins;
+		rd["end_caps"] = rrep.endCaps;
+		rd["special_junctions_pending"] = rrep.specialJunctionsPending;
+		rd["rounded_joins"] = rrep.roundedJoins;
 		rd["strips"] = (int64_t)rrep.strips;
 		rd["vertices"] = (int64_t)rrep.vertices;
 		rd["triangles"] = (int64_t)rrep.triangles;

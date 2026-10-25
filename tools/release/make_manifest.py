@@ -19,9 +19,9 @@ launchers are retired; the launchers from ONEZIP-1 on read both. When both archi
 package must be byte for byte the launcher archive's (one launcher per release).
 
 with sorted keys, two-space indents and a final newline, so the same packages give the same bytes. The version is the folder's (the
-SHA256SUMS name); it must be a release tag (v<major>.<minor>.<patch>, v<major>.<minor>.<patch>-alpha.<n> or
-v<major>.<minor>.<patch>-preview.<n>) on the checked-out commit (--allow-untagged: tests); an -alpha.<n> or -preview.<n> tag is the
-pre-release channel, whose id is "preview" (lane RELNAME-1: the alpha builds keep the channel id, the launcher shows it as "Alpha"). Every archive's size and SHA-256 are computed here and must match SHA256SUMS. Sign the result
+SHA256SUMS name); it must be a release tag (v<major>.<minor>.<patch>, v<major>.<minor>.<patch>-alpha.<n>,
+v<major>.<minor>.<patch>-nightly.<n> or v<major>.<minor>.<patch>-preview.<n>) on the checked-out commit (--allow-untagged: tests); an -alpha.<n>,
+-nightly.<n> or -preview.<n> tag is the pre-release channel, whose id is "preview" (lane NIGHTLY-1, owner, 2026-10-21: the launcher shows that channel as "Nightly"; the id is unchanged). Every archive's size and SHA-256 are computed here and must match SHA256SUMS. Sign the result
 with tools/release/sign_manifest.py on the offline machine.
 """
 from __future__ import annotations
@@ -52,14 +52,14 @@ def kinds_of(fmt: int) -> tuple[str, ...]:
         raise SystemExit(f"make_manifest: format {fmt!r} (2 or 3)")
     return ("game", "launcher") if fmt == 2 else ("game",)
 _N = r"(?:0|[1-9][0-9]{0,8})"
-# the launcher's release grammar (launcher/scripts/core/semver.gd): v<major>.<minor>.<patch>[-(alpha|preview).<n>], matched as a whole;
+# the launcher's release grammar (launcher/scripts/core/semver.gd): v<major>.<minor>.<patch>[-(alpha|nightly|preview).<n>], matched as a whole;
 # groups 1-3 the core, 4 the pre-release word, 5 its number
-TAG = re.compile(rf"v({_N})\.({_N})\.({_N})(?:-(alpha|preview)\.({_N}))?")
+TAG = re.compile(rf"v({_N})\.({_N})\.({_N})(?:-(alpha|nightly|preview)\.({_N}))?")
 
 
 def version_key(version: str) -> tuple:
-    """the launcher's order (semver.gd compare, SemVer 2.0.0 section 11): a pre-release below its release, "alpha" < "preview", then
-    the number; v0.3.0-preview.4 < v0.4.0-alpha.1 < v0.4.0-alpha.2 < v0.4.0"""
+    """the launcher's order (semver.gd compare, SemVer 2.0.0 section 11): a pre-release below its release, "alpha" < "nightly" < "preview",
+    then the number; v0.3.0-preview.4 < v0.4.0-alpha.1 < v0.4.0-alpha.2 < v0.4.0; v0.4.12 < v0.4.13-nightly.20261022 < v0.4.13"""
     m = TAG.fullmatch(version)
     if not m or len(version) > 40:
         raise SystemExit(f"make_manifest: {version!r} is not a release version")
@@ -74,8 +74,8 @@ def asset_name(kind: str, version: str, platform: str) -> str:
 def channel_of(version: str) -> str:
     m = TAG.fullmatch(version)
     if not m or len(version) > 40:
-        raise SystemExit(f"make_manifest: {version!r} is not a release version (v<major>.<minor>.<patch>, v<major>.<minor>.<patch>-alpha.<n> or "
-                         f"v<major>.<minor>.<patch>-preview.<n>)")
+        raise SystemExit(f"make_manifest: {version!r} is not a release version (v<major>.<minor>.<patch>, v<major>.<minor>.<patch>-alpha.<n>, "
+                         f"-nightly.<n> or -preview.<n>)")
     return "preview" if m.group(4) else "stable"
 
 

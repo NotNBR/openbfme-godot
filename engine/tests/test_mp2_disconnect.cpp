@@ -215,7 +215,7 @@ struct Game
 };
 } // namespace
 
-TEST_CASE("mp2 disconnect: the new net commands survive the encoding; a slot outside 0 .. 7 is refused")
+TEST_CASE("mp2 disconnect: the new net commands survive the encoding; a slot outside 0 .. 15 is refused")
 {
 	NetCommandMsg c;
 	c.type = NETCOMMANDTYPE_DISCONNECTSCREENOFF;
@@ -272,9 +272,37 @@ TEST_CASE("mp2 disconnect: the new net commands survive the encoding; a slot out
 	REQUIRE_MESSAGE(NetPacket::decodeCommand(b, rr, &error), error);
 	CHECK(rr.messages.size() == 2);
 	CHECK(rr.messages[1]->getPlayerIndex() == 12);
+	// a target of slot 9 in the legacy wire form is refused, as an old client refuses it; the slot takes the wide form (NetPacket kFrameResend16)
 	b[6] = 9; // the target slot byte of a DESTROYPLAYER / FRAMERESEND is right after the 6-byte header
 	CHECK(!NetPacket::decodeCommand(b, rr, &error));
 	CHECK(error.find("about slot 9") != std::string::npos);
+	r.targetSlot = 9;
+	b = NetPacket::encodeCommand(r, &error);
+	REQUIRE(!b.empty());
+	CHECK(b[0] == NetPacket::kFrameResend16);
+	REQUIRE_MESSAGE(NetPacket::decodeCommand(b, rr, &error), error);
+	CHECK(rr.type == NETCOMMANDTYPE_FRAMERESEND);
+	CHECK(rr.targetSlot == 9);
+	b[6] = MAX_SLOTS;
+	CHECK(!NetPacket::decodeCommand(b, rr, &error));
+	CHECK(error.find("about slot " + std::to_string(MAX_SLOTS)) != std::string::npos);
+	// the wide forms carry the u16 masks the legacy bytes cannot (DISCONNECTSCREENOFF's released frames, FRAMERESEND's rejoin mask)
+	NetCommandMsg w;
+	w.type = NETCOMMANDTYPE_DISCONNECTSCREENOFF;
+	w.slot = 9;
+	w.frame = 777;
+	w.releasedMask = 0x0305;
+	w.releasedFrames = { 11, 0, 13, 0, 0, 0, 0, 0, 17, 19 };
+	b = NetPacket::encodeCommand(w, &error);
+	REQUIRE(!b.empty());
+	CHECK(b[0] == NetPacket::kDisconnectScreenOff16);
+	NetCommandMsg wd;
+	REQUIRE_MESSAGE(NetPacket::decodeCommand(b, wd, &error), error);
+	CHECK(wd.type == NETCOMMANDTYPE_DISCONNECTSCREENOFF);
+	CHECK(wd.slot == 9);
+	CHECK(wd.releasedMask == 0x0305);
+	CHECK(wd.releasedFrames[8] == 17);
+	CHECK(wd.releasedFrames[9] == 19);
 }
 
 TEST_CASE("mp2 disconnect: a peer that goes silent is dropped after its timeout: the screen, the bars, the automatic vote, the drop at one frame, "
@@ -560,12 +588,12 @@ TEST_CASE("mp2 run-ahead: the packet router's measured round trip sets every pee
 	tickWithCommands(10);
 	CHECK(g.peers[0].net->currentRunAhead() == 2);
 	CHECK(g.peers[1].net->currentRunAhead() == 2);
-	g.hub.endpoint(0).rtt = 800; // the router (slot 0): 400 ms one way + 10 % = 440 ms, + half a period = 2 frames, + 1 = 3, on both peers once the RUNAHEAD frame ran
+	g.hub.endpoint(0).rtt = 800; // the router (slot 0): 400 ms one way + 10 % = 440 ms, + the 25 ms margin = 2 frames, + 1 = 3, on both peers once the RUNAHEAD frame ran
 	tickWithCommands(10);
 	CHECK(g.peers[0].net->currentRunAhead() == 3);
 	CHECK(g.peers[1].net->currentRunAhead() == 3);
 	CHECK(g.peers[0].net->maxRoundTripMs() == 800);
-	g.hub.endpoint(0).rtt = 4000; // 2200 ms + 100 = 11 frames, + 1 = 12
+	g.hub.endpoint(0).rtt = 4000; // 2200 ms + 25 = 11 frames, + 1 = 12
 	tickWithCommands(10);
 	CHECK(g.peers[0].net->currentRunAhead() == 12);
 	CHECK(g.peers[1].net->currentRunAhead() == 12);
@@ -577,10 +605,10 @@ TEST_CASE("mp2 run-ahead: the packet router's measured round trip sets every pee
 	tickWithCommands(150);
 	CHECK(g.peers[0].net->currentRunAhead() == 2);
 	CHECK(g.peers[1].net->currentRunAhead() == 2);
-	g.hub.endpoint(0).rttVar = 300; // the variation counts four times: 1300 ms -> 715 ms one way + 100 = 4 frames, + 1
+	g.hub.endpoint(0).rttVar = 300; // lane NETLAG-2: a test transport plans for its round trip + twice the variation: 700 ms -> 385 ms one way + 25 = 2 frames, + 1
 	tickWithCommands(15);
-	CHECK(g.peers[0].net->currentRunAhead() == 5);
-	CHECK(g.peers[1].net->currentRunAhead() == 5);
+	CHECK(g.peers[0].net->currentRunAhead() == 3);
+	CHECK(g.peers[1].net->currentRunAhead() == 3);
 	// every frame both peers ran has the same commands
 	REQUIRE(g.peers[0].relayed.size() > 50);
 	const size_t n = std::min(g.peers[0].relayed.size(), g.peers[1].relayed.size());
@@ -771,8 +799,9 @@ TEST_CASE("netlag1 run-ahead: the lobby's run-ahead 1 is RotWK's command delay (
 	CHECK(g.peers[0].net->runAheadChanges() == 0);
 	CHECK(orderDelay(0) == 1); // the packet router's own order
 	CHECK(orderDelay(1) == 1); // the other player's
-	// the round trips where the delay steps up: one-way latency + 10 % (NetworkRunAheadSlack) + half a period, in 200 ms frames, + 1
-	const int rtts[] = { 160, 180, 181, 400, 544, 545, 2 };
+	// the round trips where the delay steps up: one-way latency + 10 % (NetworkRunAheadSlack) + 25 ms (lane NETLAG-2; NETLAG-1 kept half a period), in
+	// 200 ms frames, + 1
+	const int rtts[] = { 160, 318, 319, 400, 680, 681, 2 };
 	const int expected[] = { 1, 1, 2, 2, 2, 3, 1 };
 	for (size_t k = 0; k < sizeof(rtts) / sizeof(rtts[0]); ++k)
 	{
@@ -788,6 +817,242 @@ TEST_CASE("netlag1 run-ahead: the lobby's run-ahead 1 is RotWK's command delay (
 	}
 	CHECK(g.peers[0].net->errors().empty());
 	CHECK(g.peers[1].net->errors().empty());
+}
+
+TEST_CASE("netlag2 run-ahead: with RotWK's NetworkRunAheadMetricsTime of 5000 ms a raised delay still falls one frame a second (not one per 5 s), "
+		  "only with 50 ms more room than the lower value needs, and the peers run identical frames while it does")
+{
+	Game g(2);
+	for (int i = 0; i < 2; ++i)
+	{
+		NetworkConfig c = configFor(i, 2);
+		c.runAhead = 1;
+		c.adaptiveRunAhead = true;
+		c.settings.runAheadMetricsTime = 5000; // RotWK's GameData (the relay logs of 2026-10-18 step every 5 s)
+		g.peers[(size_t)i].net = std::make_unique<Network>(c, g.hub.endpoint(i));
+		Hub *h = &g.hub;
+		g.peers[(size_t)i].net->setClock([h] { return h->clock; });
+	}
+	for (Peer &p : g.peers)
+	{
+		p.net->sendLoadComplete();
+	}
+	auto tickWithCommands = [&](int ticks) {
+		for (int t = 0; t < ticks; ++t)
+		{
+			for (int i = 0; i < 2; ++i)
+			{
+				GameMessage m(MSG_DO_MOVETO, 10 + i);
+				m.appendLocationArgument(Coord3D{ (float)t, (float)i, 0.0f });
+				g.peers[(size_t)i].pending.append(m);
+			}
+			g.tick(100000, 200);
+		}
+	};
+	g.hub.endpoint(0).rtt = 2;
+	g.hub.endpoint(1).rtt = 2;
+	tickWithCommands(10);
+	CHECK(g.peers[0].net->currentRunAhead() == 1);
+	g.hub.endpoint(0).rtt = 2000; // 1100 ms one way + 25 = 5 frames, + 1 = 6
+	tickWithCommands(15);
+	CHECK(g.peers[0].net->currentRunAhead() == 6);
+	CHECK(g.peers[1].net->currentRunAhead() == 6);
+	g.hub.endpoint(0).rtt = 2;
+	int ticks = 0;
+	while (g.peers[0].net->currentRunAhead() > 1 && ticks < 200)
+	{
+		tickWithCommands(1);
+		++ticks;
+	}
+	// five steps down, each decided a second (5 ticks) after the last decision once the previous step ran (which takes that step's run-ahead in frames):
+	// 29 ticks, 5.8 s, on this driven clock; one step per 5 s took 25 s
+	CHECK(ticks == 29);
+	MESSAGE("back to 1 frame after " << ticks << " ticks of 200 ms");
+	CHECK(g.peers[1].net->currentRunAhead() == 1);
+	// at a frame's edge it does not flap: 300 ms round trip = 150 ms + 10 % + 25 = 1 frame, + 1 = 2; from 2 it comes down only with 50 ms more room
+	g.hub.endpoint(0).rtt = 400; // 200 + 20 + 25 = 1 frame, + 1 = 2
+	tickWithCommands(15);
+	CHECK(g.peers[0].net->currentRunAhead() == 2);
+	g.hub.endpoint(0).rtt = 300; // the target is 1, but 165 + 25 + 50 = 240 ms does not fit a frame: stays 2
+	tickWithCommands(30);
+	CHECK(g.peers[0].net->currentRunAhead() == 2);
+	CHECK(g.peers[1].net->currentRunAhead() == 2);
+	g.hub.endpoint(0).rtt = 220; // 110 + 11 + 25 + 50 = 196 ms: room enough, down to 1
+	tickWithCommands(30);
+	CHECK(g.peers[0].net->currentRunAhead() == 1);
+	CHECK(g.peers[1].net->currentRunAhead() == 1);
+	const size_t n = std::min(g.peers[0].relayed.size(), g.peers[1].relayed.size());
+	REQUIRE(n > 40); // tolerance: the comparison below needs the frames of the whole change; their exact count is not what this test pins
+	for (size_t i = 0; i < n; ++i)
+	{
+		CHECK(g.peers[0].relayed[i] == g.peers[1].relayed[i]);
+	}
+	CHECK(g.peers[0].net->errors().empty());
+	CHECK(g.peers[1].net->errors().empty());
+}
+
+namespace
+{
+// lane NETLAG-2: both peers wait at frame 9; frame 9 runs; slot 0 is told frame 10 is due in `dueMs` ms (unless < 0) and issues one order (tag 10) before
+// its next update, as the HUD's input comes in the pump after the completion
+void netlag2WarmUpAndIssue(Game &g, long long dueMs)
+{
+	for (int t = 0; t < 20; ++t)
+	{
+		g.tick(9, 50);
+	}
+	REQUIRE(g.peers[0].frame == 9);
+	g.tick(10, 10); // frame 9 runs on both peers; slot 0 has not updated on frame 10 yet
+	REQUIRE(g.peers[0].frame == 10);
+	if (dueMs >= 0)
+	{
+		g.peers[0].net->setFrameDue(10, (std::uint32_t)dueMs);
+	}
+	GameMessage m(MSG_DO_MOVETO, 10);
+	m.appendLocationArgument(Coord3D{ 1.0f, 2.0f, 0.0f });
+	g.peers[0].pending.append(m);
+}
+
+// the networks of a 2-player game remade with run-ahead 1, the option and a measured round trip (the Hub's address is captured: set up in place)
+void netlag2Setup(Game &g, int rtt, bool early)
+{
+	for (int i = 0; i < 2; ++i)
+	{
+		NetworkConfig c = configFor(i, 2);
+		c.runAhead = 1;
+		c.earlyOrders = early;
+		g.peers[(size_t)i].net = std::make_unique<Network>(c, g.hub.endpoint(i));
+		Hub *h = &g.hub;
+		g.peers[(size_t)i].net->setClock([h] { return h->clock; });
+		g.hub.endpoint(i).rtt = rtt;
+	}
+	for (Peer &p : g.peers)
+	{
+		p.net->sendLoadComplete();
+	}
+}
+} // namespace
+
+TEST_CASE("netlag2 early orders: an order issued while the next frame is further away than the lead (the planned one-way latency + 10 % + 40 ms) runs "
+		  "on that frame on every peer; closer to it, without the frame's timing, without a measured peer or with the option off it waits for frame + 1")
+{
+	struct Case
+	{
+		const char *name;
+		int rtt;         ///< the round trip both peers measure (-1: none yet)
+		long long dueMs; ///< frame 10 is due in this many ms on slot 0's clock (-1: no timing given)
+		bool early;      ///< NetworkConfig::earlyOrders
+		long long delay; ///< the frames from the issue frame (10) to the one the order ran on, on both peers
+		unsigned long long earlyCount;
+	};
+	// a 2 ms round trip: lead = 1 ms one way + 0 % (1 ms x 10 % rounds down) + 40 = 41 ms
+	const Case cases[] = {
+		{ "LAN, 150 ms before the frame", 2, 150, true, 0, 1 },
+		{ "LAN, exactly the lead before the frame", 2, 41, true, 0, 1 },
+		{ "LAN, 1 ms inside the lead", 2, 40, true, 1, 0 },
+		{ "no timing from the clock", 2, -1, true, 1, 0 },
+		{ "no round trip measured yet", -1, 150, true, 1, 0 },
+		{ "option off", 2, 150, false, 1, 0 },
+		// 300 ms round trip: 150 + 15 + 40 = 205 ms, more than a frame: the order keeps the run-ahead's frame (the adaptive run-ahead is off here)
+		{ "slow link", 300, 199, true, 1, 0 },
+	};
+	for (const Case &k : cases)
+	{
+		INFO(k.name);
+		Game g(2);
+		netlag2Setup(g, k.rtt, k.early);
+		netlag2WarmUpAndIssue(g, k.dueMs);
+		for (int t = 0; t < 40; ++t)
+		{
+			g.tick(100000, 10);
+		}
+		const long long a = relayFrameOf(g.peers[0], 10), b = relayFrameOf(g.peers[1], 10);
+		CHECK(a == b);
+		CHECK(a - 10 == k.delay);
+		CHECK(g.peers[0].net->earlyOrdersSent() == k.earlyCount);
+		const size_t n = std::min(g.peers[0].relayed.size(), g.peers[1].relayed.size());
+		for (size_t i = 0; i < n; ++i)
+		{
+			CHECK(g.peers[0].relayed[i] == g.peers[1].relayed[i]);
+		}
+		CHECK(g.peers[0].net->errors().empty());
+		CHECK(g.peers[1].net->errors().empty());
+	}
+}
+
+TEST_CASE("netlag2 early orders: the early frame's FRAMEINFO waits until the lead (the other peer cannot run that frame before it); the timing carries "
+		  "forward a period per frame; a later order never runs before an earlier one")
+{
+	{
+		Game g(2);
+		netlag2Setup(g, 2, true);
+		netlag2WarmUpAndIssue(g, 150);
+		const std::uint64_t t0 = g.hub.clock;
+		std::uint64_t ranAt = 0;
+		for (int t = 0; t < 40 && ranAt == 0; ++t)
+		{
+			g.tick(100000, 10);
+			ranAt = g.peers[1].frame > 10 ? g.hub.clock : 0;
+		}
+		CHECK(relayFrameOf(g.peers[1], 10) == 10);
+		// 150 - 41 = 109 ms: slot 0's FRAMEINFO of frame 10 leaves at its first update at or after it (the 110 ms tick), arrives a tick later, and slot 1
+		// runs frame 10 at its next step
+		CHECK(ranAt - t0 >= 109); // tolerance: the harness's 10 ms ticks and one-tick delivery put the run after the 109 ms the FRAMEINFO waited
+		MESSAGE("slot 1 ran frame 10 " << (ranAt - t0) << " ms after the order");
+		CHECK(g.peers[0].net->errors().empty());
+		CHECK(g.peers[1].net->errors().empty());
+	}
+	{
+		// timing for frame 10 only; on frame 11 (no new timing given) it is carried forward: frame 11 is due 200 ms after frame 10
+		Game g(2);
+		netlag2Setup(g, 2, true);
+		netlag2WarmUpAndIssue(g, 60);
+		const std::uint64_t t0 = g.hub.clock;
+		while ((g.peers[0].frame < 11 || g.peers[1].frame < 11) && g.hub.clock - t0 < 1000)
+		{
+			g.tick(11, 10); // frame 10 runs on both peers; both wait before 11
+		}
+		REQUIRE(g.peers[0].frame == 11);
+		REQUIRE(g.peers[1].frame == 11);
+		CHECK(relayFrameOf(g.peers[1], 10) == 10); // 60 ms >= 41: early
+		const long long until11 = 60 + 200 - (long long)(g.hub.clock - t0);
+		INFO("frame 11 is due in " << until11 << " ms by the carried-forward timing");
+		REQUIRE(until11 >= 41); // tolerance: the harness ticks decide when frame 10 runs; the case needs only frame 11 still open (at least the 41 ms lead)
+		GameMessage m(MSG_DO_STOP, 10);
+		g.peers[0].pending.append(m);
+		for (int t = 0; t < 60; ++t)
+		{
+			g.tick(100000, 10);
+		}
+		bool stopOn11 = false;
+		for (const auto &f : g.peers[1].relayed)
+		{
+			for (const std::string &c : f.second)
+			{
+				stopOn11 = stopOn11 || (f.first == 11 && c == std::to_string((int)MSG_DO_STOP) + " 10");
+			}
+		}
+		CHECK(stopOn11);
+		CHECK(g.peers[0].net->earlyOrdersSent() == 2);
+	}
+	{
+		// the first order 20 ms before frame 10 (inside the 41 ms lead) gets frame 11; a second one, told 150 ms, may not go before it
+		Game g(2);
+		netlag2Setup(g, 2, true);
+		netlag2WarmUpAndIssue(g, 20);
+		g.peers[0].step(100000);
+		g.peers[0].net->setFrameDue(10, 150);
+		GameMessage second(MSG_DO_STOP, 10);
+		g.peers[0].pending.append(second);
+		g.peers[0].step(100000);
+		CHECK(g.peers[0].net->earlyOrdersSent() == 0);
+		for (int t = 0; t < 40; ++t)
+		{
+			g.tick(100000, 10);
+		}
+		CHECK(relayFrameOf(g.peers[1], 10) == 11);
+		CHECK(g.peers[0].net->errors().empty());
+	}
 }
 
 TEST_CASE("netlag1: the lockstep driver measures each local command's delay in frames and to its effect: a local game runs a command on the next batch "

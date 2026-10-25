@@ -306,6 +306,9 @@ void TacticalCamera::buildPose(Coord3D &eye, Coord3D &target) const
 {
 	// RW 0x502858 mode 0 (ZH W3DView::buildCameraTransform)
 	Coord3D pos = m_pos;
+	// lane FX-4, RW 0x502936 .. 0x502950: the shake offset (state + 0x70 / + 0x74 = W3DView + 0x118 / + 0x11C, RW 0x489F96) moves the pivot's x, y first
+	pos.x = m_shakeOffsetX + pos.x;
+	pos.y = m_shakeOffsetY + pos.y;
 	if (m_constraintValid)
 	{
 		pos.x = std::min(m_constraintHi[0], std::max(m_constraintLo[0], pos.x));
@@ -758,6 +761,25 @@ void TacticalCamera::update(bool uiScrolling, bool gamePaused)
 		}
 	}
 
+	// lane FX-4, RW 0x48C0E8 .. 0x48C16E: the shake. At or below 0.01 (RW 0xBE5600) it ends (intensity and offset 0, the view is not rebuilt for it); above,
+	// the offset is the intensity along the angle, and (GlobalData + 0xEA6 / + 0xEA7, the panorama screenshot's slice flags, false / true outside one) the
+	// intensity decays by 0.75 (RW 0xBDC628) and the angle turns half a turn; the view is rebuilt (RW vslot 0x198 asks for a scripted camera move: none here)
+	if (m_shakeIntensity <= 0.01f)
+	{
+		m_shakeIntensity = 0.0f;
+		m_shakeOffsetX = 0.0f;
+		m_shakeOffsetY = 0.0f;
+	}
+	else
+	{
+		m_shakeOffsetX = m_shakeIntensity * m_shakeCos;
+		m_shakeOffsetY = m_shakeSin * m_shakeIntensity;
+		m_shakeIntensity = m_shakeIntensity * 0.75f;
+		m_shakeCos = 0.0f - m_shakeCos;
+		m_shakeSin = 0.0f - m_shakeSin;
+		recalc = true;
+	}
+
 	if (m_lockObject == INVALID_ID)
 	{
 		const float height = sampleTerrainHeight(m_pos.x, m_pos.y);
@@ -834,11 +856,36 @@ void TacticalCamera::update(bool uiScrolling, bool gamePaused)
 	}
 }
 
+// lane FX-4: RW 0x486D86 W3DView::shake
+void TacticalCamera::shake(const Coord3D &epicenter, int type, float angle)
+{
+	if (!m_gd.haveShake())
+	{
+		++m_shakesWithoutData;
+		return;
+	}
+	m_shakeCos = (float)std::cos((double)angle); // MSVCR71 cos / sin (x87, double), stored as float
+	m_shakeSin = (float)std::sin((double)angle);
+	const float base = type >= 0 && type < 6 ? m_gd.shakeIntensity[type] : 0.0f;
+	const float dx = epicenter.x - m_pos.x, dy = epicenter.y - m_pos.y;
+	const float dist = (float)std::sqrt((double)(dx * dx + dy * dy));
+	// a MaxShakeRange of 0 (no retail data) with the epicenter at the view would be 0 / 0 (a NaN view in retail too): presentation code, not shaken here
+	if (dist <= m_gd.maxShakeRange && m_gd.maxShakeRange > 0.0f)
+	{
+		m_shakeIntensity = (1.0f - dist / m_gd.maxShakeRange) * base + m_shakeIntensity;
+		if (m_gd.maxShakeIntensity <= m_shakeIntensity && m_shakeIntensity != m_gd.maxShakeIntensity)
+		{
+			m_shakeIntensity = m_gd.maxShakeIntensity;
+		}
+	}
+}
+
 std::vector<std::string> TacticalCamera::acceptanceStops()
 {
 	return {
 		"[S-450] camera pose: the eye / target maths is RW 0x502858's mode 0 read against ZH W3DView::buildCameraTransform (the rotation about X then Z, the ground level factor); the movement "
-		"modes 1 .. 4 of the state (scripted moves, rotate / zoom / pitch cameras, the waypoint path), the slave camera, the shake and the FXPitch / real-zoom variants are not ported",
+		"modes 1 .. 4 of the state (scripted moves, rotate / zoom / pitch cameras, the waypoint path), the slave camera and the FXPitch / real-zoom variants are not ported; the "
+		"shake (RW 0x486D86, lane FX-4) needs the GameData shake fields (a GameData without them does not shake); CameraShakerVolume (FXList, the scripted shakers) is not ported",
 		"[S-451] GameData: the camera keys must all be present in the install's GameData (their constructor defaults at RW 0x642A00 .. 0x6437FF were resolved for the height, pitch and "
 		"scroll limits only); a mod that deletes one gets an error here, retail would keep the constructor value",
 		"[S-452] scrolling: RW 0x441C56 (the normalisation of the heading of the centre pick ray) is a fast inverse square root (magic 0xBE6EB508 and two Newton steps), the port divides by "

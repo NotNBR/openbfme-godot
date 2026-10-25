@@ -4,28 +4,18 @@
 ##           (RW 0x6D9BF3) and its first draw asks for MiscAudio GenericRadarEvent (RW 0x44DE58), which plays RadarEvent; the branch's MiscAudio slot
 ##           (RadarNotifyStructureUnderAttackSound, NoSound in RotWK's miscaudio.ini) is asked for and gives no sound; the control bar's blink (RW 0x71C7E4 /
 ##           0x71C81A) starts on ControlBar.wnd:WinUAttack, toggles every 15 client frames and ends enabled; the window has no image (nothing is drawn)
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("DEVPORT8 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("DEVPORT8 %s: FAIL %s" % [s, r])
-	print("DEVPORT8 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func player_index(name: String) -> int:

@@ -287,9 +287,11 @@ TEST_CASE("move3 retail: crossing sweep of hostile infantry hordes with move ord
 	// RotWK's rule as far as it was read (stop S-1830): only the blocked horde (the lower path priority, then the lower id, RW 0x66D16E) patches; the other walks on,
 	// and horde members never collide (RW 0x66E233 returns for a horde member, RW 0x6939DF). Merge of IDLE-1 (MOVE-3 r4: the AI updates in updates[0] and
 	// HordeContain in updates[1], RW 0x851E97 / 0x490AC4, so every member steps before its horde's member pass; the hub leaves a member whose physics motion is
-	// disabled alone, RW 0x874724): 3798 deep pair-frames, 16 head-on runs closer than 60 (3 + 9 + 4). Engine measurements, not retail values
+	// disabled alone, RW 0x874724): 3798 deep pair-frames, 16 head-on runs closer than 60 (3 + 9 + 4). Lane OFFMAP-1 (AIIdleState::doInitIdleState as RW
+	// 0x745A64: no ZH "frame <= 1: snap onto the goal cell centre", so the hordes start where they were made, not on cell centres): 26 (11 + 11 + 4);
+	// the old snap put back alone gives 16 again. Engine measurements, not retail values
 	CHECK(deep < 3900);
-	CHECK(headOnClose <= 16);
+	CHECK(headOnClose <= 26); // tolerance: an engine measurement of the sweep (the count of close runs), pinned at its measured value
 }
 
 TEST_CASE("move3 retail: two allied hordes sent to one point (FB-0006)")

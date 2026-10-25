@@ -302,6 +302,23 @@ const FieldParse kModelCondition[] = { // RW 0xC05230
 };
 #undef MC_OFF
 
+#define SR_OFF(m) (int)offsetof(SummonReplacementSpecialAbilityUpdateModuleData, m)
+// lane SUMMON-1: RW 0xC05AF8 (SummonReplacementSpecialAbilityUpdate's ten rows: ModelCondition's five at + 0xD0 .. + 0xDC, ToggleMounted's five at + 0xE0 ..)
+const FieldParse kSummonReplacement[] = {
+	{ "WhichSpecialPower", INI::parseInt, nullptr, SR_OFF(m_whichSpecialPower) },
+	{ "GenerateTerror", INI::parseBool, nullptr, SR_OFF(m_generateTerror) },
+	{ "GenerateUncontrollableFear", INI::parseBool, nullptr, SR_OFF(m_generateUncontrollableFear) },
+	{ "EmotionPulseRadius", INI::parseReal, nullptr, SR_OFF(m_emotionPulseRadius) },
+	{ "ObjectFilter", parseFilter, nullptr, SR_OFF(m_objectFilter) },
+	{ "OpacityTarget", INI::parseReal, nullptr, SR_OFF(m_opacityTarget) },
+	{ "TriggerInstantlyOnCreate", INI::parseBool, nullptr, SR_OFF(m_triggerInstantlyOnCreate) },
+	{ "CancelDisguiseWhenDismounting", INI::parseBool, nullptr, SR_OFF(m_cancelDisguiseWhenDismounting) },
+	{ "MountedTemplate", INI::parseAsciiString, nullptr, SR_OFF(m_mountedTemplate) },
+	{ "SynchronizeTimerOnSpecialPower", INI::parseAsciiStringVector, nullptr, SR_OFF(m_synchronizeTimerOnSpecialPower) },
+	{ nullptr, nullptr, nullptr, 0 },
+};
+#undef SR_OFF
+
 #define SD_OFF(m) (int)offsetof(SpecialDisguiseUpdateModuleData, m)
 const FieldParse kSpecialDisguise[] = { // RW 0xC05C10 (lane HERO-2)
 	{ "OpacityTarget", INI::parseReal, nullptr, SD_OFF(m_opacityTarget) },
@@ -417,6 +434,12 @@ void ModelConditionSpecialAbilityUpdateModuleData::buildFieldParse(MultiIniField
 {
 	SpecialAbilityUpdateModuleData::buildFieldParse(p);
 	p.add(kModelCondition);
+}
+
+void SummonReplacementSpecialAbilityUpdateModuleData::buildFieldParse(MultiIniFieldParse &p)
+{
+	SpecialAbilityUpdateModuleData::buildFieldParse(p);
+	p.add(kSummonReplacement); // RW 0xC05AF8
 }
 
 void SpecialDisguiseUpdateModuleData::buildFieldParse(MultiIniFieldParse &p)
@@ -1561,6 +1584,169 @@ void WeaponFireSpecialAbilityUpdate::crc(StateHasher &h) const
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// the mount toggle, the replacement and the emotion pulse (ToggleMounted, ModelCondition and SummonReplacement share them; lane SUMMON-1 split them out)
+// ---------------------------------------------------------------------------------------------------------------------------------
+namespace
+{
+// RW 0x8B1690 / RW 0x8B2584, the branch with no MountedTemplate: MOUNTED on (locomotor set 7, weapon set MOUNTED, armor set MOUNTED) or off
+void toggleMount(Object &obj, AIUpdateInterface &ai, bool cancelDisguiseWhenDismounting, unsigned long long &unported)
+{
+	ObjectWeapons *weapons = obj.getWeapons();
+	if (!obj.testModelCondition(kMcMounted))
+	{
+		setCondition(obj, kMcMounted, true);           // Object + 0x124 bit 22
+		ai.chooseLocomotorSet(kLocomotorSetMounted);   // AI vslot 0x238(7)
+		if (weapons)
+		{
+			weapons->setWeaponSetFlag(kWeaponSetMounted, true); // RW 0x691059(0x15)
+		}
+		obj.setArmorSetFlag(kArmorSetMounted, true);   // RW 0x68BE59(6)
+		return;
+	}
+	if (ContainModuleInterface *c = obj.getContain())
+	{
+		if (c->getContainCount() != 0)
+		{
+			++unported; // RW 0x8B1722: the contain ejects its riders (vslot 0xA8: S-861)
+		}
+	}
+	setCondition(obj, kMcMounted, false);
+	ai.chooseLocomotorSet(0);
+	if (weapons)
+	{
+		weapons->setWeaponSetFlag(kWeaponSetMounted, false); // RW 0x691106(0x15)
+	}
+	obj.setArmorSetFlag(kArmorSetMounted, false);  // RW 0x68BE6B(6)
+	if (cancelDisguiseWhenDismounting && obj.testModelCondition(300))
+	{
+		// RW 0x8B175F .. 0x8B17C2 (lane HERO-2): a DISGUISED object's SpecialDisguiseUpdate ends the disguise, keeping the look (RW 0x8B4702(1))
+		if (SpecialDisguiseUpdate *sd = SpecialDisguiseUpdate::of(obj))
+		{
+			sd->cancelDisguise(true);
+		}
+	}
+}
+
+// lane HERO-2: RW 0x8B140D (ToggleMounted) and lane SUMMON-1: RW 0x8B228C (SummonReplacement), the same instructions over each data's MountedTemplate /
+// SynchronizeTimerOnSpecialPower. MountedTemplate (RW 0x6D1305) is built now by the build assistant (vslot 0x38, RW 0x7978A1: Construction::buildObjectNow)
+// at the object's position and angle for its controlling player; the old object's score count goes (RW 0x79F0E1(old, -1)); the new one takes the name
+// (+ 0x88), the experience (setExperienceAndLevel with the tracker's +0x3C cleared around it, RW 0x8B14C2 .. 0x8B14EC), the health (body vslot 0xAC with
+// the old body's vslot 0x10), the team (RW 0x69954A) and the synchronised power timers (SynchronizeTimerOnSpecialPower, RW 0x8B12BF / 0x8B2135 ->
+// 0x897368); the old one is removed after its packing (RW 0x8B1E9A). Not ported (S-861): + 0x488 (RW 0x5EA74E), the AI's group (RW 0x68B36F ->
+// 0x6682B1), the script engine's name record (RW 0x60A1D5), the last AI command given again (RW 0x66D7C9 / 0x66B4DF); the selection, the hotkey group and
+// the drawable are the client's. The new object, null when none was made.
+Object *replaceWithTemplate(Object &old, const std::string &mountedTemplate, const std::vector<std::string> &synchronize, const char *module)
+{
+	GameLogic &logic = old.logic();
+	const ThingTemplate *tmpl = logic.things().findTemplate(mountedTemplate);
+	Player *owner = old.getControllingPlayer();
+	if (!tmpl || !owner)
+	{
+		if (!tmpl)
+		{
+			logic.reportError(std::string(module) + ": MountedTemplate '" + mountedTemplate + "' is not a template (RW 0x6D1305)");
+		}
+		return nullptr;
+	}
+	Object *n = Construction::buildObjectNow(logic, &old, *tmpl, *old.getPosition(), old.getOrientation(), *owner);
+	if (!n)
+	{
+		return nullptr;
+	}
+	owner->getScoreKeeper().addObjectBuilt(logic, old, -1); // RW 0x8B1499
+	n->setName(old.getName());                              // RW 0x8B14AB
+	if (ExperienceTracker *nt = n->getExperienceTracker())
+	{
+		if (const ExperienceTracker *ot = old.getExperienceTracker())
+		{
+			nt->setDefaultFeedback(false);
+			nt->setExperienceAndLevel(ot->getExperience(), true); // RW 0x79D8EF(experience, 1)
+			nt->setDefaultFeedback(true);
+		}
+	}
+	ActiveBody *nb = dynamic_cast<ActiveBody *>(n->getBodyModule());
+	if (nb && old.getBodyModule())
+	{
+		nb->friend_setHealthRaw(old.getBodyModule()->getHealth()); // body vslot 0xAC (vslot 0x10 of the old body)
+	}
+	if (n->getAIUpdateInterface())
+	{
+		n->setTeam(old.getTeam()); // RW 0x8B156D
+	}
+	n->setName(old.getName());     // RW 0x8B157F
+	// RW 0x8B12BF / 0x8B2135: SynchronizeTimerOnSpecialPower
+	for (const std::string &name : synchronize)
+	{
+		const SpecialPowerTemplate *t = TheSpecialPowerStore ? TheSpecialPowerStore->findSpecialPowerTemplate(name) : nullptr; // RW 0x69C146
+		SpecialPowerModule *src = t ? dynamic_cast<SpecialPowerModule *>(SpecialPowerModules::findModule(old, t)) : nullptr; // RW 0x68C26D
+		SpecialPowerModule *dst = t ? dynamic_cast<SpecialPowerModule *>(SpecialPowerModules::findModule(*n, t)) : nullptr;
+		if (src && dst)
+		{
+			dst->copyTimerFrom(*src); // RW 0x897368
+		}
+	}
+	return n;
+}
+
+// RW 0x8B1FDA (lane SUMMON-1): an object whose current locomotor (AI + 0x1F0, RW 0x68B31D) has a max speed of 0 for its condition (RW 0x5E3F49) refuses the
+// initiate (no IGNORE_AI_COMMAND either); an object without AI or locomotor does not
+bool mountInitiateRefused(const Object &obj)
+{
+	const AIUpdateInterface *ai = obj.getAIUpdateInterface();
+	return ai && ai->curLocomotor() && ai->curLocomotorSpeed() == 0.0f;
+}
+
+// WhichSpecialPower (RW 0x89455B / 0x8945C1 / 0x8B208A: 0 USER_... at Object + 0x134 bit 10, 1 .. 3 SPECIAL_POWER_1 .. 3 at + 0x124 bits 19 .. 21)
+int whichSpecialPowerCondition(int which)
+{
+	switch (which)
+	{
+	case 0: return (0x134 - 0x10C) * 8 + 10;
+	case 1: return (0x124 - 0x10C) * 8 + 19;
+	case 2: return (0x124 - 0x10C) * 8 + 20;
+	case 3: return (0x124 - 0x10C) * 8 + 21;
+	default: return -1;
+	}
+}
+
+// RW 0x894701 (ModelCondition) / RW 0x8B2614 .. (SummonReplacement): ThePartitionManager within EmotionPulseRadius, distance type 0, unsorted, with the
+// filters RW 0xC1676C (the owner's ENEMIES: mask 4, flag 1; RW 0x66110A), RW 0xC0F374 (the same Object + 0x458 bit 3: never set) and the ObjectFilter for
+// the owner (RW 0xBE4CC8); every hit gets TERROR then UNCONTROLLABLE_FEAR from the object with delay 1 (RW 0x68F37F / 0x68F383; lane MODULES-2:
+// EmotionTrackerUpdate::requestEmotion). The emotion requests made.
+unsigned emotionPulse(Object &obj, const ModelConditionSpecialAbilityUpdateModuleData &d)
+{
+	if (!d.m_generateTerror && !d.m_generateUncontrollableFear)
+	{
+		return 0;
+	}
+	GameLogic &logic = obj.logic();
+	const Player *owner = obj.getControllingPlayer();
+	PartitionFilterFn victims([&](Object &o) {
+		if (!owner || owner->getRelationship(o.getTeam()) != ENEMIES)
+		{
+			return false;
+		}
+		return !d.m_objectFilter || ObjectFilterMatch::allows(logic, *d.m_objectFilter, o, owner);
+	});
+	unsigned made = 0;
+	for (const PartitionHit &hit : logic.partition().iterateObjectsInRange(*obj.getPosition(), d.m_emotionPulseRadius, FROM_CENTER_2D, { &victims }, ITER_FASTEST))
+	{
+		if (d.m_generateTerror)
+		{
+			EmotionTrackerUpdate::requestEmotion(*hit.object, EMOTION_TERROR, &obj, 1);
+			++made;
+		}
+		if (d.m_generateUncontrollableFear)
+		{
+			EmotionTrackerUpdate::requestEmotion(*hit.object, EMOTION_UNCONTROLLABLE_FEAR, &obj, 1);
+			++made;
+		}
+	}
+	return made;
+}
+} // namespace
+
+// ---------------------------------------------------------------------------------------------------------------------------------
 // ToggleMountedSpecialAbilityUpdate
 // ---------------------------------------------------------------------------------------------------------------------------------
 ToggleMountedSpecialAbilityUpdate::ToggleMountedSpecialAbilityUpdate(Thing *thing, const ToggleMountedSpecialAbilityUpdateModuleData *data)
@@ -1604,107 +1790,34 @@ void ToggleMountedSpecialAbilityUpdate::triggerAbilityEffect()
 		replaceWithMounted(); // RW 0x8B16D1 .. : the object is replaced by MountedTemplate (lane HERO-2)
 		return;
 	}
-	ObjectWeapons *weapons = obj->getWeapons();
-	if (!obj->testModelCondition(kMcMounted))
-	{
-		setCondition(*obj, kMcMounted, true);           // Object + 0x124 bit 22
-		ai->chooseLocomotorSet(kLocomotorSetMounted);   // AI vslot 0x238(7)
-		if (weapons)
-		{
-			weapons->setWeaponSetFlag(kWeaponSetMounted, true); // RW 0x691059(0x15)
-		}
-		obj->setArmorSetFlag(kArmorSetMounted, true);   // RW 0x68BE59(6)
-	}
-	else
-	{
-		if (ContainModuleInterface *c = obj->getContain())
-		{
-			if (c->getContainCount() != 0)
-			{
-				++m_unported; // RW 0x8B1722: the contain ejects its riders (vslot 0xA8: S-861)
-			}
-		}
-		setCondition(*obj, kMcMounted, false);
-		ai->chooseLocomotorSet(0);
-		if (weapons)
-		{
-			weapons->setWeaponSetFlag(kWeaponSetMounted, false); // RW 0x691106(0x15)
-		}
-		obj->setArmorSetFlag(kArmorSetMounted, false);  // RW 0x68BE6B(6)
-		if (m_tm->m_cancelDisguiseWhenDismounting && obj->testModelCondition(300))
-		{
-			// RW 0x8B175F .. 0x8B17C2 (lane HERO-2): a DISGUISED object's SpecialDisguiseUpdate ends the disguise, keeping the look (RW 0x8B4702(1))
-			if (SpecialDisguiseUpdate *sd = SpecialDisguiseUpdate::of(*obj))
-			{
-				sd->cancelDisguise(true);
-			}
-		}
-	}
+	toggleMount(*obj, *ai, m_tm->m_cancelDisguiseWhenDismounting, m_unported);
 	++m_toggles;
 	// RW 0x8B1803: the control bar of the selected object is marked dirty (client)
 }
 
-// lane HERO-2: RW 0x8B140D. MountedTemplate (RW 0x6D1305) is built now by the build assistant (vslot 0x38, RW 0x7978A1: Construction::buildObjectNow) at the
-// object's position and angle for its controlling player; the old object's score count goes (RW 0x79F0E1(old, -1)); the new one takes the name (+ 0x88),
-// the experience (setExperienceAndLevel with the tracker's +0x3C cleared around it, RW 0x8B14C2 .. 0x8B14EC), the health (body vslot 0xAC with the old
-// body's vslot 0x10), the team (RW 0x69954A) and the synchronised power timers (SynchronizeTimerOnSpecialPower, RW 0x8B12BF -> 0x897368); the old one is
-// removed after its packing (RW 0x8B1E9A). Not ported (S-861): + 0x488 (RW 0x5EA74E), the AI's group (RW 0x68B36F -> 0x6682B1), the script engine's name
-// record (RW 0x60A1D5), the last AI command given again (RW 0x66D7C9 / 0x66B4DF); the selection, the hotkey group and the drawable are the client's
+// RW 0x8B140D (see replaceWithTemplate)
 void ToggleMountedSpecialAbilityUpdate::replaceWithMounted()
 {
-	Object *old = getObject();
-	GameLogic &logic = old->logic();
-	const ThingTemplate *tmpl = logic.things().findTemplate(m_tm->m_mountedTemplate);
-	Player *owner = old->getControllingPlayer();
-	if (!tmpl || !owner)
-	{
-		if (!tmpl)
-		{
-			logic.reportError("ToggleMountedSpecialAbilityUpdate: MountedTemplate '" + m_tm->m_mountedTemplate + "' is not a template (RW 0x6D1305)");
-		}
-		return;
-	}
-	Object *n = Construction::buildObjectNow(logic, old, *tmpl, *old->getPosition(), old->getOrientation(), *owner);
+	Object *n = replaceWithTemplate(*getObject(), m_tm->m_mountedTemplate, m_tm->m_synchronizeTimerOnSpecialPower, "ToggleMountedSpecialAbilityUpdate");
 	if (!n)
 	{
 		return;
-	}
-	owner->getScoreKeeper().addObjectBuilt(logic, *old, -1); // RW 0x8B1499
-	n->setName(old->getName());                              // RW 0x8B14AB
-	if (ExperienceTracker *nt = n->getExperienceTracker())
-	{
-		if (const ExperienceTracker *ot = old->getExperienceTracker())
-		{
-			nt->setDefaultFeedback(false);
-			nt->setExperienceAndLevel(ot->getExperience(), true); // RW 0x79D8EF(experience, 1)
-			nt->setDefaultFeedback(true);
-		}
-	}
-	ActiveBody *nb = dynamic_cast<ActiveBody *>(n->getBodyModule());
-	if (nb && old->getBodyModule())
-	{
-		nb->friend_setHealthRaw(old->getBodyModule()->getHealth()); // body vslot 0xAC (vslot 0x10 of the old body)
-	}
-	if (n->getAIUpdateInterface())
-	{
-		n->setTeam(old->getTeam()); // RW 0x8B156D
-	}
-	n->setName(old->getName());     // RW 0x8B157F
-	// RW 0x8B12BF: SynchronizeTimerOnSpecialPower
-	for (const std::string &name : m_tm->m_synchronizeTimerOnSpecialPower)
-	{
-		const SpecialPowerTemplate *t = TheSpecialPowerStore ? TheSpecialPowerStore->findSpecialPowerTemplate(name) : nullptr; // RW 0x69C146
-		SpecialPowerModule *src = t ? dynamic_cast<SpecialPowerModule *>(SpecialPowerModules::findModule(*old, t)) : nullptr; // RW 0x68C26D
-		SpecialPowerModule *dst = t ? dynamic_cast<SpecialPowerModule *>(SpecialPowerModules::findModule(*n, t)) : nullptr;
-		if (src && dst)
-		{
-			dst->copyTimerFrom(*src); // RW 0x897368
-		}
 	}
 	++m_unported; // + 0x488, the AI group, the script name record and the last command (S-861)
 	m_replaceAfterPacking = true; // + 0x8C
 	m_replacement = n->getID();
 	++m_toggles;
+}
+
+// RW 0x8B1FDA (lane SUMMON-1)
+void ToggleMountedSpecialAbilityUpdate::initiateIntentToDoSpecialPower(const SpecialPowerTemplate *t, Object *targetObj, const Coord3D *loc, unsigned options, int extra)
+{
+	if (mountInitiateRefused(*getObject()))
+	{
+		return;
+	}
+	SpecialAbilityUpdate::initiateIntentToDoSpecialPower(t, targetObj, loc, options, extra);
+	getObject()->setStatus(kStatusIgnoreAI, true); // RW 0x8B201F: RW 0x62684D(0x4A, 1)
 }
 
 // RW 0x8B125F
@@ -1915,17 +2028,9 @@ ModelConditionSpecialAbilityUpdate::ModelConditionSpecialAbilityUpdate(Thing *th
 {
 }
 
-// WhichSpecialPower (RW 0x89455B: 0 USER_... at Object + 0x134 bit 10, 1 .. 3 SPECIAL_POWER_1 .. 3 at + 0x124 bits 19 .. 21)
 int ModelConditionSpecialAbilityUpdate::specialPowerCondition() const
 {
-	switch (m_mc->m_whichSpecialPower)
-	{
-	case 0: return (0x134 - 0x10C) * 8 + 10;
-	case 1: return (0x124 - 0x10C) * 8 + 19;
-	case 2: return (0x124 - 0x10C) * 8 + 20;
-	case 3: return (0x124 - 0x10C) * 8 + 21;
-	default: return -1;
-	}
+	return whichSpecialPowerCondition(m_mc->m_whichSpecialPower);
 }
 
 bool ModelConditionSpecialAbilityUpdate::continuePreparation()
@@ -1959,41 +2064,114 @@ void ModelConditionSpecialAbilityUpdate::finishAbility(bool ownerDying, bool abo
 void ModelConditionSpecialAbilityUpdate::triggerAbilityEffect()
 {
 	SpecialAbilityUpdate::triggerAbilityEffect();
-	if (!m_mc->m_generateTerror && !m_mc->m_generateUncontrollableFear)
-	{
-		return;
-	}
-	Object *obj = getObject();
-	GameLogic &logic = obj->logic();
-	const Player *owner = obj->getControllingPlayer();
-	// RW 0x894701: ThePartitionManager within EmotionPulseRadius, distance type 0, unsorted, with the filters RW 0xC1676C (the owner's ENEMIES: mask 4, flag 1;
-	// RW 0x66110A), RW 0xC0F374 (the same Object + 0x458 bit 3: never set) and the ObjectFilter for the owner (RW 0xBE4CC8); every hit gets TERROR then
-	// UNCONTROLLABLE_FEAR from the object with delay 1 (RW 0x89472D / 0x894745 -> RW 0x68F37F; lane MODULES-2: EmotionTrackerUpdate::requestEmotion)
-	PartitionFilterFn victims([&](Object &o) {
-		if (!owner || owner->getRelationship(o.getTeam()) != ENEMIES)
-		{
-			return false;
-		}
-		return !m_mc->m_objectFilter || ObjectFilterMatch::allows(logic, *m_mc->m_objectFilter, o, owner);
-	});
-	for (const PartitionHit &hit : logic.partition().iterateObjectsInRange(*obj->getPosition(), m_mc->m_emotionPulseRadius, FROM_CENTER_2D, { &victims }, ITER_FASTEST))
-	{
-		if (m_mc->m_generateTerror)
-		{
-			EmotionTrackerUpdate::requestEmotion(*hit.object, EMOTION_TERROR, obj, 1);
-			++m_emotions;
-		}
-		if (m_mc->m_generateUncontrollableFear)
-		{
-			EmotionTrackerUpdate::requestEmotion(*hit.object, EMOTION_UNCONTROLLABLE_FEAR, obj, 1);
-			++m_emotions;
-		}
-	}
+	m_emotions += emotionPulse(*getObject(), *m_mc); // RW 0x894701 (see emotionPulse)
 }
 
 void ModelConditionSpecialAbilityUpdate::crc(StateHasher &h) const
 {
 	SpecialAbilityUpdate::crc(h);
+	h.addU32(m_emotions);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// SummonReplacementSpecialAbilityUpdate (lane SUMMON-1)
+// ---------------------------------------------------------------------------------------------------------------------------------
+SummonReplacementSpecialAbilityUpdate::SummonReplacementSpecialAbilityUpdate(Thing *thing, const SummonReplacementSpecialAbilityUpdateModuleData *data)
+	: SpecialAbilityUpdate(thing, data)
+	, m_sr(data)
+{
+}
+
+// RW 0x8B1FBF: TriggerInstantlyOnCreate (+ 0xE4) jumps to the trigger (vslot 0x44)
+void SummonReplacementSpecialAbilityUpdate::onBuildComplete()
+{
+	if (m_sr->m_triggerInstantlyOnCreate)
+	{
+		triggerAbilityEffect();
+	}
+}
+
+// RW 0x8B1FDA (the slot ToggleMounted shares)
+void SummonReplacementSpecialAbilityUpdate::initiateIntentToDoSpecialPower(const SpecialPowerTemplate *t, Object *targetObj, const Coord3D *loc, unsigned options, int extra)
+{
+	if (mountInitiateRefused(*getObject()))
+	{
+		return;
+	}
+	SpecialAbilityUpdate::initiateIntentToDoSpecialPower(t, targetObj, loc, options, extra);
+	getObject()->setStatus(kStatusIgnoreAI, true); // RW 0x8B201F: RW 0x62684D(0x4A, 1)
+}
+
+// RW 0x89455B (ModelCondition's slot): the WhichSpecialPower condition on at the first unpack
+void SummonReplacementSpecialAbilityUpdate::startUnpacking()
+{
+	SpecialAbilityUpdate::startUnpacking();
+	if (m_triggerCount != 0)
+	{
+		return;
+	}
+	setCondition(*getObject(), whichSpecialPowerCondition(m_sr->m_whichSpecialPower), true);
+}
+
+// RW 0x8B2584: ToggleMounted's trigger (RW 0x8B1690) over + 0xE5 / + 0xE8 with the replacement RW 0x8B228C, then, still inside the AI's idle test,
+// ModelCondition's emotion pulse (RW 0x89463A's) for GenerateTerror / GenerateUncontrollableFear at any trigger count
+void SummonReplacementSpecialAbilityUpdate::triggerAbilityEffect()
+{
+	SpecialAbilityUpdate::triggerAbilityEffect();
+	Object *obj = getObject();
+	AIUpdateInterface *ai = obj->getAIUpdateInterface();
+	m_replaceAfterPacking = false; // RW 0x8B259D
+	if (!ai || !ai->isIdle()) // AI vslot 0x1B8 (retail reads the AI without a null test: an object with this module has one)
+	{
+		return;
+	}
+	if (m_triggerCount == 1)
+	{
+		if (m_sr->m_mountedTemplate.empty())
+		{
+			toggleMount(*obj, *ai, m_sr->m_cancelDisguiseWhenDismounting, m_unported);
+			++m_summons;
+		}
+		else if (Object *n = replaceWithTemplate(*obj, m_sr->m_mountedTemplate, m_sr->m_synchronizeTimerOnSpecialPower, "SummonReplacementSpecialAbilityUpdate"))
+		{
+			++m_unported; // + 0x488, the AI group, the script name record and the last command (S-861)
+			m_replaceAfterPacking = true; // RW 0x8B2502: + 0x8C
+			m_replacement = n->getID();
+			++m_summons;
+		}
+		// RW 0x8B25FB: the control bar of the selected object is marked dirty (client)
+	}
+	m_emotions += emotionPulse(*obj, *m_sr);
+}
+
+// RW 0x8B202A (ToggleMounted's RW 0x8B125F over + 0xE8)
+void SummonReplacementSpecialAbilityUpdate::finishAfterPacking()
+{
+	SpecialAbilityUpdate::finishAfterPacking();
+	// RW 0x8B2036: the drawable's opacity back to 1.0 (client)
+	getObject()->setStatus(kStatusIgnoreAI, false); // RW 0x62684D(0x4A, 0)
+	if (m_replaceAfterPacking && !m_sr->m_mountedTemplate.empty())
+	{
+		Object *obj = getObject();
+		obj->logic().destroyObject(obj); // RW 0x8B1E9A (see ToggleMountedSpecialAbilityUpdate::finishAfterPacking)
+	}
+}
+
+// RW 0x8B208A: ToggleMounted's (RW 0x8B1219) then ModelCondition's WhichSpecialPower condition off (RW 0x8945C1's)
+void SummonReplacementSpecialAbilityUpdate::finishAbility(bool ownerDying, bool aborted)
+{
+	// RW 0x8B208D: the drawable's opacity back to 1.0 (client)
+	getObject()->setStatus(kStatusIgnoreAI, false);
+	SpecialAbilityUpdate::finishAbility(ownerDying, aborted);
+	setCondition(*getObject(), whichSpecialPowerCondition(m_sr->m_whichSpecialPower), false);
+}
+
+void SummonReplacementSpecialAbilityUpdate::crc(StateHasher &h) const
+{
+	SpecialAbilityUpdate::crc(h);
+	h.addBool(m_replaceAfterPacking);
+	h.addU32(m_summons);
+	h.addU32(m_replacement);
 	h.addU32(m_emotions);
 }
 
@@ -2206,6 +2384,7 @@ void SpecialAbilityModules::registerAll(ModuleFactory &modules)
 	bindRuntime<LevelGrantSpecialPower, LevelGrantSpecialPowerModuleData>(modules, "LevelGrantSpecialPower");
 	bindRuntime<ModelConditionSpecialAbilityUpdate, ModelConditionSpecialAbilityUpdateModuleData>(modules, "ModelConditionSpecialAbilityUpdate");
 	bindRuntime<SpecialDisguiseUpdate, SpecialDisguiseUpdateModuleData>(modules, "SpecialDisguiseUpdate"); // lane HERO-2
+	bindRuntime<SummonReplacementSpecialAbilityUpdate, SummonReplacementSpecialAbilityUpdateModuleData>(modules, "SummonReplacementSpecialAbilityUpdate"); // lane SUMMON-1: RW 0x659991
 	HeroAbilityModules::registerAll(modules);                                                              // lane HERO-2
 }
 
@@ -2224,8 +2403,10 @@ std::vector<std::string> SpecialAbilityModules::stopLines()
 		"GrabPassengerAnimAndDuration, ContactPointOverride, the unit cost of the summoning templates (+ 0x80): counted",
 		"[S-861] ToggleMountedSpecialAbilityUpdate: the toggle, CancelDisguiseWhenDismounting and MountedTemplate (the replacement RW 0x8B140D: Construction::"
 		"buildObjectNow, name, experience, health, team, SynchronizeTimerOnSpecialPower; the old object destroyed after its packing, RW 0x8B1E9A) run (lane "
-		"HERO-2); not ported: the replacement's + 0x488 (RW 0x5EA74E), the AI group (RW 0x68B36F -> 0x6682B1), the script engine's name record (RW 0x60A1D5) "
-		"and the last AI command given again (RW 0x66D7C9), the riders' eject on dismount, the opacity fade (client): counted",
+		"HERO-2); lane SUMMON-1: the initiate RW 0x8B1FDA (a current locomotor of speed 0 refuses, else IGNORE_AI_COMMAND) and SummonReplacementSpecialAbilityUpdate "
+		"(the Thrall Master: RW 0x8B228C, the same replacement over its own data) run; not ported: the replacement's + 0x488 (RW 0x5EA74E), the AI group (RW "
+		"0x68B36F -> 0x6682B1), the script engine's name record (RW 0x60A1D5) and the last AI command given again (RW 0x66D7C9), the riders' eject on dismount, the "
+		"opacity fade (client): counted",
 		"[S-863] the retail ability run (test_hero_retail.cpp checkAbilities) reports, per faction, the abilities whose effect it cannot see; Screech, the fell beasts' landing and the Horn of Gondor are measured since lane HERO-2. Explained by the run's conditions: Train Archers (LevelGrantSpecialPower: none of its AcceptanceFilter's archers is near), Glorfindel's Wind Rider and the Goblin King's Poisoned Stinger (RequiredConditions MOUNTED: cast unmounted, refused as retail refuses them), Thranduil's Move Unseen (no ally in its radius), Gandalf's Part the Heavens (OCLSpecialPower: the OCL's objects are not measured), the passive / fake leadership buttons, the level attack (S-1223), ActivateModuleSpecialPower's dummy power, Sharku's Man-Eater Drop (FlingPassengerSpecialAbilityUpdate with TransportContain: lane GARRISON-2). Explained too: Faramir's mount toggle in the faction run (he is attacking at both triggers and the retail idle gate, RW 0x8B1690, the AI's isIdle, refuses the mount; alone and idle he mounts)",
 	};
 }
@@ -2352,6 +2533,16 @@ void ModelConditionSpecialAbilityUpdate::xfer(Xfer &x)
 {
 	SnapshotXfer::version(x, 1, 1);
 	SpecialAbilityUpdate::xfer(x);
+	x.xferUnsignedInt(&m_emotions);
+}
+
+void SummonReplacementSpecialAbilityUpdate::xfer(Xfer &x)
+{
+	SnapshotXfer::version(x, 1, 1); // lane SUMMON-1
+	SpecialAbilityUpdate::xfer(x);
+	x.xferBool(&m_replaceAfterPacking);
+	x.xferUnsignedInt(&m_summons);
+	x.xferObjectID(&m_replacement);
 	x.xferUnsignedInt(&m_emotions);
 }
 

@@ -10,25 +10,13 @@
 extends "res://scripts/spell3_player.gd"
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
 	shell = game._shell
 	faction = str(game._faction) if "_faction" in game else ""
-	for s in scenarios:
-		if not has_method("_scenario_" + s):
-			fail_count += 1
-			print("OWNERFIX2 %s: FAIL no such scenario" % s)
-			continue
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("OWNERFIX2 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("OWNERFIX2 %s: FAIL %s" % [s, r])
-	print("OWNERFIX2 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func shot(name: String) -> void:

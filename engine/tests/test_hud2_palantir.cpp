@@ -5,8 +5,10 @@
 #include "HudTestUtil.h"
 
 #include "Common/PlayerTemplate.h"
+#include "Common/ModelState.h"
 #include "GameClient/GUI/ShellServices.h"
 #include "GameClient/InGameHud.h"
+#include "GameClient/InGameHeroSelect.h"
 #include "GameClient/PalantirCommandUI.h"
 #include "Libraries/Source/Apt/AptCharacterInst.h"
 #include "Libraries/Source/Apt/AptRenderList.h"
@@ -264,4 +266,47 @@ TEST_CASE("stop S-760: the Palantir portrait reports the branches it does not po
 	const std::vector<std::string> stops = PalantirCommandUI::acceptanceStops();
 	REQUIRE(stops.size() == 1);
 	CHECK(stops[0].rfind("[S-760]", 0) == 0);
+}
+
+TEST_CASE("hud2 palantir: custom heroes use their model-state portraits rather than the generic Wanderer")
+{
+	if (!haveWorld("hud2 custom hero portrait"))
+	{
+		return;
+	}
+	PalantirRig h(shared());
+	Object *maiden = h.rig.make("CreateAHero", 2800, 1400);
+	Object *captain = h.rig.make("CreateAHero", 3000, 1400);
+	REQUIRE(maiden);
+	REQUIRE(captain);
+	// Independent retail CreateAHeroModels.inc expectations: CREATE_A_HERO_02
+	// names CPShieldMaiden; CREATE_A_HERO_00 names CPCaptainofGondor.
+	maiden->setModelConditionState(ModelCondition::indexOf("CREATE_A_HERO_02"), true);
+	captain->setModelConditionState(ModelCondition::indexOf("CREATE_A_HERO_00"), true);
+	CHECK(PalantirCommandUI::objectPortrait(*maiden) == "CPShieldMaiden");
+	CHECK(PalantirCommandUI::objectPortrait(*captain) == "CPCaptainofGondor");
+	h.hud->input().ui().selectObject(maiden->getID());
+	h.frames(10);
+	CHECK(h.hud->palantir()->portraitShown() == "CPShieldMaiden");
+	// Both objects have the same template, but different portraits: do not
+	// skip the second object using the ordinary template comparison cache.
+	h.hud->input().ui().selectObject(captain->getID());
+	h.frames(10);
+	CHECK(h.hud->palantir()->portraitShown() == h.rig.local->getPlayerTemplate()->m_multiSelectionPortrait);
+}
+
+TEST_CASE("hud2 custom hero buttons: model-state icons distinguish Shield Maiden and Captain")
+{
+	if (!haveWorld("hud2 custom hero button")) return;
+	PalantirRig h(shared());
+	Object *maiden = h.rig.make("CreateAHero", 2800, 1400);
+	Object *captain = h.rig.make("CreateAHero", 3000, 1400);
+	REQUIRE(maiden);
+	REQUIRE(captain);
+	maiden->setModelConditionState(ModelCondition::indexOf("CREATE_A_HERO_02"), true);
+	captain->setModelConditionState(ModelCondition::indexOf("CREATE_A_HERO_00"), true);
+	CHECK(InGameHeroSelect::buttonImage(*maiden) == "HICAHShieldMaiden");
+	CHECK(InGameHeroSelect::buttonImage(*captain) == "HICAHCaptainGondor");
+	maiden->setModelConditionState(ModelCondition::indexOf("MOUNTED"), true);
+	CHECK(InGameHeroSelect::buttonImage(*maiden) == "HICAHShieldMaiden");
 }

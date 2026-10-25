@@ -441,8 +441,8 @@ Dictionary GameWorld::get_movie(const String &title)
 		d["error"] = g(m_videosError);
 		return d;
 	}
-	// the loose movies live in the RotWK install (RetailFileSystem::mount_retail's root); no mod directory (S-1710: TheGlobalData + 0xD38 is the mod
-	// lane's), the language of this install's archives (lang\English*.big)
+	// the loose movies live in the RotWK install (RetailFileSystem::mount_retail's root); the mounted -mod folder is RW 0x490D1C's "Mod Path" (lane MODS-1:
+	// TheGlobalData + 0xD38, RetailFileSystem::modFolder), the language of this install's archives (lang\English*.big)
 	std::string root, error;
 	const std::string config = n(ProjectSettings::get_singleton()->globalize_path("user://install-paths.cfg"));
 	if (m_fs.is_valid() && m_fs->is_bfme1()) root = m_fs->bfme1_root();
@@ -464,7 +464,7 @@ Dictionary GameWorld::get_movie(const String &title)
 		}
 	}
 	const AudioIniState &audio = m_world->audio();
-	const VideoStreamInfo info = m_videos->open(n(title), root, std::string(), language, [&audio](const std::string &e) { return audio.infos.find(e) != nullptr; });
+	const VideoStreamInfo info = m_videos->open(n(title), root, m_fs.is_valid() ? m_fs->modFolder() : std::string(), language, [&audio](const std::string &e) { return audio.infos.find(e) != nullptr; });
 	d["ok"] = info.ok;
 	d["error"] = g(info.error);
 	d["path"] = g(info.path);

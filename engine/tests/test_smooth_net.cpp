@@ -191,6 +191,7 @@ struct Scenario
 	// every kHudInputEvery batches (when nextBatchFrame() reaches the mark). 1: after draining the worker (what every accessor did before the client
 	// window: the base's timing); 2: inside a client window, taken while batches may still be queued
 	int hudInput = 0;
+	bool earlyOrders = false; ///< lane NETLAG-2 (Sol): NetworkConfig::earlyOrders (the cross-pacing record needs it off)
 };
 
 struct FrameRecord
@@ -232,6 +233,8 @@ Result runScenario(starttest::Shared &s, const Scenario &sc, const std::string &
 	cfg.localSlot = 0;
 	cfg.runAhead = kRunAhead;
 	cfg.crcInterval = kCrcInterval;
+	// lane NETLAG-2: early orders take their frame from the wall clock; every scenario here must give the single-thread game's commands frame for frame
+	cfg.earlyOrders = sc.earlyOrders;
 	std::vector<ObjectID> units;
 	Coord3D home{ 0, 0, 0 };
 	for (int slot = 0; slot < 2; ++slot)
@@ -512,6 +515,32 @@ std::string describe(const Result &r)
 	return b;
 }
 } // namespace
+
+// lane NETLAG-2 (Sol's review of early orders): with early orders on, six tick pacing (retail's phase-per-tick pacing) gives no frame timing to the
+// network, so no FRAMEINFO is held; the game runs every frame as with early orders off (before the fix it stayed at frame 1)
+TEST_CASE("netlag2 smooth: six tick pacing with early orders on runs every frame in lockstep with the remote peer")
+{
+	OPENBFME_REQUIRE_START(s);
+	Scenario six;
+	six.label = "six tick pacing, 33 ms steps, early orders on";
+	six.sixTick = true;
+	six.stepMs = { 33 };
+	six.earlyOrders = true;
+	const std::string path = "netlag2_six_early.replay";
+	const Result r = runScenario(*s, six, path);
+	std::remove(path.c_str());
+	for (const std::string &e : r.errors)
+	{
+		MESSAGE("  error: " << e);
+	}
+	CHECK(r.errors.empty());
+	CHECK(r.desyncs == 0);
+	REQUIRE(r.frames.size() == (size_t)kFrames);
+	for (size_t f = 0; f < r.frames.size(); ++f)
+	{
+		CHECK(r.frames[f].frame == r.startFrame + 1 + (UnsignedInt)f);
+	}
+}
 
 TEST_CASE("smooth1 r4 retail: lockstep batches on the logic worker: every scenario gives the single-thread game's commands, hashes and RNG at every frame")
 {

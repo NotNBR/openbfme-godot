@@ -108,7 +108,7 @@ public:
 	DamageModuleInterface *getDamage() override { return this; }
 	void onDamage(const DamageInfo &info) override;
 	void onHealing(const DamageInfo &info) override;
-	void onBodyDamageStateChange(BodyDamageType, BodyDamageType) override {} // RW 0x918BA0
+	void onBodyDamageStateChange(const DamageInfo *, BodyDamageType, BodyDamageType) override {} // RW 0x918BA0
 	UpdateSleepTime update() override;
 	void crc(StateHasher &hasher) const override;
 

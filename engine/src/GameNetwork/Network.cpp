@@ -15,6 +15,11 @@ namespace
 constexpr size_t kMaxReportObjects = 4000; // the objects of one DESYNCREPORT (a UDP datagram stays below 64 KiB)
 constexpr size_t kKeptHalves = 8;          // the CRC frames whose breakdown is kept for a report
 constexpr UnsignedInt kFramesToKeep = 65;  // lane MP-2: FRAMES_TO_KEEP (RW 0xDB824C), the frames sendFrameDataToPlayer can relay
+constexpr std::uint64_t kRunAheadDecisionMs = 1000; // lane NETLAG-2: the adaptive run-ahead decides at least this often (Network::updateRunAhead)
+constexpr long long kRunAheadMarginMs = 25;        // lane NETLAG-2: the part of a 200 ms frame kept for the simulation time and the clocks' phase
+constexpr long long kRunAheadLowerMs = 50;         // lane NETLAG-2: a lower run-ahead needs this much more room (no flapping at a frame's edge)
+constexpr long long kEarlyMarginMs = 40;           // lane NETLAG-2: an early order's lead beyond the one-way latency (the clocks' phase, a render step)
+constexpr long long kFramePeriodMs = 200;          // LOGICFRAMES_PER_SECOND 5 (RW 0xD9F608)
 
 std::string hex32(std::uint32_t v)
 {
@@ -56,6 +61,16 @@ bool DesyncHalf::decode(const std::vector<std::uint8_t> &bytes, DesyncHalf &out,
 	out.frame = r.u32();
 	out.hash = r.u32();
 	const std::uint32_t ns = r.u32();
+	// lane NETDIAG-1 (from a contributor's parser hardening): counts the bytes cannot hold are refused before any entry is read (a section is at
+	// least 8 bytes: u32 name length + u32 value; an object at least 12; encode() writes at most kMaxReportObjects objects)
+	if (r.failed() || ns > r.remaining() / 8)
+	{
+		if (error)
+		{
+			*error = "desync report section count " + std::to_string(ns) + " exceeds the report's bytes";
+		}
+		return false;
+	}
 	for (std::uint32_t i = 0; i < ns && !r.failed(); ++i)
 	{
 		GameLogic::StateHashSection s;
@@ -64,6 +79,14 @@ bool DesyncHalf::decode(const std::vector<std::uint8_t> &bytes, DesyncHalf &out,
 		out.sections.push_back(s);
 	}
 	const std::uint32_t no = r.u32();
+	if (r.failed() || no > kMaxReportObjects || no > r.remaining() / 12)
+	{
+		if (error)
+		{
+			*error = "desync report object count " + std::to_string(no) + " exceeds the limit or the report's bytes";
+		}
+		return false;
+	}
 	for (std::uint32_t i = 0; i < no && !r.failed(); ++i)
 	{
 		GameLogic::ObjectStateHash o;
@@ -263,6 +286,38 @@ UnsignedInt Network::executionFrame(UnsignedInt logicFrame)
 	return m_lastExecutionFrame;
 }
 
+void Network::setFrameDue(UnsignedInt frame, std::uint32_t msFromNow)
+{
+	m_dueKnown = true;
+	m_dueFrame = frame;
+	m_dueAtMs = now() + msFromNow;
+}
+
+long long Network::earlyLeadMs() const
+{
+	long long worst = -1;
+	for (int s = 0; s < MAX_SLOTS; ++s)
+	{
+		if (s == m_config.localSlot || !hasConnection(s))
+		{
+			continue;
+		}
+		const int planned = m_transport.plannedRoundTripMs(s);
+		if (planned < 0)
+		{
+			return -1; // a peer not measured yet: no early orders
+		}
+		worst = std::max(worst, (long long)planned);
+	}
+	if (worst < 0)
+	{
+		return -1;
+	}
+	long long oneWayMs = (worst + 1) / 2;
+	oneWayMs += oneWayMs * (long long)m_config.settings.runAheadSlack / 100;
+	return oneWayMs + kEarlyMarginMs;
+}
+
 void Network::send(const NetCommandMsg &c)
 {
 	std::string error;
@@ -314,6 +369,11 @@ void Network::send(const NetCommandMsg &c)
 
 void Network::update(UnsignedInt logicFrame, CommandList &pending)
 {
+	if (m_transport.relayCanonical())
+	{
+		updateCanonical(logicFrame, pending);
+		return;
+	}
 	if (m_rejoining)
 	{
 		// lane ONLINE-3: a rejoining client sends no frame data before beginLive (the catch-up runs the game from the relay's log); it files what the
@@ -341,12 +401,30 @@ void Network::update(UnsignedInt logicFrame, CommandList &pending)
 	{
 		// (1) ZH GetCommandsFromCommandList / sendLocalGameMessage
 		const UnsignedInt exec = executionFrame(logicFrame);
+		// lane NETLAG-2: the frame before `exec` is still open for the local player's orders while its FRAMEINFO has not gone out and it is at least the
+		// lead away on the local clock; its FRAMEINFO is held back until then. MSG_LOGIC_CRC keeps the run-ahead's frame (every peer's CRC on one frame)
+		bool earlyOpen = false;
+		// (the clock's last timing is carried forward a period per frame: the driver's completion update runs before the next pump brings fresh timing)
+		if (m_config.earlyOrders && m_dueKnown && logicFrame >= m_dueFrame && exec > logicFrame && (long long)(exec - 1) > m_lastFrameAnnounced)
+		{
+			const long long lead = earlyLeadMs();
+			const long long until = (long long)m_dueAtMs + (long long)(exec - 1 - m_dueFrame) * kFramePeriodMs - (long long)now();
+			earlyOpen = lead >= 0 && until >= lead;
+		}
 		for (const GameMessage &m : pending.messages())
 		{
 			NetCommandMsg c;
 			c.type = NETCOMMANDTYPE_GAMECOMMAND;
 			c.slot = (std::uint8_t)m_config.localSlot;
 			c.executionFrame = exec;
+			if (m.getType() != MSG_LOGIC_CRC)
+			{
+				UnsignedInt e = earlyOpen ? exec - 1 : exec;
+				e = std::max(e, m_lastOrderFrame); // a later order never runs before an earlier one
+				m_earlyOrders += e < exec ? 1 : 0;
+				m_lastOrderFrame = e;
+				c.executionFrame = e;
+			}
 			auto msg = std::make_shared<GameMessage>(m);
 			c.message = msg;
 			if (m.getType() == MSG_LOGIC_CRC && !m_pendingCrcFrames.empty())
@@ -356,8 +434,8 @@ void Network::update(UnsignedInt logicFrame, CommandList &pending)
 			}
 			send(c);
 		}
-		// (2) ZH processCommand / processFrameTick: the counts of every frame no later command can reach
-		for (long long f = m_lastFrameAnnounced + 1; f < (long long)exec; ++f)
+		// (2) ZH processCommand / processFrameTick: the counts of every frame no later command can reach (lane NETLAG-2: but the early frame's)
+		for (long long f = m_lastFrameAnnounced + 1; f < (long long)exec - (earlyOpen ? 1 : 0); ++f)
 		{
 			NetCommandMsg c;
 			c.type = NETCOMMANDTYPE_FRAMEINFO;
@@ -388,6 +466,79 @@ void Network::update(UnsignedInt logicFrame, CommandList &pending)
 	if (m_config.disconnectPath && !m_leaving)
 	{
 		m_disconnect.update(*this, now(), logicFrame);
+	}
+}
+
+void Network::updateCanonical(UnsignedInt logicFrame, CommandList &pending)
+{
+	// lane NET-SYNC: the canonical mode — the relay stamps every order's execution frame and publishes one committed
+	// bundle per frame. Local orders go up as OBCI messages (the slot's dense order id; the frame is never chosen
+	// here); one beat closes this client's window for the seal; the durable record stream becomes the frame inputs.
+	if (!m_canonicalClient)
+	{
+		std::uint16_t mask = 0;
+		for (int s = 0; s < MAX_SLOTS; ++s)
+		{
+			if (m_config.slotPlayerIndex[(size_t)s] >= 0)
+			{
+				mask |= (std::uint16_t)(1u << s);
+			}
+		}
+		// ROUTER-1: the canonical client's map is 16-slot (the relay's ceiling); this Network is 8-slot (GameInfo.h)
+		std::array<int, 16> idx;
+		idx.fill(-1);
+		for (int s = 0; s < MAX_SLOTS; ++s)
+		{
+			idx[(size_t)s] = m_config.slotPlayerIndex[(size_t)s];
+		}
+		m_canonicalClient = std::make_unique<RelayCanonicalClient::Client>(
+			m_transport.canonicalGame(), m_transport.canonicalEpoch(), mask, 1, idx);
+	}
+	const std::uint64_t t = now();
+	for (const GameMessage &m : pending.messages())
+	{
+		NetByteWriter w;
+		std::string error;
+		if (!NetPacket::writeGameMessage(w, m, &error))
+		{
+			m_errors.push_back("canonical order encode: " + error);
+			continue;
+		}
+		if (!m_transport.sendCanonicalOrder(++m_canonicalOrderId, w.data(), t, error))
+		{
+			m_errors.push_back("canonical order send: " + error);
+		}
+	}
+	pending.reset();
+	{
+		std::string error;
+		if (!m_transport.sendCanonicalBeat(++m_canonicalBeatId, t, error))
+		{
+			m_errors.push_back("canonical beat send: " + error);
+		}
+	}
+	m_logicFrame = logicFrame;
+	m_transport.service();
+	std::vector<std::uint8_t> bytes;
+	while (m_transport.takeCanonicalRecord(bytes))
+	{
+		RelayCommit::Record record;
+		std::string error;
+		if (!RelayCommit::decode(bytes, RelayCanonicalInput::kMaxWireBytes, record, error))
+		{
+			m_errors.push_back("canonical record decode: " + error);
+			continue;
+		}
+		if (!m_canonicalClient->accept(record, error))
+		{
+			m_errors.push_back("canonical record: " + error);
+			continue;
+		}
+		RelayCanonicalClient::FrameInput input;
+		while (m_canonicalClient->takeFrameInput(input))
+		{
+			m_canonicalFrames[input.stamp.frame] = std::move(input);
+		}
 	}
 }
 
@@ -635,6 +786,18 @@ void Network::file(const NetCommandMsg &c, int fromSlot)
 		m_pauses.erase(c.frame); // lane ONLINE-3: any player may resume
 		m_resumedPauses.insert(c.frame);
 		return;
+	case NETCOMMANDTYPE_CHAT:
+		fileChat(c, fromSlot); // lane CHAT-1: RW 0x8D728F's case 0xE (processChat at once, no frame wait)
+		return;
+	case NETCOMMANDTYPE_DISCONNECTCHAT: // lane CHAT-1: RW 0x8D728F's case 0xD (processDisconnectChat RW 0x8D5403)
+		if ((fromSlot == m_config.localSlot || chatFloodAllows(fromSlot)) && !(m_chatLobbyMuted >> fromSlot & 1u))
+		{
+			ChatLine line;
+			line.slot = fromSlot;
+			line.text = c.chatText;
+			m_disconnectChatIn.push_back(std::move(line));
+		}
+		return;
 	case NETCOMMANDTYPE_KEEPALIVE:
 		return;
 	case NETCOMMANDTYPE_DESYNCREPORT:
@@ -679,6 +842,22 @@ bool Network::isFrameReady(UnsignedInt frame) const
 std::vector<int> Network::waitingFor(UnsignedInt frame) const
 {
 	std::vector<int> out;
+	if (m_transport.relayCanonical())
+	{
+		// lane NET-SYNC: a canonical frame waits on the one committed bundle, not on per-slot input
+		if (m_canonicalFrames.count(frame))
+		{
+			return out;
+		}
+		for (int s = 0; s < MAX_SLOTS; ++s)
+		{
+			if (slotNeeded(s, frame))
+			{
+				out.push_back(s);
+			}
+		}
+		return out;
+	}
 	for (int s = 0; s < MAX_SLOTS; ++s)
 	{
 		if (!slotNeeded(s, frame))
@@ -698,6 +877,49 @@ std::vector<int> Network::waitingFor(UnsignedInt frame) const
 
 void Network::relayCommands(UnsignedInt frame, CommandList &out)
 {
+	if (m_transport.relayCanonical())
+	{
+		// lane NET-SYNC: the frame's committed bundle is its whole input: the departed slots' MSG_SELF_DESTRUCT(true)
+		// first (ascending), then every order in (slot, id) order. The echo of the local client's own orders runs
+		// exactly once, here — they were never filed locally.
+		const auto it = m_canonicalFrames.find(frame);
+		if (it == m_canonicalFrames.end())
+		{
+			m_errors.push_back("canonical frame " + std::to_string(frame) + " relayed before its bundle arrived");
+			return;
+		}
+		std::map<int, std::uint32_t> crcs;
+		bool anyCRC = false;
+		for (int s = 0; s < MAX_SLOTS; ++s)
+		{
+			if ((it->second.departed & (1u << s)) && m_config.slotPlayerIndex[(size_t)s] >= 0)
+			{
+				GameMessage destruct(MSG_SELF_DESTRUCT, m_config.slotPlayerIndex[(size_t)s]);
+				destruct.appendBooleanArgument(true);
+				out.append(destruct);
+				++m_commandsRelayed;
+			}
+		}
+		for (const RelayCanonicalClient::FrameInput::Command &cmd : it->second.commands)
+		{
+			if (cmd.message->getType() == MSG_LOGIC_CRC)
+			{
+				anyCRC = true;
+				const GameMessageArgument *a = cmd.message->getArgument(0);
+				crcs[cmd.slot] = a ? (std::uint32_t)a->integer : 0u;
+			}
+			out.append(*cmd.message);
+			++m_commandsRelayed;
+		}
+		m_canonicalFrames.erase(it);
+		m_lastRelayed = frame;
+		m_relayedAny = true;
+		if (anyCRC)
+		{
+			checkCRCs(frame, crcs);
+		}
+		return;
+	}
 	int newRunAhead = -1;
 	std::vector<int> rejoined; // lane ONLINE-3: the slots the frame's packet router takes back (from frame + 1)
 	std::map<int, std::uint32_t> crcs;
@@ -734,7 +956,10 @@ void Network::relayCommands(UnsignedInt frame, CommandList &out)
 			for (int t : it->second.rejoins)
 			{
 				// lane ONLINE-3: only the frame's packet router takes a slot back, and only a held one (deterministic: the same membership on every peer)
-				h.rejoinMask[(size_t)s] |= (std::uint8_t)(1u << (t & 7));
+				if (t >= 0 && t < MAX_SLOTS)
+				{
+					h.rejoinMask[(size_t)s] |= (std::uint16_t)(1u << t);
+				}
 				if (s != routerAt(frame))
 				{
 					m_errors.push_back("REJOIN of slot " + std::to_string(t) + " from slot " + std::to_string(s) + " for frame " + std::to_string(frame)
@@ -970,27 +1195,42 @@ void Network::updateRunAhead(std::uint64_t nowMs)
 	// every NetworkRunAheadMetricsTime ms (GameData, GlobalData + 0xC10) the packet router computes the run-ahead from the worst measured latency to a
 	// connected peer with ZH ConnectionManager::updateRunAhead's formula (DONOR: (latency / 2) * fps, plus NetworkRunAheadSlack percent, at least the
 	// minimum) and sends it as ZH's NETCOMMANDTYPE_RUNAHEAD, a frame command (RotWK has no such command, RW 0x989449: S-720); every peer takes the new
-	// value when that frame runs (relayCommands), so all peers keep one run-ahead and their MSG_LOGIC_CRCs one execution frame. OpenBFME choices: the
-	// latency is the transport's smoothed round trip plus four times its variation (RFC 6298's timeout), one frame is added for the frame a command is
-	// issued in, a lower target lowers the value by one frame per period, and no new change is sent before the last one ran.
-	if (m_lastRunAheadUpdate != 0 && nowMs - m_lastRunAheadUpdate < (std::uint64_t)m_config.settings.runAheadMetricsTime)
+	// value when that frame runs (relayCommands), so all peers keep one run-ahead and their MSG_LOGIC_CRCs one execution frame. OpenBFME choices: one
+	// frame is added for the frame a command is issued in, a lower target lowers the value by one frame per period, and no new change is sent before
+	// the last one ran. Lane NETLAG-2 (the owner's live games of 2026-10-18 on the relay: one late sample raised it from 1 to 6 frames, 1.2 s from a
+	// click to its effect, for 25 s): the latency is the transport's planned round trip (a high percentile of its recent samples, not MP-2's smoothed
+	// round trip plus four times its variation, which a single late ack multiplied), and the period is at most kRunAheadDecisionMs: RotWK's
+	// GameData gives NetworkRunAheadMetricsTime 5000 ms (a step down every 5 s, measured on the relay logs), a value RotWK itself never paces anything
+	// by (it has no RUNAHEAD, S-720), so it only slowed the way back
+	const std::uint64_t periodOfDecision = std::min<std::uint64_t>(m_config.settings.runAheadMetricsTime, kRunAheadDecisionMs);
+	if (m_lastRunAheadUpdate != 0 && nowMs - m_lastRunAheadUpdate < periodOfDecision)
 	{
 		return;
 	}
 	m_lastRunAheadUpdate = nowMs;
-	long long worst = -1;
+	// lane NETLAG-2 (Sol r1): the router measures only its own links, but every pair of players must hear each other within the delay; a link between
+	// two other players is at most the sum of their links to the router (through the relay, or directly by the triangle inequality), so with two
+	// or more other players the plan takes the two longest round trips added (a two-player game: the one link itself). With NETLAG-1's half-period
+	// margin the router's own link happened to cover it; with 25 ms a router 125 ms from two players 250 ms apart kept 1 frame and the game ran 20 %
+	// slow
+	long long worst = -1, first = -1, second = -1;
 	for (int s = 0; s < MAX_SLOTS; ++s)
 	{
 		if (!hasConnection(s))
 		{
 			continue;
 		}
-		const int rtt = m_transport.roundTripMs(s);
-		const int var = m_transport.roundTripVarMs(s);
-		if (rtt >= 0)
+		const int planned = m_transport.plannedRoundTripMs(s); // lane NETLAG-2
+		if (planned >= 0)
 		{
-			worst = std::max(worst, (long long)rtt + 4LL * (long long)std::max(0, var));
+			worst = std::max(worst, (long long)planned);
+			second = std::max(second, std::min(first, (long long)planned));
+			first = std::max(first, (long long)planned);
 		}
+	}
+	if (second >= 0)
+	{
+		worst = first + second;
 	}
 	m_lastMaxRtt = (int)worst;
 	// only the packet router decides (ZH: the router's RUNAHEAD); the others take its value when its frame runs. Lane MP-3 (review r1): the router of the
@@ -1007,23 +1247,29 @@ void Network::updateRunAhead(std::uint64_t nowMs)
 	m_runAheadChangePending = false;
 	// lane NETLAG-1: the frames a command needs to reach every peer before the frame it executes on. A peer sends its FRAMEINFO of frame P + run-ahead - 1
 	// when it completes frame P - 1, and the other peer runs that frame (run-ahead - 1) periods after its next 200 ms tick; so a one-way latency (with
-	// NetworkRunAheadSlack percent) below half a period keeps the run-ahead 1, RotWK's command delay (the packet router stamps a command with the current
-	// frame + 1, RW 0x8D4301 / 0x8D3AF1), and each further 200 ms adds a frame. OpenBFME choice (INFERENCE, S-720): the other half period is kept for
-	// the simulation time of a frame and the phase between the peers' 5 Hz clocks. MP-2's formula rounded the one-way latency up to whole frames and added
-	// one, so every real link (a 1 ms LAN included) ran at 2 frames: 400 to 600 ms from a click to its effect
+	// NetworkRunAheadSlack percent) below a period keeps the run-ahead 1, RotWK's command delay (the packet router stamps a command with the current
+	// frame + 1, RW 0x8D4301 / 0x8D3AF1), and each further 200 ms adds a frame. MP-2's formula rounded the one-way latency up to whole frames and added
+	// one, so every real link (a 1 ms LAN included) ran at 2 frames: 400 to 600 ms from a click to its effect. Lane NETLAG-2: NETLAG-1 kept half a
+	// period for the simulation time and the phase between the peers' clocks (one frame up from 91 ms one way); measured on the staging relay (2 players,
+	// 150 ms one way between them, run-ahead held at 1: 2 to 3 waits of one frame in 80 s, 294 to 314 ms from a click to its effect, against 488 to 499 ms
+	// at the 2 frames the half-period rule chose), so only kRunAheadMarginMs is kept: the run-ahead stays 1 up to about 159 ms one way. RotWK itself never
+	// lengthens the delay (S-720): a slow link stalls its game instead
 	const long long fps = 5;                                       // LOGICFRAMES_PER_SECOND (RW 0xD9F608)
 	const long long periodMs = 1000 / fps;
 	long long oneWayMs = (worst + 1) / 2;                          // rounded up
 	oneWayMs += oneWayMs * (long long)m_config.settings.runAheadSlack / 100;
-	long long target = (oneWayMs + periodMs / 2) / periodMs + 1;
+	long long target = (oneWayMs + kRunAheadMarginMs) / periodMs + 1;
 	target = std::max<long long>(target, m_minRunAhead);
 	target = std::min<long long>(target, std::max(m_minRunAhead, m_config.maxRunAhead));
+	// lane NETLAG-2: down only with kRunAheadLowerMs more room; on the staging relay a link at the edge (4 players, 150 ms one way) went 1 -> 2 -> 1
+	// eleven times in 80 s with a 200 ms wait at most changes
+	const long long lower = std::max<long long>((oneWayMs + kRunAheadMarginMs + kRunAheadLowerMs) / periodMs + 1, m_minRunAhead);
 	int next = m_config.runAhead;
 	if (target > m_config.runAhead)
 	{
 		next = (int)target;
 	}
-	else if (target < m_config.runAhead)
+	else if (lower < m_config.runAhead)
 	{
 		next = m_config.runAhead - 1;
 	}
@@ -1054,17 +1300,27 @@ bool Network::allowedToContinue(UnsignedInt frame)
 
 void Network::voteForPlayerDisconnect(int slot)
 {
+	if (m_transport.relayCanonical())
+	{
+		// ROUTER-1: disconnect votes ride the legacy stream; a silent slot in a canonical game goes HELD at the relay
+		// (it stalls nobody) and may rejoin — the kick vote is refused loudly here
+		m_errors.push_back("kick votes are not available in a canonical game (ROUTER-1: a silent slot is held at the relay, not voted out)");
+		return;
+	}
 	m_disconnect.voteForPlayerDisconnect(*this, slot, m_logicFrame);
 }
 
 void Network::quitFromDisconnectScreen()
 {
-	// RW 0x9195E1: the chat "Network:PlayerLeftGame" (not ported: no disconnect chat), a vote for every slot that is not the local one, then quit
-	for (int s = 0; s < MAX_SLOTS; ++s)
+	// RW 0x9195E1: the chat "Network:PlayerLeftGame" (lane CHAT-1: the host sends it first, sendDisconnectChat), a vote for every slot that is not the local one, then quit
+	if (!m_transport.relayCanonical())
 	{
-		if (s != m_config.localSlot && isPlayerConnected(s))
+		for (int s = 0; s < MAX_SLOTS; ++s)
 		{
-			m_disconnect.voteForPlayerDisconnect(*this, s, m_logicFrame);
+			if (s != m_config.localSlot && isPlayerConnected(s))
+			{
+				m_disconnect.voteForPlayerDisconnect(*this, s, m_logicFrame);
+			}
 		}
 	}
 	m_quitFromScreen = true;
@@ -1141,7 +1397,7 @@ int Network::nextPacketRouterSlot(int slot) const
 	return MAX_SLOTS;
 }
 
-bool Network::dropClaims(int sender, int target, std::uint8_t &gone) const
+bool Network::dropClaims(int sender, int target, std::uint16_t &gone) const
 {
 	gone = 0;
 	if (sender < 0 || sender >= MAX_SLOTS || target < 0 || target >= MAX_SLOTS || sender == target || !m_slots[(size_t)target].active
@@ -1163,12 +1419,12 @@ bool Network::dropClaims(int sender, int target, std::uint8_t &gone) const
 		{
 			return false; // a predecessor this peer holds connected is the one to decide (lane ONLINE-3: a rejoined slot is never a decider again)
 		}
-		gone |= (std::uint8_t)(1u << s);
+		gone |= (std::uint16_t)(1u << s);
 	}
 	return false;
 }
 
-int Network::verifyDropClaims(int sender, int target, std::uint8_t gone) const
+int Network::verifyDropClaims(int sender, int target, std::uint16_t gone) const
 {
 	if (sender < 0 || sender >= MAX_SLOTS || target < 0 || target >= MAX_SLOTS || sender == target || !m_slots[(size_t)target].active
 		|| !m_slots[(size_t)sender].active)
@@ -1512,6 +1768,13 @@ void Network::requestPause()
 	{
 		return;
 	}
+	if (m_transport.relayCanonical())
+	{
+		// ROUTER-1: PAUSE is a NETCOMMANDTYPE on the legacy stream; canonical orders carry GameMessages only, so the
+		// relayed bundle path cannot schedule it — refused loudly (pause lands in a later ROUTER lane)
+		m_errors.push_back("pause is not available in a canonical game (ROUTER-1: the bundle stream carries game orders only)");
+		return;
+	}
 	// the pause frame is this peer's next execution frame: its frame info for that frame is sent after this command (in order on every link), so no peer
 	// can have run it, and every peer stops before it
 	const UnsignedInt p = executionFrame(m_logicFrame);
@@ -1529,6 +1792,11 @@ void Network::requestPause()
 
 void Network::requestResume()
 {
+	if (m_transport.relayCanonical())
+	{
+		m_errors.push_back("resume is not available in a canonical game (ROUTER-1: the bundle stream carries game orders only)");
+		return;
+	}
 	if (m_pauses.empty())
 	{
 		return;
@@ -1539,6 +1807,169 @@ void Network::requestResume()
 	c.frame = m_pauses.begin()->first;
 	sendDirect(c);
 	file(c, m_config.localSlot);
+}
+
+bool Network::sendChat(const std::u16string &text, std::uint32_t mask, std::string *error)
+{
+	// RW 0x8D5BA5: the command of the local slot, sent direct, then processChat on it (the echo)
+	auto fail = [error](const std::string &e) {
+		if (error)
+		{
+			*error = e;
+		}
+		return false;
+	};
+	if (text.empty())
+	{
+		return fail("an empty chat line");
+	}
+	if (text.size() > NetChat::kMaxTextUnits)
+	{
+		return fail("a chat line of " + std::to_string(text.size()) + " characters (at most " + std::to_string(NetChat::kMaxTextUnits) + ")");
+	}
+	if (m_leaving || m_rejoining)
+	{
+		return fail(m_leaving ? "the local player is leaving" : "the local player is rejoining");
+	}
+	if (m_chatLobbyMuted >> m_config.localSlot & 1u)
+	{
+		return fail("muted by the moderators");
+	}
+	bool anyPlayer = false;
+	for (int s = 0; s < MAX_SLOTS; ++s)
+	{
+		anyPlayer = anyPlayer || ((mask >> s & 1u) && (s == m_config.localSlot || hasConnection(s)));
+	}
+	if (!anyPlayer)
+	{
+		return fail("no player of the game is a recipient (mask " + std::to_string(mask) + ")");
+	}
+	NetCommandMsg c;
+	c.type = NETCOMMANDTYPE_CHAT;
+	c.slot = (std::uint8_t)m_config.localSlot;
+	c.executionFrame = m_logicFrame; // retail stamps an unassigned direct command with the logic frame + 1 (RW 0x8D3AF1); a receiver never waits for it
+	c.chatText = text;
+	c.playerMask = mask;
+	for (int s = 0; s < MAX_SLOTS; ++s)
+	{
+		if (s != m_config.localSlot && (mask >> s & 1u))
+		{
+			sendDirectTo(s, c); // OpenBFME difference (1): only the recipients' connections
+		}
+	}
+	file(c, m_config.localSlot);
+	return true;
+}
+
+void Network::fileChat(const NetCommandMsg &c, int fromSlot)
+{
+	++m_chatReceived;
+	// RW 0x8D54D1: shown when the local bit is in the mask and the sender is not muted
+	if (!(c.playerMask >> m_config.localSlot & 1u))
+	{
+		++m_chatNotAddressed;
+		return;
+	}
+	if (fromSlot != m_config.localSlot && !chatFloodAllows(fromSlot)) // OpenBFME difference (2) (the local echo is the player's own typing)
+	{
+		return;
+	}
+	if (chatMuted(fromSlot) || (m_chatLobbyMuted >> fromSlot & 1u))
+	{
+		++m_chatMutedDrops;
+		return;
+	}
+	ChatLine line;
+	line.slot = fromSlot;
+	line.playerMask = c.playerMask;
+	line.text = c.chatText;
+	m_chatIn.push_back(std::move(line));
+}
+
+bool Network::chatFloodAllows(int fromSlot)
+{
+	// OpenBFME difference (2): a remote sender's lines beyond kChatBurst at once, then one per kChatRefillMs, are dropped (counted)
+	ChatBucket &b = m_chatBuckets[(size_t)fromSlot];
+	const std::uint64_t t = now();
+	if (!b.started)
+	{
+		b.started = true;
+		b.last = t;
+	}
+	else if (t > b.last)
+	{
+		const std::uint64_t refills = (t - b.last) / kChatRefillMs;
+		if (refills > 0)
+		{
+			b.tokens = (int)std::min<std::uint64_t>((std::uint64_t)kChatBurst, (std::uint64_t)b.tokens + refills);
+			b.last += refills * kChatRefillMs;
+		}
+	}
+	if (b.tokens <= 0)
+	{
+		++m_chatFlood;
+		return false;
+	}
+	--b.tokens;
+	return true;
+}
+
+bool Network::sendDisconnectChat(const std::u16string &text, std::string *error)
+{
+	// RW 0x8D5C5B: NetDisconnectChatCommandMsg (no command id), sendLocalCommandDirect to every other connection, processDisconnectChat locally
+	auto fail = [error](const std::string &e) {
+		if (error)
+		{
+			*error = e;
+		}
+		return false;
+	};
+	if (text.empty() || text.size() > NetChat::kMaxTextUnits)
+	{
+		return fail(text.empty() ? std::string("an empty chat line") : "a chat line of " + std::to_string(text.size()) + " characters (at most " + std::to_string(NetChat::kMaxTextUnits) + ")");
+	}
+	if (m_chatLobbyMuted >> m_config.localSlot & 1u)
+	{
+		return fail("muted by the moderators");
+	}
+	NetCommandMsg c;
+	c.type = NETCOMMANDTYPE_DISCONNECTCHAT;
+	c.slot = (std::uint8_t)m_config.localSlot;
+	c.executionFrame = m_logicFrame;
+	c.chatText = text;
+	sendDirect(c);
+	file(c, m_config.localSlot);
+	return true;
+}
+
+std::vector<Network::ChatLine> Network::takeDisconnectChat()
+{
+	std::vector<ChatLine> out;
+	out.swap(m_disconnectChatIn);
+	return out;
+}
+
+std::vector<Network::ChatLine> Network::takeChat()
+{
+	std::vector<ChatLine> out;
+	out.swap(m_chatIn);
+	return out;
+}
+
+void Network::setChatMuted(int slot, bool muted)
+{
+	if (slot < 0 || slot >= MAX_SLOTS)
+	{
+		return;
+	}
+	if (muted)
+	{
+		m_chatMuted |= 1u << slot;
+	}
+	else
+	{
+		m_chatMuted &= ~(1u << slot);
+	}
 }
 
 void Network::setRejoining(int generation)
@@ -1720,7 +2151,29 @@ std::vector<std::string> Network::stopLines()
 		"Options button: lane UI-1, S-1261)",
 		"[S-725] CRC: the exchanged CRC is OpenBFME's state hash (GameLogic::computeStateHash), not retail's xfer CRC (PLAN rule 5)",
 		"[S-4530] adaptive run-ahead (lane NETLAG-1, OpenBFME choice, no retail counterpart: S-720): the packet router's target is the one-way latency (half "
-		"the round trip plus four times its variation) plus NetworkRunAheadSlack percent plus half a 200 ms period (INFERENCE: room for a frame's "
-		"simulation and the phase between the peers' clocks), in whole periods, + 1; a one-way latency under about 90 ms keeps RotWK's one frame",
+		"the planned round trip: lane NETLAG-2, the 80th percentile of the last 32 samples; with three or more players the router's two longest added, the "
+		"worst a pair of other players can have) plus NetworkRunAheadSlack percent plus 25 ms (room for a "
+		"frame's simulation and the phase between the peers' clocks, measured on the staging relay), in whole 200 ms periods, + 1; it is decided at least "
+		"once a second and falls one frame per decision once there is 50 ms more room; a one-way latency under about 159 ms keeps RotWK's one frame. "
+		"OpenBFME beyond retail (lane NETLAG-2, the owner's choice): with early orders (NetworkConfig::earlyOrders, on unless --no-early-orders) a player's "
+		"order runs one frame before the run-ahead's frame while that frame is at least the planned one-way latency + 10 % + 40 ms away (its FRAMEINFO "
+		"is held until then); RotWK always waits for the router's frame + 1",
 	};
+}
+
+bool Network::submitView(UnsignedInt frame, float cameraX, float cameraY, float cursorX, float cursorY, bool cursorOverWorld)
+{
+	// lane ANTICHEAT-1: see Network.h
+	if (m_config.localSlot < 0)
+	{
+		return false;
+	}
+	NetCommandMsg c;
+	c.type = NETCOMMANDTYPE_VIEW;
+	c.slot = (std::uint8_t)m_config.localSlot;
+	c.executionFrame = frame;
+	c.view = { cameraX, cameraY, cursorX, cursorY };
+	c.viewFlags = cursorOverWorld ? 1 : 0;
+	const std::vector<std::uint8_t> bytes = NetPacket::encodeCommand(c, nullptr);
+	return !bytes.empty() && m_transport.sendToLog(bytes);
 }

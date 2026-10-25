@@ -1,0 +1,35 @@
+{
+    "v": 1,
+    "detector": "D6-command-integrity",
+    "detector_version": 1,
+    "game_id": "00000000000ac001",
+    "status": "ok",
+    "abstain_reason": null,
+    "frames": 1701,
+    "crc_parity": "match",
+    "settings": {
+        "encounter_frames": 150
+    },
+    "players": [
+        {
+            "player_index": 3,
+            "slot": 0,
+            "name": "Player_1",
+            "band": "review",
+            "score": 1.0,
+            "encounters": 1,
+            "commands_total": 343,
+            "events": [
+                {
+                    "frame": 900,
+                    "time_s": 180.0,
+                    "command": "MSG_SET_RALLY_POINT",
+                    "reason": "foreign_object",
+                    "target_id": 85,
+                    "argument": 0,
+                    "encounter": 1
+                }
+            ]
+        }
+    ]
+}

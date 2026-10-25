@@ -2,12 +2,10 @@
 // See GameLogic/Combat/WeaponDelivery.h for the target facts.
 
 #include "GameLogic/Combat/WeaponDelivery.h"
-#include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/Module/GiantBirdAIUpdate.h"
 #include "GameLogic/LegendaryHeroesGame.h"
 
 #include "Common/Player.h"
-#include "Common/Thing/ThingFactory.h"
 #include "Common/Thing/ThingTemplate.h"
 #include "GameLogic/Combat/CombatNames.h"
 #include "GameLogic/Combat/CombatQueries.h"
@@ -37,6 +35,15 @@
 #include "GameLogic/System/DOTManager.h"
 #include "GameLogic/AttributeModifiers.h"
 #include "GameLogic/Object/AttributeModifierPool.h"
+#include "Common/AsciiString.h"
+#include "GameLogic/AI/AIWorld.h"
+#include "GameLogic/BitFlags.h"
+#include "GameLogic/Module/EmotionModules.h"
+#include "GameLogic/Module/ExtraUpdateModules.h"
+#include "GameLogic/Module/GateModules.h"
+#include "GameLogic/Module/SpellEffectModules.h"
+#include "GameLogic/ScriptEngine/LuaHost.h"
+#include "Common/Thing/ThingFactory.h"
 
 #include <cmath>
 
@@ -955,49 +962,584 @@ void deliver(GameLogic &logic, const ParalyzeNugget &n, const WeaponTemplate &w,
 }
 } // namespace Paralyze
 
-// lane WALL-1: SpawnAndFadeNugget's slot 6, RW 0x911C46 (read in RotWK): the source (the context's + 8, by id) makes SpawnedObjectName (+ 0x14C, the thing
-// factory's template; none: nothing) for its own team (Object + 0x31C, ThingFactory::newObject RW 0x6D165E with a clear status); at the source's position plus
-// SpawnOffset (+ 0x150, + 0x154; its Z is not read) turned by the source's orientation (Object + 0x44: x' = x + (cos * ox - sin * oy), y' = y + (sin * ox +
-// cos * oy), the sine and cosine of the float widened to double, RW 0xA3CF90 / 0xA3CF84), the height TheTerrainLogic gives there at the source's layer
-// (RW 0x68BBE0, vslot 0x1C) and the source's orientation (RW 0x70C201, 0x70C31E); then the source dies (RW 0x698EC3: UNRESISTABLE, DEATH_FADED = 0x16:
-// the mine carrier's DeployedDeath fades it); a DEPLOYED_MINE (template + 0x11D & 0x10) enters the pathfinder's map (RW 0x6E85E9)
-namespace SpawnAndFade
+// RW 0x6CB81A (the first step of the aim query RW 0x6CB85A): the weapon's PreferredTargetBone (+ 0x90) when it is not empty and the victim's drawable has it exactly
+// once among its pristine bones (RW 0x68C5AF -> 0x672A73), in the world (RW 0x70BCE7: the victim's transform on the bone's translation, retail's SSE order)
+bool preferredBoneAim(GameLogic &logic, const WeaponTemplate &w, const Object &victim, Coord3D &out)
 {
-void deliver(GameLogic &logic, const SpawnAndFadeNugget &n, Object &source)
+	const std::string &boneName = w.m_preferredTargetBone;
+	if (boneName.empty())
+	{
+		return false;
+	}
+	float bone[12];
+	ProjectileLaunchOffsets *provider = logic.combat().launchOffsets();
+	if (!provider || !provider->singleLogicalBone(victim, boneName, bone))
+	{
+		return false;
+	}
+	out = ConvertBonePosToWorldPos(victim, Coord3D{ bone[3], bone[7], bone[11] });
+	return true;
+}
+
+// ---- lane NUGGET-1: the nuggets whose effect had no port (S-321). Every slot's first argument in RW is the firing Weapon; its + 8 (the owner's id) is all a slot
+// reads of it: `sourceId` below. The dispatch is fireWeaponTemplate's (RW 0x6CCECC .. 0x6CCF17, slot 12 false for all of these): a victim takes slot 1 then slot 5,
+// no victim slot 2 then slot 6. SlaveAttackNugget (SlaveWatcherBehavior, S-1995) and FireLogicNugget (TheFireLogicSystem, S-191) stay counted ----
+namespace NuggetEffects
 {
-	const ThingTemplate *tt = n.m_spawnedObjectName.empty() ? nullptr : logic.things().findTemplate(n.m_spawnedObjectName);
+const int kEnemiesBit = 1, kNeutralBit = 2, kAlliesBit = 4; // PartitionFilterRelationship (RW 0xC11DC0): 1 << Relationship
+
+// RW 0x70C4FE Object::isKindOfMulti(must, mustNot): every bit of `must` and none of `mustNot`
+bool isKindOfMulti(const Object &o, const KindOfMaskType &must, const KindOfMaskType &mustNot)
+{
+	const KindOfMaskType &k = o.getKindOf();
+	for (size_t i = 0; i < k.size(); ++i)
+	{
+		if ((k[i] & must[i]) != must[i] || (k[i] & mustNot[i]) != 0)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+// RW 0x4B3B5B: the model condition bit of a name (_strcmpi over RW 0xD9FAD8), -1 when absent
+int modelConditionIndex(const std::string &name)
+{
+	for (int i = 0; TheModelConditionNames[i]; ++i)
+	{
+		if (AsciiStringUtil::compareNoCase(name, TheModelConditionNames[i]) == 0)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+// RW 0x911086 (DamageContainedNugget slot 1): the base test, the owner present, a victim contain holding something (slot 0x114), garrisonable (slot 0x10) and not
+// slot 0x1C (INFERENCE: unidentified, false for every ported contain), and a contained object not effectively dead (+ 0x458 bit 0) with every KillKindof bit
+// (+ 0x14C) and none of KillKindofNot (+ 0x168) (RW 0x70C4FE)
+bool damageContainedApplicable(GameLogic &logic, const DamageContainedNugget &n, const WeaponTemplate &w, const Object *owner, Object &victim)
+{
+	ContainModuleInterface *c = victim.getContain();
+	if (!shouldDeliver(n, w, owner, victim, logic) || !owner || !c || c->getContainCount() == 0 || !c->isGarrisonable())
+	{
+		return false;
+	}
+	if (const ContainModuleInterface::ContainedItemsList *items = c->getContainedItemsList())
+	{
+		for (const Object *o : *items)
+		{
+			if (!o->isEffectivelyDead() && isKindOfMulti(*o, n.m_killKindof, n.m_killKindofNot))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// the objects within `radius` of `pos` the partition manager yields, as ids (a slot's work may kill, contain or move them before the walk ends)
+std::vector<ObjectID> idsInRange(GameLogic &logic, const Coord3D &pos, float radius, DistanceCalculationType dc, PartitionFilterList filters, IterOrderType order)
+{
+	std::vector<ObjectID> ids;
+	for (const PartitionHit &hit : logic.partition().iterateObjectsInRange(pos, radius, dc, filters, order))
+	{
+		ids.push_back(hit.object->getID());
+	}
+	return ids;
+}
+
+// ---- StealMoneyNugget (vtable RW 0xC7BC30: slot 1 RW 0x90D77C, slot 2 false, slot 5 RW 0x9118B1). BFME2 decomp Made002CCB67StealMoney.cpp (0x0050B62B) is the
+// same body. RW 0x9118B1: the source object, its controlling player and the victim's; the victim's Money (Player + 0x90) withdraws _ftol2(AmountStolenPerAttack)
+// (RW 0x7B17EF, its score keeper Player + 0x3DC, sound on), the source's deposits what was taken (fild unsigned, _ftol2: RW 0x7B18B8, sound on) ----
+void stealMoney(GameLogic &logic, const StealMoneyNugget &n, ObjectID sourceId, Object &victim)
+{
+	Object *source = logic.findObjectByID(sourceId);
+	Player *thief = source ? source->getControllingPlayer() : nullptr;
+	Player *robbed = thief ? victim.getControllingPlayer() : nullptr;
+	if (!thief || !robbed)
+	{
+		return;
+	}
+	const std::uint32_t taken = robbed->withdrawMoney(SimMath::ftol2Low32((double)n.m_amountStolenPerAttack), true);
+	thief->depositMoney(SimMath::ftol2Low32((double)taken), true);
+}
+
+// ---- OpenGateNugget (vtable RW 0xC7BB44: slot 1 RW 0x9114B4 = the base test, slot 2 RW 0x911BFD = the upgrade test, slot 5 RW 0x9115BB, slot 6 RW 0x91161F) ----
+// RW 0x911516 (source, victim): the victim's GateOpenAndCloseBehavior (by name, the interface at module - 4), else its GateProxyBehavior; a settled gate (slot 0x28)
+// that is not open (slot 0x18) opens (slot 0x1C)
+void openGate(GameLogic &logic, Object &victim)
+{
+	if (GateOpenAndCloseBehavior *gate = GateOpenAndCloseBehavior::findGate(victim))
+	{
+		if (gate->isSettled() && !gate->isOpen())
+		{
+			gate->open();
+		}
+		return;
+	}
+	if (victim.findModule("GateProxyBehavior"))
+	{
+		logic.noteStop("[S-1940] OpenGateNugget: the victim's GateProxyBehavior (RW 0x911569) is not ported: its gate is not opened");
+	}
+}
+
+// RW 0x91161F (slot 6): max(Radius, 1.0) around `pos` (RW 0xA39300: FROM_BOUNDINGSPHERE_3D, no filter), each through slot 1 then RW 0x911516
+void openGateAt(GameLogic &logic, const OpenGateNugget &n, const WeaponTemplate &w, ObjectID sourceId, const Coord3D &pos)
+{
+	const float radius = n.m_radius > 1.0f ? n.m_radius : 1.0f;
+	for (ObjectID id : idsInRange(logic, pos, radius, FROM_BOUNDINGSPHERE_3D, {}, ITER_FASTEST))
+	{
+		Object *o = logic.findObjectByID(id);
+		if (o && shouldDeliver(n, w, logic.findObjectByID(sourceId), *o, logic))
+		{
+			openGate(logic, *o);
+		}
+	}
+}
+
+// RW 0x9115BB (slot 5): slot 1 then RW 0x911516 on the victim; a positive Radius then slot 6 at the victim's position
+void openGateTo(GameLogic &logic, const OpenGateNugget &n, const WeaponTemplate &w, ObjectID sourceId, Object &victim)
+{
+	if (shouldDeliver(n, w, logic.findObjectByID(sourceId), victim, logic))
+	{
+		openGate(logic, victim);
+	}
+	if (n.m_radius > 0.0f)
+	{
+		const Coord3D at = *victim.getPosition();
+		openGateAt(logic, n, w, sourceId, at);
+	}
+}
+
+// ---- EmotionWeaponNugget (vtable RW 0xC7BBC0: slot 1 RW 0x90D77C, slot 2 RW 0x90D8F0 = the upgrade test, slot 5 RW 0x911770, slot 6 RW 0x9117A7). BFME2 decomp
+// Made002CCB04Rva0050B479.cpp (0x0050B479) is the apply ----
+// RW 0x911707 (source, victim): slot 1; the source is the object of RW global 0xDE4A18 (the producer of the projectile whose detonation is delivering, RW 0x85F1CB;
+// 0 otherwise), else the weapon's owner. INFERENCE: both name the same object here (the detonation's temporary weapon is owned by that producer, RW 0x85F23A ..
+// 0x85F255), so the owner stands for both. Then RW 0x68F3BF -> 0x68F3CB: the first emotion tracker up the victim's container chain is forced to EmotionType
+// (+ 0x148) for (float)Duration (+ 0x150, fild unsigned: seconds) with the source (RW 0x8B4EB1)
+void emotionApply(GameLogic &logic, const EmotionWeaponNugget &n, const WeaponTemplate &w, ObjectID sourceId, Object &victim)
+{
+	Object *source = logic.findObjectByID(sourceId);
+	if (!shouldDeliver(n, w, source, victim, logic))
+	{
+		return;
+	}
+	EmotionTrackerUpdate::forceEmotion(victim, n.m_emotionType, SimMath::fstpDword(SimMath::fildU32(n.m_duration)), source);
+}
+
+// RW 0x9117A7 (slot 6): max(Radius, 1.0) around `pos` (RW 0xA39300: FROM_BOUNDINGSPHERE_3D, no filter), each through RW 0x911707
+void emotionAt(GameLogic &logic, const EmotionWeaponNugget &n, const WeaponTemplate &w, ObjectID sourceId, const Coord3D &pos)
+{
+	const float radius = n.m_radius > 1.0f ? n.m_radius : 1.0f;
+	for (ObjectID id : idsInRange(logic, pos, radius, FROM_BOUNDINGSPHERE_3D, {}, ITER_FASTEST))
+	{
+		if (Object *o = logic.findObjectByID(id))
+		{
+			emotionApply(logic, n, w, sourceId, *o);
+		}
+	}
+}
+
+// RW 0x911770 (slot 5): RW 0x911707 on the victim, then a positive Radius slot 6 at the victim's position
+void emotionTo(GameLogic &logic, const EmotionWeaponNugget &n, const WeaponTemplate &w, ObjectID sourceId, Object &victim)
+{
+	emotionApply(logic, n, w, sourceId, victim);
+	if (n.m_radius > 0.0f)
+	{
+		const Coord3D at = *victim.getPosition();
+		emotionAt(logic, n, w, sourceId, at);
+	}
+}
+
+// ---- LuaEventNugget (vtable RW 0xC7BE28: slots 1 and 2 RW 0x8470FA = true, slot 5 RW 0x911E83, slot 6 RW 0x911EDC) ----
+// RW 0x911EDC (slot 6): TheLuaScriptEvents' FindEvent of the name's key (RW 0x49F474 -> 0x735388); with an event and the source object: the objects within Radius
+// (+ 0x14C, no minimum) of `pos` (RW 0xA39340: FROM_CENTER_3D, ITER_SORTED_NEAR_TO_FAR) passing PartitionFilterRelationship (RW 0xC11DC0, flag 0: the source's
+// relationship to the object in the mask SendToEnemies 1 | SendToNeutral 2 | SendToAllies 4), each not effectively dead at its turn (+ 0x458 bit 0), get the event
+// (RW 0x735F53) with argument 0 = the source (kind 3 at + 0x18, the id at + 0x10)
+void luaEventAt(GameLogic &logic, const LuaEventNugget &n, ObjectID sourceId, const Coord3D &pos)
+{
+	if (!logic.hasNamedScriptEvents())
+	{
+		logic.countScriptEventWithoutDispatch(); // S-1220: no script engine attached
+		return;
+	}
+	Object *source = logic.findObjectByID(sourceId);
+	if (!logic.findNamedScriptEvent(n.m_luaEvent) || !source)
+	{
+		return;
+	}
+	const int mask = (n.m_sendToEnemies ? kEnemiesBit : 0) | (n.m_sendToAllies ? kAlliesBit : 0) | (n.m_sendToNeutral ? kNeutralBit : 0);
+	PartitionFilterFn relationship([source, mask](Object &o) { return (mask & (1 << (int)source->getRelationship(o))) != 0; });
+	LuaEventArgs args;
+	args.arg[0] = LuaEventArg::makeObject((int)sourceId);
+	for (ObjectID id : idsInRange(logic, pos, n.m_radius, FROM_CENTER_3D, { &relationship }, ITER_SORTED_NEAR_TO_FAR))
+	{
+		Object *o = logic.findObjectByID(id);
+		if (o && !o->isEffectivelyDead())
+		{
+			logic.dispatchNamedScriptEvent(n.m_luaEvent, *o, args);
+		}
+	}
+}
+
+// ---- SpawnAndFadeNugget (vtable RW 0xC7BD60: slot 1 RW 0x911BCF, slot 2 RW 0x911BFD, slot 5 RW 0x911C32 = slot 6 at the victim's position, slot 6 RW 0x911C46) ----
+// RW 0x911C46: the source object (retail reads it without a null test); SpawnedObjectName's template (RW 0x6D1305; none: nothing); a new object on the source's team
+// (RW 0x6D165E, status 0) at the SOURCE's position plus SpawnOffset turned by the source's angle: s / c the MSVCR71 sin / cos of the angle stored as floats, SSE
+// x + (c ox - s oy), y + (ox s + c oy); z the terrain height there on the source's layer (TheTerrainLogic slot 0x1C: the ground, S-161); its orientation the
+// source's (RW 0x70C31E); the source dies (RW 0x698EC3: UNRESISTABLE, FADED); a DEPLOYED_MINE (template + 0x11D bit 4) enters the pathfinder's map (RW 0x6E85E9).
+// The target position itself is not read
+void spawnAndFade(GameLogic &logic, const SpawnAndFadeNugget &n, ObjectID sourceId)
+{
+	static const int kDeployedMine = MetaImpact::kindIndex("DEPLOYED_MINE");
+	Object *source = logic.findObjectByID(sourceId);
+	if (!source)
+	{
+		logic.reportError("SpawnAndFadeNugget: no source object (retail RW 0x911C46 dereferences it)");
+		return;
+	}
+	const ThingTemplate *tt = logic.things().findTemplate(n.m_spawnedObjectName);
 	if (!tt)
 	{
 		return;
 	}
-	Object *spawned = logic.newObject(tt, source.getTeam(), ObjectStatusMaskType{});
-	if (!spawned)
+	Object *o = logic.newObject(tt, source->getTeam(), ObjectStatusMaskType{});
+	if (!o)
 	{
 		return;
 	}
-	const Coord3D &sp = *source.getPosition();
-	const float angle = source.getOrientation();
-	const float s = (float)SimMath::sind(angle), c = (float)SimMath::cosd(angle);
+	const Coord3D &sp = *source->getPosition();
+	const float angle = source->getOrientation();
+	const float s = SimMath::fstpDword(SimMath::sind(angle));
+	const float c = SimMath::fstpDword(SimMath::cosd(angle));
 	const float ox = n.m_spawnOffset.x, oy = n.m_spawnOffset.y;
 	Coord3D p;
 	p.x = SimMath::addf32(sp.x, SimMath::subf32(SimMath::mulf32(c, ox), SimMath::mulf32(s, oy)));
 	p.y = SimMath::addf32(sp.y, SimMath::addf32(SimMath::mulf32(ox, s), SimMath::mulf32(c, oy)));
-	const AIUpdateInterface *ai = source.getAIUpdateInterface();
-	p.z = ai ? ai->layerHeightAt(p.x, p.y) : logic.getGroundHeight(p.x, p.y);
-	spawned->setPosition(&p);
-	spawned->setOrientation(angle);
-	source.kill(DEATH_FADED);
-	static const int kDeployedMine = ObjectTemplateInfoBuilder::kindOfIndex("DEPLOYED_MINE");
-	if (kDeployedMine >= 0 && spawned->isKindOf((unsigned)kDeployedMine))
+	const AIUpdateInterface *sourceAI = source->getAIUpdateInterface();
+	p.z = sourceAI ? sourceAI->layerHeightAt(p.x, p.y) : logic.getGroundHeight(p.x, p.y);
+	o->setPosition(&p);
+	o->setOrientation(angle);
+	source->kill(DEATH_FADED);
+	if (o->isKindOf((unsigned)kDeployedMine))
 	{
-		if (AIWorld *world = logic.aiWorld())
+		if (AIWorld *ai = logic.aiWorld())
 		{
-			world->addObjectToPathfindMap(*spawned);
+			ai->addObjectToPathfindMap(*o);
 		}
 	}
 }
-} // namespace SpawnAndFade
+
+// ---- SpecialModelConditionNugget (vtable RW 0xC7B25C: slot 1 RW 0x9114B4, slot 2 false, slot 5 RW 0x90EF46): each ModelConditionNames entry's bit (RW 0x4B3B5B,
+// -1 when unknown) set on the victim for ModelConditionDuration frames (RW 0x68B581) ----
+void specialModelCondition(const SpecialModelConditionNugget &n, Object &victim)
+{
+	for (const std::string &name : n.m_modelConditionNames)
+	{
+		victim.setSpecialModelConditionState(modelConditionIndex(name), n.m_modelConditionDuration);
+	}
+}
+
+// ---- GrabNugget (vtable RW 0xC7B970: slot 1 RW 0x910C27, slot 2 false, slot 5 RW 0x910C8A) ----
+// RW 0x910ACA (source, victim): a fresh DamageInfo (RW 0x66365E) with the shockwave: the vector victim - source (SSE), all three |components| (MSVCR71 fabs) below
+// 0.0001 (RW 0xBD19E0) make z 1.0; ShockWaveAmount / Radius / TaperOff / ZMult; ShockWaveSpeed > 0: the delay |v| (RW 0x403111) / speed (x87, stored); the source's
+// id as the shockwave source and the damage source, its player's bit; Object::attemptDamage (RW 0x698E7D)
+void grabImpact(const GrabNugget &n, Object &source, Object &victim)
+{
+	DamageInfo info;
+	DamageInfoInput &d = info.m_input;
+	d.m_shockWaveAmount = n.m_shockWaveAmount;
+	const Coord3D &sp = *source.getPosition();
+	const Coord3D &vp = *victim.getPosition();
+	Coord3D v{ SimMath::subf32(vp.x, sp.x), SimMath::subf32(vp.y, sp.y), SimMath::subf32(vp.z, sp.z) };
+	if (SimMath::absD((double)v.x) < (double)0.0001f && SimMath::absD((double)v.y) < (double)0.0001f && SimMath::absD((double)v.z) < (double)0.0001f)
+	{
+		v.z = 1.0f;
+	}
+	d.m_shockWaveVector = v;
+	d.m_shockWaveRadius = n.m_shockWaveRadius;
+	d.m_shockWaveTaperOff = n.m_shockWaveTaperOff;
+	d.m_shockWaveZMult = n.m_shockWaveZMult;
+	if (n.m_shockWaveSpeed > 0.0f)
+	{
+		const double len = SimMath::sqrtPC24((double)SimMath::sumSquares3(v.x, v.y, v.z));
+		d.m_delay = SimMath::fstpDword(SimMath::pc24DivW(len, (double)n.m_shockWaveSpeed));
+	}
+	d.m_shockWaveSourceID = source.getID();
+	d.m_sourceID = source.getID();
+	const Player *p = source.getControllingPlayer();
+	if (p && p->getPlayerIndex() >= 0 && p->getPlayerIndex() < 32)
+	{
+		d.m_sourcePlayerMask = 1u << p->getPlayerIndex(); // RW 0x910BEF; the second write (RW 0x910C07) has no null test: a source with no player crashes retail
+	}
+	victim.attemptDamage(info);
+}
+
+// RW 0x910C8A (slot 5): the source object and the victim; ContainTargetOnEffect (+ 0x148) with a source contain (Object + 0x258) that accepts the victim (slot 0x98
+// (victim, 1, 0)): RemoveTargetFromOtherContain (+ 0x14A) takes the victim out of its container first (its contain's slot 0xA4), then the source's contain adds it
+// (slot 0x9C); otherwise ImpactTargetOnEffect (+ 0x149) gives it the shockwave
+void grab(GameLogic &logic, const GrabNugget &n, ObjectID sourceId, Object &victim)
+{
+	Object *source = logic.findObjectByID(sourceId);
+	if (!source)
+	{
+		return;
+	}
+	ContainModuleInterface *contain = source->getContain();
+	if (n.m_containTargetOnEffect && contain && contain->isValidContainerFor(victim, true, false))
+	{
+		if (n.m_removeTargetFromOtherContain && victim.getContainedBy())
+		{
+			if (ContainModuleInterface *other = victim.getContainedBy()->getContain())
+			{
+				other->removeFromContain(&victim);
+			}
+		}
+		contain->addToContain(&victim);
+	}
+	else if (n.m_impactTargetOnEffect)
+	{
+		grabImpact(n, *source, victim);
+	}
+}
+
+// ---- DamageFieldNugget (vtable RW 0xC7B3A8: slot 1 RW 0x90F501, slot 2 RW 0x911BFD, slot 5 RW 0x90F534, slot 6 RW 0x90F5F3) ----
+// RW 0x90F5F3 (slot 6): GameData GenericDamageFieldName's template (GlobalData + 0x14, RW 0x6D1305), the resolved WeaponTemplateName (+ 0x148, RW 0x90F4DF) and the
+// source object, else nothing; a new object on the source player's default team (Player + 0x30C, RW 0x6D165E, status 0), producer the source (RW 0x68B6A1), at
+// `pos` (RW 0x70C201); its FireWeaponUpdate and DeletionUpdate by name: either missing destroys it (RW 0x62BBAB); else the FireWeaponUpdate's single weapon is
+// the field's (RW 0x88F041) and the DeletionUpdate's lifetime is Duration .. Duration (RW 0x88B830)
+void damageFieldAt(GameLogic &logic, const DamageFieldNugget &n, ObjectID sourceId, const Coord3D &pos)
+{
+	const std::string &name = logic.settings().genericDamageFieldName;
+	const ThingTemplate *tt = name.empty() ? nullptr : logic.things().findTemplate(name);
+	const WeaponTemplate *field = TheWeaponStore ? TheWeaponStore->findWeaponTemplate(n.m_weaponTemplateName) : nullptr;
+	Object *source = logic.findObjectByID(sourceId);
+	if (!tt || !field || !source)
+	{
+		return;
+	}
+	Player *owner = source->getControllingPlayer();
+	if (!owner)
+	{
+		logic.reportError("DamageFieldNugget: the source has no controlling player (retail RW 0x90F665 dereferences it)");
+		return;
+	}
+	Object *o = logic.newObject(tt, owner->getDefaultTeam(), ObjectStatusMaskType{});
+	if (!o)
+	{
+		return;
+	}
+	o->setProducer(source);
+	o->setPosition(&pos);
+	FireWeaponUpdate *fire = dynamic_cast<FireWeaponUpdate *>(o->findModule("FireWeaponUpdate"));
+	DeletionUpdate *deletion = fire ? dynamic_cast<DeletionUpdate *>(o->findModule("DeletionUpdate")) : nullptr;
+	if (!fire || !deletion)
+	{
+		logic.destroyObject(o);
+		return;
+	}
+	fire->setWeapon(field);
+	deletion->setLifetimeRange(n.m_duration, n.m_duration);
+}
+
+// RW 0x90F534 (slot 5): the victim's aim point (the Weapon's RW 0x6CC37B -> RW 0x6CB85A(out, source 0, victim, 1)), z the terrain height there on the victim's
+// layer (slot 0x1C, the ground: S-161), then slot 6 there. RW 0x6CB85A answers the weapon's PreferredTargetBone when the victim has it once; otherwise it draws
+// GameLogicRandomValue(0, 12345678) and asks the contact point FROM `source + 0x38`, which with the null source reads address 0x38: retail crashes there. Retail
+// data delivers this nugget only with no victim (MordorCatapultRockFlame is a projectile's death weapon); the crash case is reported, not guessed
+void damageFieldTo(GameLogic &logic, const DamageFieldNugget &n, const WeaponTemplate &w, ObjectID sourceId, Object &victim)
+{
+	Coord3D aim;
+	if (!preferredBoneAim(logic, w, victim, aim))
+	{
+		logic.reportError("DamageFieldNugget delivered to a victim without the weapon's PreferredTargetBone: retail RW 0x6CB8E2 reads a null source (weapon " + w.getName() +
+			")");
+		return;
+	}
+	aim.z = logic.getGroundHeight(aim.x, aim.y);
+	damageFieldAt(logic, n, sourceId, aim);
+}
+
+// ---- DamageContainedNugget (vtable RW 0xC7BA60: slot 1 RW 0x911086, slot 2 false, slot 5 RW 0x91117C). BFME2 decomp WeaponEffects/Rva0050AEE4KillContained.cpp
+// (0x0050AEE4) is the same body ----
+// RW 0x91117C: the victim and the source object; the victim's contain (Object + 0x258) holding something (slot 0x114(0)), garrisonable (slot 0x10) and not slot 0x1C
+// (INFERENCE as slot 1's: false for every ported contain); a copy of its list (slot 0x118, RW 0x76CB49): while fewer than KillCount (+ 0x148) were killed, each
+// occupant alive (+ 0x458 bit 0) with KillKindof and none of KillKindofNot (RW 0x70C4FE): a HORDE occupant (template + 0x115 bit 5) puts its HordeContain's members
+// (a copy of that list) through the same test, each scored to the source (RW 0x6955BC(member, 1)) and killed (RW 0x698EC3: UNRESISTABLE, DeathType + 0x184); any
+// other occupant itself
+void damageContained(GameLogic &logic, const DamageContainedNugget &n, ObjectID sourceId, Object &victim)
+{
+	static const int kHorde = MetaImpact::kindIndex("HORDE");
+	Object *source = logic.findObjectByID(sourceId);
+	ContainModuleInterface *c = victim.getContain();
+	if (!source || !c || c->getContainCount() == 0 || !c->isGarrisonable() || !c->getContainedItemsList())
+	{
+		return;
+	}
+	auto idsOf = [](const ContainModuleInterface &cm) {
+		std::vector<ObjectID> ids;
+		if (const ContainModuleInterface::ContainedItemsList *items = cm.getContainedItemsList())
+		{
+			for (const Object *o : *items)
+			{
+				ids.push_back(o->getID());
+			}
+		}
+		return ids;
+	};
+	int killed = 0;
+	auto killOne = [&](Object &o) {
+		source->scoreTheKill(o, 1);
+		o.kill(n.m_deathType);
+		++killed;
+	};
+	for (ObjectID id : idsOf(*c))
+	{
+		if (killed >= n.m_killCount)
+		{
+			break;
+		}
+		Object *o = logic.findObjectByID(id);
+		if (!o || o->isEffectivelyDead() || !isKindOfMulti(*o, n.m_killKindof, n.m_killKindofNot))
+		{
+			continue;
+		}
+		if (!o->isKindOf((unsigned)kHorde))
+		{
+			killOne(*o);
+			continue;
+		}
+		BehaviorModule *hm = o->findModule("HordeContain");
+		ContainModuleInterface *members = hm ? hm->getContain() : nullptr;
+		if (!members)
+		{
+			continue;
+		}
+		for (ObjectID mid : idsOf(*members))
+		{
+			if (killed >= n.m_killCount)
+			{
+				break;
+			}
+			Object *m = logic.findObjectByID(mid);
+			if (m && !m->isEffectivelyDead() && isKindOfMulti(*m, n.m_killKindof, n.m_killKindofNot))
+			{
+				killOne(*m);
+			}
+		}
+	}
+}
+
+// the dispatch of fireWeaponTemplate for these kinds (see above). false: not one of them (the caller counts it)
+bool deliver(GameLogic &logic, const WeaponNugget &n, const WeaponTemplate &w, ObjectID sourceId, Object *victim, const Coord3D &pos)
+{
+	Object *source = sourceId != INVALID_ID ? logic.findObjectByID(sourceId) : nullptr;
+	switch (n.kind())
+	{
+	case NUGGET_STEAL_MONEY:
+		if (victim && shouldDeliver(n, w, source, *victim, logic))
+		{
+			stealMoney(logic, static_cast<const StealMoneyNugget &>(n), sourceId, *victim);
+		}
+		return true;
+	case NUGGET_OPEN_GATE:
+	{
+		const OpenGateNugget &g = static_cast<const OpenGateNugget &>(n);
+		if (victim)
+		{
+			if (shouldDeliver(n, w, source, *victim, logic))
+			{
+				openGateTo(logic, g, w, sourceId, *victim);
+			}
+		}
+		else if (upgradeTest(n, source))
+		{
+			openGateAt(logic, g, w, sourceId, pos);
+		}
+		return true;
+	}
+	case NUGGET_EMOTION_WEAPON:
+	{
+		const EmotionWeaponNugget &e = static_cast<const EmotionWeaponNugget &>(n);
+		if (victim)
+		{
+			if (shouldDeliver(n, w, source, *victim, logic))
+			{
+				emotionTo(logic, e, w, sourceId, *victim);
+			}
+		}
+		else if (upgradeTest(n, source))
+		{
+			emotionAt(logic, e, w, sourceId, pos);
+		}
+		return true;
+	}
+	case NUGGET_LUA_EVENT:
+	{
+		// RW 0x911E83 (slot 5): with a victim and a source argument, slot 6 at the victim's position (slots 1 and 2 are true)
+		const Coord3D at = victim ? *victim->getPosition() : pos;
+		luaEventAt(logic, static_cast<const LuaEventNugget &>(n), sourceId, at);
+		return true;
+	}
+	case NUGGET_SPAWN_AND_FADE:
+	{
+		const SpawnAndFadeNugget &s = static_cast<const SpawnAndFadeNugget &>(n);
+		const bool ok = victim ? shouldDeliver(n, w, source, *victim, logic) && ObjectFilterMatch::allows(logic, s.m_objectTargetFilter, *victim, nullptr) // RW 0x911BCF
+		                       : upgradeTest(n, source);
+		if (ok)
+		{
+			spawnAndFade(logic, s, sourceId);
+		}
+		return true;
+	}
+	case NUGGET_SPECIAL_MODEL_CONDITION:
+		if (victim && shouldDeliver(n, w, source, *victim, logic))
+		{
+			specialModelCondition(static_cast<const SpecialModelConditionNugget &>(n), *victim);
+		}
+		return true;
+	case NUGGET_GRAB:
+		// RW 0x910C27 (slot 1): the base test and the source's contain accepting the victim
+		if (victim && source && shouldDeliver(n, w, source, *victim, logic) && source->getContain() && source->getContain()->isValidContainerFor(*victim, true, false))
+		{
+			grab(logic, static_cast<const GrabNugget &>(n), sourceId, *victim);
+		}
+		return true;
+	case NUGGET_DAMAGE_FIELD:
+	{
+		const DamageFieldNugget &f = static_cast<const DamageFieldNugget &>(n);
+		const WeaponTemplate *field = TheWeaponStore ? TheWeaponStore->findWeaponTemplate(f.m_weaponTemplateName) : nullptr;
+		if (victim)
+		{
+			// RW 0x90F501 (slot 1): the base test, the resolved weapon and RW 0x6CB779 on it
+			if (shouldDeliver(n, w, source, *victim, logic) && field && WeaponTemplateAnyNuggetApplicable(logic, *field, sourceId, victim, 1))
+			{
+				damageFieldTo(logic, f, w, sourceId, *victim);
+			}
+		}
+		else if (upgradeTest(n, source))
+		{
+			damageFieldAt(logic, f, sourceId, pos);
+		}
+		return true;
+	}
+	case NUGGET_DAMAGE_CONTAINED:
+		if (victim && damageContainedApplicable(logic, static_cast<const DamageContainedNugget &>(n), w, source, *victim))
+		{
+			damageContained(logic, static_cast<const DamageContainedNugget &>(n), sourceId, *victim);
+		}
+		return true;
+	default:
+		return false;
+	}
+}
+} // namespace NuggetEffects
 } // namespace
+
+bool WeaponNuggetUpgradeAllows(const WeaponNugget &n, const Object *source)
+{
+	return upgradeTest(n, source);
+}
+
 
 // RW 0x6CB779 (lane DECOMP-1): any nugget of the template whose slot 1 (isApplicable(weapon, victim)) answers true; false without a victim. The slot 1 bodies
 // (RotWK vtables, read with capstone): DamageNugget / DOTNugget RW 0x90E855 (damageApplicable); ProjectileNugget RW 0x90F954 (the base test RW 0x90D77C, a
@@ -1055,40 +1597,8 @@ bool WeaponTemplateAnyNuggetApplicable(GameLogic &logic, const WeaponTemplate &t
 			     ObjectFilterMatch::allows(logic, static_cast<const SpawnAndFadeNugget &>(n).m_objectTargetFilter, *victim, nullptr);
 			break;
 		case NUGGET_DAMAGE_CONTAINED:
-		{
-			// RW 0x911086: the base test, the owner present, a victim contain holding something (slot 0x114), garrisonable (slot 0x10) and not slot 0x1C (INFERENCE:
-			// unidentified, false for every ported contain), and a contained object not effectively dead (+ 0x458 bit 0) with every KillKindof bit (+ 0x14C)
-			// and none of KillKindofNot (+ 0x168) (RW 0x70C4FE)
-			const DamageContainedNugget &dc = static_cast<const DamageContainedNugget &>(n);
-			ok = false;
-			ContainModuleInterface *c = victim->getContain();
-			if (shouldDeliver(n, t, owner, *victim, logic) && owner && c && c->getContainCount() > 0 && c->isGarrisonable())
-			{
-				if (const ContainModuleInterface::ContainedItemsList *items = c->getContainedItemsList())
-				{
-					for (const Object *o : *items)
-					{
-						if (o->isEffectivelyDead())
-						{
-							continue;
-						}
-						bool all = true, none = true;
-						const KindOfMaskType &k = o->getKindOf();
-						for (size_t i = 0; i < k.size(); ++i)
-						{
-							all = all && (k[i] & dc.m_killKindof[i]) == dc.m_killKindof[i];
-							none = none && (k[i] & dc.m_killKindofNot[i]) == 0;
-						}
-						if (all && none)
-						{
-							ok = true;
-							break;
-						}
-					}
-				}
-			}
+			ok = NuggetEffects::damageContainedApplicable(logic, static_cast<const DamageContainedNugget &>(n), t, owner, *victim); // RW 0x911086
 			break;
-		}
 		case NUGGET_LUA_EVENT:
 			ok = true;
 			break;
@@ -1171,6 +1681,15 @@ unsigned DeliverNuggets(GameLogic &logic, ObjectID sourceId, const WeaponTemplat
 				ocl->create(logic, source, victim ? *victim->getPosition() : *pos);
 			}
 			continue;
+		}
+		if (n.kind() != NUGGET_DAMAGE && n.kind() != NUGGET_DOT && n.kind() != NUGGET_PROJECTILE && n.kind() != NUGGET_HORDE_ATTACK)
+		{
+			// lane NUGGET-1: the warhead path dispatches them as fireWeaponTemplate does
+			const Coord3D at = victim ? *victim->getPosition() : (pos ? *pos : Coord3D{ 0.0f, 0.0f, 0.0f });
+			if (NuggetEffects::deliver(logic, n, weapon, sourceId, victim, at))
+			{
+				continue;
+			}
 		}
 		if (n.kind() != NUGGET_DAMAGE && n.kind() != NUGGET_DOT) // DOTNugget: DamageNugget's vtable but slot 14 (lane DECOMP-1)
 		{
@@ -1259,9 +1778,11 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 	bool miss = false;
 	if (victim && !scattered)
 	{
-		if (t.m_infantryInaccuracyDist > 0.0f && victim->isKindOf((unsigned)CombatNames::kinds().infantry) && !t.m_disableScatterForTargetsOnWall)
+		// (1) no roll. lane FLANK-1: DisableScatterForTargetsOnWall (+ 0x3D) only spares an infantry victim standing on a wall (RW 0x6CCC7F -> 0x6EA857
+		// Pathfinder::IsPointOnWall at the victim's position); the port has the ground layer only (S-362), so no victim stands on a wall and the miss applies
+		if (t.m_infantryInaccuracyDist > 0.0f && victim->isKindOf((unsigned)CombatNames::kinds().infantry))
 		{
-			miss = true; // (1) no roll
+			miss = true;
 		}
 	}
 	// (2) RW 0x6CCCA7: HitPercentage rolls whatever the target is: with no victim (a position shot, or DamageDealtAtSelfPosition's cleared one) it still draws (lane COMBAT-4 r2)
@@ -1289,40 +1810,29 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 		}
 		// (4) HitPassengerPercentage: the victim's contain module (garrison) is not a passenger target in this lane (S-321)
 	}
-	if (miss)
+	// RW 0x6CCDBA .. 0x6CCE5A: ScatterIndependently (+ 0x3C) delivers every nugget through the position path (slot 2, then slot 6 at the target), a miss scattering
+	// again before each one (the first with the victim, the others without: RW 0x6CC399 with a null victim draws the full circle); otherwise one scatter for all
+	// (lane FLANK-1; BFME2 decomp WeaponPrivateFireWeapon.cpp:1053). HitPassengerPercentage's redirect (RW 0x6CCD5A, the non-independent branch) is S-321's
+	const bool independently = t.m_scatterIndependently;
+	Object *scatterVictim = victim;
+	if (miss && !independently)
 	{
-		// RW 0x6CC399 computeScatter: the position path, no victim
-		float radius = t.m_scatterRadius;
-		if (t.m_infantryInaccuracyDist > 0.0f && victim && victim->isKindOf((unsigned)CombatNames::kinds().infantry))
-		{
-			radius = SimMath::addf32(radius, t.m_infantryInaccuracyDist);
-		}
-		const float targetRadius = victim ? SimMath::addf32(CombatQueries::boundingCircleRadius(*victim), 5.0f) : 0.0f;
-		if (radius > targetRadius)
-		{
-			radius = rng.getValueReal(targetRadius, radius, kWeaponCpp, 1625);
-		}
-		const Coord3D src = *m_source->getPosition();
-		float angle;
-		if (victim)
-		{
-			const float base = (float)SimMath::atan2d(SimMath::subf32(src.y, pos.y), SimMath::subf32(src.x, pos.x));
-			const float half = 1.5707964f;
-			angle = rng.getValueReal(SimMath::subf32(base, half), SimMath::addf32(base, half), kWeaponCpp, 1639);
-		}
-		else
-		{
-			angle = rng.getValueReal(0.0f, 6.28318548f, kWeaponCpp, 1643);
-		}
-		pos.x = SimMath::addf32(pos.x, SimMath::mulf32((float)SimMath::cosd(angle), radius));
-		pos.y = SimMath::addf32(pos.y, SimMath::mulf32((float)SimMath::sind(angle), radius));
-		pos.z = logic.getGroundHeight(pos.x, pos.y);
+		pos = scatterTargetPos(scatterVictim, pos);
 		victim = nullptr;
 	}
 	// the nugget loop in parse order
 	for (const std::shared_ptr<WeaponNugget> &np : t.m_nuggets)
 	{
 		const WeaponNugget &n = *np;
+		if (independently)
+		{
+			if (miss)
+			{
+				pos = scatterTargetPos(scatterVictim, pos);
+				scatterVictim = nullptr;
+			}
+			victim = nullptr; // the position path for every nugget
+		}
 		switch (n.kind())
 		{
 		case NUGGET_DAMAGE:
@@ -1420,20 +1930,6 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 			}
 			break;
 		}
-		case NUGGET_SPAWN_AND_FADE:
-		{
-			// lane WALL-1 (the mine carrier's IsengardExplosiveMineDroppingWeapon): SpawnAndFadeNugget (vtable RW 0xC7BD60): with a victim slot 1 (RW 0x911BCF,
-			// the base test and ObjectTargetFilter) gates slot 5 (RW 0x911C32: slot 6 at the victim's position), without one slot 2 (RW 0x911BFD, the upgrade
-			// test) gates slot 6 (RW 0x911C46); slot 6 does not read the position (SpawnAndFade::deliver)
-			const SpawnAndFadeNugget &sn = static_cast<const SpawnAndFadeNugget &>(n);
-			const bool go = victim ? shouldDeliver(n, t, m_source, *victim, logic) && ObjectFilterMatch::allows(logic, sn.m_objectTargetFilter, *victim, nullptr)
-								   : upgradeTest(n, m_source);
-			if (go)
-			{
-				SpawnAndFade::deliver(logic, sn, *m_source);
-			}
-			break;
-		}
 		case NUGGET_HORDE_ATTACK:
 		{
 			// lane ARCHER-1: the nugget's slots 5 / 6 (RW 0x911A58 at the victim, RW 0x911AC9 at the position): the source's contain (Object + 0x258) gives its horde
@@ -1465,10 +1961,96 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 			break;
 		}
 		default:
-			++logic.combat().counters().unportedNuggets;
+			if (!NuggetEffects::deliver(logic, n, t, m_source->getID(), victim, pos)) // lane NUGGET-1
+			{
+				++logic.combat().counters().unportedNuggets; // SlaveAttackNugget (S-1995), FireLogicNugget (S-191)
+			}
 			break;
 		}
 	}
+}
+
+Coord3D ConvertBonePosToWorldPos(const Object &obj, const Coord3D &bone)
+{
+	const float *t = obj.getBasis();
+	const Coord3D &p = *obj.getPosition();
+	const float tt[3] = { p.x, p.y, p.z };
+	float w[3];
+	for (int r = 0; r < 3; ++r)
+	{
+		const float v = SimMath::addf32(SimMath::mulf32(t[r * 3 + 2], bone.z), SimMath::mulf32(t[r * 3 + 1], bone.y));
+		w[r] = SimMath::addf32(SimMath::addf32(v, SimMath::mulf32(t[r * 3 + 0], bone.x)), tt[r]);
+	}
+	return Coord3D{ w[0], w[1], w[2] };
+}
+
+// RW 0x6CC399 WeaponTemplate::calcScatterTargetPos (lane FLANK-1 re-read; BFME2 decomp WeaponTemplateScatterTargetPos.cpp:163): the minimum radius is the victim's bounding
+// circle (+ 0xB8) + 5.0 (RW 0xBDAE58), 0 without a victim; a STRUCTURE victim (template + 0x108 bit 7) starts from its aim point (RW 0x6CB85A(source, victim, 1): the logic
+// draw of Weapon.cpp:1749 unless the PreferredTargetBone answers); ScatterRadius (+ 0x34), plus ScatterRadiusVsInfantry (+ 0x14C) for an INFANTRY victim; above the minimum
+// the radius is drawn (line 0x659). The angle: with a victim the planar direction source - VICTIM (SSE), normalised by Inv_Sqrt (RW 0x441C56, x87) unless its length is
+// 0, atan2 (RW 0x441BF4), +- pi/2 (line 0x667); without one 0 .. 2 pi (line 0x66B). The offset is cos / sin (x87) times the radius. The z: a MINE victim (bit 55) keeps its
+// own z; a victim whose AI answers vslot 0x224 (ground movement) takes the height of its layer at the point (the ground: S-362); anything else keeps the z it had
+Coord3D ObjectWeaponDelivery::scatterTargetPos(Object *victim, Coord3D pos)
+{
+	GameLogic &logic = m_source->logic();
+	GameLogicRandom &rng = logic.random();
+	const WeaponTemplate &t = *m_weapon;
+	const float minRadius = victim ? SimMath::addf32(CombatQueries::boundingCircleRadius(*victim), 5.0f) : 0.0f;
+	float radius = t.m_scatterRadius;
+	if (victim)
+	{
+		if (victim->isKindOf((unsigned)CombatNames::kinds().structure))
+		{
+			pos = fireFXAimPosition(*victim);
+		}
+		if (t.m_infantryInaccuracyDist > 0.0f && victim->isKindOf((unsigned)CombatNames::kinds().infantry))
+		{
+			radius = SimMath::addf32(t.m_infantryInaccuracyDist, radius);
+		}
+	}
+	if (radius > minRadius)
+	{
+		radius = rng.getValueReal(minRadius, radius, kWeaponCpp, 1625);
+	}
+	float angle;
+	if (victim)
+	{
+		const Coord3D &src = *m_source->getPosition();
+		const Coord3D &vp = *victim->getPosition();
+		float dx = SimMath::subf32(src.x, vp.x), dy = SimMath::subf32(src.y, vp.y);
+		const float lenSq = SimMath::addf32(SimMath::mulf32(dy, dy), SimMath::mulf32(dx, dx));
+		if (lenSq != 0.0f)
+		{
+			const float inv = ProjectileInvSqrt(lenSq);
+			dx = SimMath::mulf32(dx, inv);
+			dy = SimMath::mulf32(dy, inv);
+		}
+		const float base = (float)SimMath::atan2d(dy, dx);
+		const float half = 1.5707964f; // RW 0xBD89D0
+		angle = rng.getValueReal(SimMath::subf32(base, half), SimMath::addf32(base, half), kWeaponCpp, 1639);
+	}
+	else
+	{
+		angle = rng.getValueReal(0.0f, 6.28318548f, kWeaponCpp, 1643); // RW 0xBDD38C
+	}
+	pos.x = SimMath::addf32(pos.x, SimMath::mulf32((float)SimMath::cosd(angle), radius));
+	pos.y = SimMath::addf32(pos.y, SimMath::mulf32((float)SimMath::sind(angle), radius));
+	if (victim)
+	{
+		static const unsigned kMine = (unsigned)CombatNames::kindOf("MINE");
+		if (victim->isKindOf(kMine))
+		{
+			pos.z = victim->getPosition()->z;
+		}
+		else if (const AIUpdateInterface *ai = victim->getAIUpdateInterface())
+		{
+			if (ai->canFollowTeamPath())
+			{
+				pos.z = logic.getGroundHeight(pos.x, pos.y);
+			}
+		}
+	}
+	return pos;
 }
 
 // RW 0x6CB85A(out, source, victim, flag 1), the aim query of the fire FX block (lane FX-2 review). TARGET FACTS: RW 0x6CB81A first asks the victim for the
@@ -1480,25 +2062,10 @@ void ObjectWeaponDelivery::fireWeaponTemplate(const WeaponBonus &bonus, int curB
 Coord3D ObjectWeaponDelivery::fireFXAimPosition(const Object &victim)
 {
 	GameLogic &logic = m_source->logic();
-	const std::string &boneName = m_weapon->m_preferredTargetBone;
-	if (!boneName.empty())
+	Coord3D bone;
+	if (preferredBoneAim(logic, *m_weapon, victim, bone))
 	{
-		float bone[12];
-		ProjectileLaunchOffsets *provider = logic.combat().launchOffsets();
-		if (provider && provider->singleLogicalBone(victim, boneName, bone))
-		{
-			// RW 0x70BCE7 convertBonePosToWorldPos: the victim's transform applied to the bone's translation, retail's SSE order
-			const float *t = victim.getBasis();
-			const Coord3D &p = *victim.getPosition();
-			const float tt[3] = { p.x, p.y, p.z };
-			float w[3];
-			for (int r = 0; r < 3; ++r)
-			{
-				const float v = SimMath::addf32(SimMath::mulf32(t[r * 3 + 2], bone[11]), SimMath::mulf32(t[r * 3 + 1], bone[7]));
-				w[r] = SimMath::addf32(SimMath::addf32(v, SimMath::mulf32(t[r * 3 + 0], bone[3])), tt[r]);
-			}
-			return Coord3D{ w[0], w[1], w[2] };
-		}
+		return bone;
 	}
 	const int seed = logic.random().getValue(0, 12345678, kWeaponCpp, 1749);
 	(void)seed; // RW 0x690BD2's aim point choice (S-362)
@@ -1510,24 +2077,28 @@ Coord3D ObjectWeaponDelivery::fireFXAimPosition(const Object &victim)
 // RW 0x6CC915, the fire FX block (0x6CCAA7..0x6CCBF6; lane FX-2). It runs when the source has a drawable (RW 0x70E013): every object has one in retail
 // (RW 0x628882 makes it at creation; DrawableManager likewise), so the block is taken for every shot whatever the client shows; eligibility is never the
 // player's. First the victim aim query (above: the logic draw of Weapon.cpp:1749 unless the preferred bone answers), BEFORE anything can return. Then the FX:
-// FireFlankFX (+0xB4) when the victim is flanked by the source (RW 0x68FB63; the flank test is not ported, S-322: never) else FireFX (+0xA4, the REGULAR
-// entry: RW reads no veterancy entry here), none while the logic frame is below the weapon's suspendFXFrame (+0x30). The local-player / stealth tests
+// with a victim, RW 0x6CCB46 .. 0x6CCB4D asks victim->isFlankedBy(source) (RW 0x68FB63; lane FLANK-1: this is SIMULATION, the first judgement of an attacker horde is
+// kept by the victim horde, HordeFlank.cpp) for every shot, before any FX test; FireFlankFX (+0xB4) when it answers yes and the weapon has one, else FireFX (+0xA4, the
+// REGULAR entry: RW reads no veterancy entry here), none while the logic frame is below the weapon's suspendFXFrame (+0x30). The local-player / stealth tests
 // (RW 0x68B749, 0x694C0D, +0x135) belong to the viewing client: the event carries PlayFXWhenStealthed.
-void ObjectWeaponDelivery::emitFireFX(int curBarrel, const Object *victim, const Coord3D &victimPos)
+void ObjectWeaponDelivery::emitFireFX(int curBarrel, Object *victim, const Coord3D &victimPos)
 {
 	GameLogic &logic = m_source->logic();
 	const Coord3D aim = victim ? fireFXAimPosition(*victim) : victimPos;
 	const WeaponTemplate &t = *m_weapon;
+	const bool flanked = victim && HordeFlank::isFlankedBy(*victim, *m_source); // RW 0x6CCB46 .. 0x6CCB54 (lane FLANK-1)
+	const bool flankFX = flanked && FXEventLog::isFXName(t.m_fireFlankFX);    // RW 0x6CCB56 .. 0x6CCB64: a null FireFlankFX falls back to FireFX
+	const std::string &fx = flankFX ? t.m_fireFlankFX : t.m_fireFXs[0];
 	const Weapon *w = m_firing; // the firing weapon's own suspend-FX frame (+ 0x30)
 	if (w && w->getTemplate() == &t && logic.getFrame() < w->suspendFXFrame())
 	{
 		return;
 	}
-	if (!FXEventLog::isFXName(t.m_fireFXs[0]))
+	if (!FXEventLog::isFXName(fx))
 	{
 		return;
 	}
-	FXEvent e = FXEventLog::objectEvent(FXEvent::WEAPON_FIRE_FX, "FireFX", logic.getFrame(), t.m_fireFXs[0], *m_source);
+	FXEvent e = FXEventLog::objectEvent(FXEvent::WEAPON_FIRE_FX, flankFX ? "FireFlankFX" : "FireFX", logic.getFrame(), fx, *m_source);
 	e.secondary = victim ? victim->getID() : (ObjectID)INVALID_ID;
 	e.secondaryPosition = aim;
 	e.weaponSlot = m_firing->getSlot();

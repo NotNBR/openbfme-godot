@@ -290,7 +290,10 @@ CommandLogLoad::State catchUp(starttest::Shared &s, const SaveGameFile &save, Lo
 	{
 		return cl.state();
 	}
-	while (cl.step(*g.game, 20) == CommandLogLoad::State::CatchingUp)
+	// lane MACGATE-1: budget 0 = one frame per step, so the scripted human's input (every 20th frame) is offered at every frame boundary. A
+	// 20 ms budget made it timing-dependent: on a steady host each step ran the same number of frames and the step ends could miss every
+	// 20th frame, so localInputIgnored() stayed 0 (failed alone on macOS, passed under load)
+	while (cl.step(*g.game, 0) == CommandLogLoad::State::CatchingUp)
 	{
 		humanCommands(*g.game, g.game->commands()); // the local input during the catch-up is ignored (it would be the player's, ZH playback)
 	}
@@ -569,7 +572,7 @@ TEST_CASE("save2 retail T1: a skirmish saved at frame F, loaded and played on wi
 	CHECK(g.game->frame() == rec.savedFrame);
 	CHECK(cl.startFrame() == rec.startFrame);
 	CHECK(cl.hashesCompared() == (unsigned long long)kBefore); // every frame of the log was compared on the way
-	CHECK(cl.localInputIgnored() > 0); // tolerance: the player's input during the catch-up was taken and dropped (how much is the loop's timing)
+	CHECK(cl.localInputIgnored() > 0); // tolerance: the player's input during the catch-up was taken and dropped (offered every 20th frame)
 	CHECK(g.game->logic().computeStateHash() == save.header.stateHash);
 	MESSAGE("catch-up of " << kBefore << " frames: " << cl.elapsedMs() << " ms");
 	// handed to the player: a recording that continues the saved log, the same human from here on
@@ -927,7 +930,10 @@ TEST_CASE("save2 retail T1 (SAVES.md): a 4-AI skirmish saved with each named sce
 	const ProfileIdentity profile = ProfileIdentity::fromText(readText(profilePath));
 	std::remove(profilePath.c_str());
 	REQUIRE(profile.text.rfind("openbfme-profile 1\n", 0) == 0);
-	const NewGameMessage message = fourAiMessage(*s, 8642u);
+	// merge queue q24: seed 8644 (8642 before). Since OFFMAP-1 (RotWK's idle state RW 0x745A64: no ZH frame <= 1 snap) seed 8642's game had no special power
+	// in flight in its 20 minutes (the Dwarves alive with 100+ objects; measured); seeds 8644 and 8645 hold all four scenarios (a DwarvenGuardianHorde's power
+	// at frame 1632 / 1887) and pass. The scenarios are the test's subject, the seed is not
+	const NewGameMessage message = fourAiMessage(*s, 8644u);
 	struct Taken
 	{
 		std::string scenario, path, found;
@@ -1986,7 +1992,7 @@ TEST_CASE("save4e retail review r1: a refused snapshot (a hostile end token, a l
 		else
 		{
 			const std::vector<BlockAt> blocks = blocksOf(bad.snapshot);
-			REQUIRE(blocks.back().token == "obfme:LargeGroupAudio");
+			REQUIRE(blocks.back().token == "CHUNK_MissionObjectives"); // lane CAMPUI-1: the tracker's block, its version byte first (RW 0x8363F2)
 			REQUIRE(bad.snapshot[blocks.back().begin] == 1);
 			bad.snapshot[blocks.back().begin] = 0xFF;
 		}
@@ -2042,7 +2048,7 @@ TEST_CASE("save4e retail review r1: a refusal inside each block of a real snapsh
 						"obfme:UpdateScheduler", "obfme:TunnelTracker", "obfme:Combat", "obfme:SellList", "obfme:Experience", "obfme:Invisibility",
 						"obfme:DamageOverTime", "obfme:Partition", "obfme:Emotions", "obfme:AIWorld", "obfme:Shroud", "obfme:SkirmishAI",
 						"obfme:ScriptEngine", "obfme:Victory", "obfme:Weather", "obfme:Economy", "obfme:CreateAHero", "obfme:TerrainTrees",
-						"obfme:LargeGroupAudio" });
+						"obfme:LargeGroupAudio", "CHUNK_ObjectivesMenu", "CHUNK_MissionObjectives" });
 	Loaded g;
 	load(*s, message, g);
 	for (int i = 0; i < 50; ++i)
@@ -2231,12 +2237,12 @@ TEST_CASE("save4e retail review r2: a snapshot refused late (LargeGroupAudio's v
 	};
 	std::vector<std::uint8_t> bad = older;
 	const std::vector<BlockAt> blocks = blocksOf(bad);
-	REQUIRE(blocks.back().token == "obfme:LargeGroupAudio");
+	REQUIRE(blocks.back().token == "CHUNK_MissionObjectives"); // lane CAMPUI-1: the tracker's block, its version byte first (RW 0x8363F2)
 	bad[blocks.back().begin] = 0xFF;
 	CHECK_FALSE(g.game->loadSnapshot(bad, &error));
 	MESSAGE("late refusal with three extra teams: " << error);
 	CHECK(error.find("could not be put back") == std::string::npos);
-	same("LargeGroupAudio's version refused");
+	same("MissionObjectives' version refused");
 	CHECK_FALSE(g.game->loadSnapshot(older, &error, [](GameLogic &) { return std::string("review refusal after every post-process"); }));
 	MESSAGE("refused after every post-process: " << error);
 	same("refused after every post-process");

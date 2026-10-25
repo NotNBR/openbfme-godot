@@ -230,6 +230,18 @@ void GameWindowManager::processDestroyList()
 	m_destroyList.clear();
 }
 
+void GameWindowManager::winReleaseOwned(GameWindow *owner)
+{
+	// see GameWindowManager.h (lane MENUFIX-2)
+	for (const std::unique_ptr<GameWindow> &w : m_owned)
+	{
+		if (w.get() != owner && w->winGetOwner() == owner)
+		{
+			w->winSetOwner(nullptr);
+		}
+	}
+}
+
 bool GameWindowManager::winIsAlive(const GameWindow *window) const
 {
 	if (std::find(m_destroyList.begin(), m_destroyList.end(), window) != m_destroyList.end())

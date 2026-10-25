@@ -79,6 +79,13 @@ public:
 	// (taken by the driver: assigned ONCE to an execution frame derived from `protocolFrame`, the logic frame of the last completion consumed); the
 	// transport is serviced and what arrived is filed.
 	virtual void pump(UnsignedInt protocolFrame, CommandList &pending) = 0;
+	// lane NETLAG-2: just before pump, the protocol owner's 5 Hz clock: logic frame `frame` (the next one to run) is due in `msFromNow` ms (0: due now or
+	// overdue). Timing only (a network driver may let an order execute a frame sooner); never part of a batch
+	virtual void frameDue(UnsignedInt frame, std::uint32_t msFromNow)
+	{
+		(void)frame;
+		(void)msFromNow;
+	}
 	// The complete batch of logic frame `frame` (the next one not acquired yet: frames are asked in order, each acquired exactly once): true and `out`
 	// filled, or false when its input is not complete yet (nothing consumed; asked again later).
 	virtual bool acquire(UnsignedInt frame, FrameBatch &out) = 0;

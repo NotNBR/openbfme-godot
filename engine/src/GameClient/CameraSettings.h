@@ -58,6 +58,13 @@ struct CameraSettings
 	bool showSelectedUnitMarker = false, useSimpleHordeDecals = false, useSimpleMergeDecals = false;
 	float opacityOfSimpleMergeDecals = 0.0f;
 	bool haveVeterancyPipFilter = false;
+	// lane FX-4: the camera shake (W3DView::shake RW 0x486D86): Shake{Subtle,Normal,Strong,Severe,CineExtreme,CineInsane}Intensity (GlobalData + 0xB74 ..
+	// + 0xB88, by CameraShakeType 0 .. 5), MaxShakeIntensity (+ 0xB8C), MaxShakeRange (+ 0xB90), parseReal RW 0x42ED00 (rows RW 0xC00610 ..). Optional (a test
+	// GameData may lack them; the constructor's values were not read): without all eight the camera does not shake and reports it (S-450)
+	float shakeIntensity[6] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+	float maxShakeIntensity = 0.0f, maxShakeRange = 0.0f;
+	unsigned shakeSeen = 0; ///< bit k: the field of user data k was read
+	bool haveShake() const { return shakeSeen == 0xFFu; }
 	ObjectFilter veterancyPipFilter;
 
 	// reads data\ini\gamedata.ini through the shared INI pipeline (macros, retail parsers, later blocks override); a missing file or key is an error

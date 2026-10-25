@@ -372,7 +372,7 @@ float flightGroundHeight(const GameLogic &logic, float x, float y)
 	{
 		h = noFly;
 	}
-	const float minFlight = FLT_MAX; // AIData MinFlightHeight (+ 0xB0), the retail default (S-4041)
+	const float minFlight = logic.settings().minFlightHeight; // RW 0x777F2D .. 0x777F50: TheAI's AIData + 0xB0 (MinFlightHeight; FLT_MAX RW 0xBD1910 = none)
 	if (minFlight != FLT_MAX && h < minFlight)
 	{
 		h = minFlight;
@@ -715,7 +715,7 @@ bool computeAerialPath(const Flyer &flyer, const Coord3D &goalIn, AerialSpline &
 std::vector<std::string> stopLines()
 {
 	return { "S-4041: the aerial path (RW 0x778413) is ported without the no-fly zones (the map block AerialPathfindNoFlyZone is a recording stub: RW 0x777E54 "
-		     "answers 0), AIData MinFlightHeight (not read: the retail default FLT_MAX), the 3D shape overlap of the separation's would-collide filter (2D footprints: "
+		     "answers 0), the 3D shape overlap of the separation's would-collide filter (2D footprints: "
 		     "RW 0xAD2CE0 is not ported, S-1020) and the x87 / CRT parity of its terminal search (S-081)" };
 }
 } // namespace AerialPathfinder

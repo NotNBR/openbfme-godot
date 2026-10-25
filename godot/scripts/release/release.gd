@@ -261,6 +261,26 @@ func set_update_note(text: String) -> void:
 		_update_note.visible = not text.is_empty()
 
 
+## Lane MENUFIX-1: the version corner (the version, the Logs link, the update note) in the menus' look (scripts/menu_text.gd): game.gd calls it once the
+## shell's fonts are there and whenever the window's size changes. The lines stack from the window's top right, MARGIN_PX stage pixels in.
+func style_corner(shell: Object, size: Vector2, errors: Array) -> void:
+	if _watermark == null:
+		return
+	var menu_text: GDScript = load("res://scripts/menu_text.gd")
+	var k: float = menu_text.scale_of(size)
+	var margin := roundf(menu_text.MARGIN_PX * k)
+	var plate: StyleBoxFlat = _update_note.get_theme_stylebox("normal")
+	plate.set_content_margin_all(roundf(4 * k))
+	_update_note.custom_minimum_size = Vector2(roundf(270 * k), 0)
+	var y := margin
+	for line: Control in [_watermark.get_node("Version"), _watermark.get_node("OpenLogs"), _update_note]:
+		var h: float = menu_text.apply(line, shell, size, menu_text.CORNER_PX, errors)
+		line.offset_right = -margin
+		line.offset_top = y
+		line.offset_bottom = y
+		y += h
+
+
 ## game.gd: true while a game is on screen (the version corner is shown in the menus only).
 func set_in_game(in_game: bool) -> void:
 	if in_game == _in_game:
@@ -274,6 +294,8 @@ func set_in_game(in_game: bool) -> void:
 ## mount report ({ok, errors, ...}); with ok false the caller fails with the errors.
 func mount_retail(fs: RefCounted) -> Dictionary:
 	if OS.get_cmdline_user_args().has("--game=bfme1"):
+		if not mod_args(OS.get_cmdline_user_args(), OS.get_environment("OPENBFME_MOD")).is_empty():
+			return {"ok": false, "errors": ["-mod is RotWK's switch (lane MODS-1); BFME1 mode mounts no mods"]}
 		var install := OS.get_environment("BFME1_INSTALL")
 		for arg in OS.get_cmdline_user_args():
 			if arg.begins_with("--bfme1-install="): install = arg.trim_prefix("--bfme1-install=")
@@ -289,6 +311,22 @@ func mount_retail(fs: RefCounted) -> Dictionary:
 	var setup: RefCounted = ClassDB.instantiate("InstallSetup")
 	var conf: Dictionary = setup.configured()
 	var args := OS.get_cmdline_user_args()
+	fs.set_mods(mod_args(args, OS.get_environment("OPENBFME_MOD"))) # lane MODS-1: RotWK's -mod, mounted over the verified game files
+	fs.set_install_mods(install_mod_args(args, OS.get_environment("OPENBFME_MOD_INSTALL"))) # lane MODS-2: mods installed into the game folder
+	var engines := PackedStringArray() # lane MODS-3: the modified game binaries of the mod (Common/ModEngineFeatures.h): their features turn on
+	for a in args:
+		if a.begins_with("--mod-engine="):
+			engines.push_back(a.trim_prefix("--mod-engine="))
+	fs.set_mod_engines(engines)
+	# lane SDK-0: cosmetic asset packs (drawing only; engine GameClient/AssetPacks.h): every folder in user://asset-packs (name order), then
+	# each --asset-pack=FOLDER; a pack with a problem stops the start with its message rather than being skipped
+	var packs: Dictionary = fs.set_asset_packs(asset_pack_folders(args))
+	if not packs.ok:
+		return {"ok": false, "errors": packs.errors}
+	if not packs.packs.is_empty():
+		print("RELEASE asset packs: ", ", ".join(packs.packs), " (", packs.textures, " textures, ", packs.models, " models)")
+		for note in packs.notes:
+			print("RELEASE asset packs: ", note)
 	var test_pick := _first_run_test_args(args)
 	print("RELEASE game folders: ", conf.source)
 	if conf.source == "env" and test_pick.is_empty():
@@ -308,6 +346,50 @@ func mount_retail(fs: RefCounted) -> Dictionary:
 	var result: Dictionary = await screen.run(fs, setup, problem, test_pick)
 	screen.queue_free()
 	return result
+
+
+# lane MODS-1: the -mod operands in command-line order: "-mod PATH" (retail's spelling), "--mod=PATH", and OPENBFME_MOD before them. A relative
+# path is taken below the user data folder, as RotWK does (engine Common/ModMount.h).
+static func mod_args(args: PackedStringArray, env: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	if not env.is_empty():
+		out.push_back(env)
+	var i := 0
+	while i < args.size():
+		var a := args[i]
+		if a == "-mod" and i + 1 < args.size():
+			out.push_back(args[i + 1])
+			i += 1
+		elif a.begins_with("--mod="):
+			out.push_back(a.trim_prefix("--mod="))
+		i += 1
+	return out
+
+
+# lane MODS-2: the install-folder mod folders, highest priority first (an All In One package: its enhancements, then the package, then the
+# patches it depends on): each --mod-install=FOLDER in command-line order, else OPENBFME_MOD_INSTALL; empty = none
+static func install_mod_args(args: PackedStringArray, env: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for a in args:
+		if a.begins_with("--mod-install="):
+			out.push_back(a.trim_prefix("--mod-install="))
+	if out.is_empty() and not env.is_empty():
+		out.push_back(env)
+	return out
+
+
+# lane SDK-0: the asset pack folders: user://asset-packs/<pack>/ in name order (drag and drop), then --asset-pack=FOLDER in command-line order
+static func asset_pack_folders(args: PackedStringArray) -> PackedStringArray:
+	var out := PackedStringArray()
+	var root := ProjectSettings.globalize_path("user://asset-packs")
+	var names := DirAccess.get_directories_at(root) if DirAccess.dir_exists_absolute(root) else PackedStringArray()
+	names.sort()
+	for n in names:
+		out.push_back(root.path_join(n))
+	for a in args:
+		if a.begins_with("--asset-pack="):
+			out.push_back(a.trim_prefix("--asset-pack="))
+	return out
 
 
 # --first-run=accept                 take the first discovered folders that pass the check (the "found" case of the fresh-user test)

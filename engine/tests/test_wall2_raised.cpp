@@ -9,8 +9,14 @@
 
 #include "PathfindTestUtil.h"
 
+#include "Common/StateHash.h"
+#include "Common/XferLoad.h"
+#include "Common/XferSave.h"
 #include "GameLogic/AI/AIPathfind.h"
+#include "GameLogic/AI/AIXfer.h"
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -58,7 +64,7 @@ struct GatehouseWorld
 	TestWorld world;
 	std::unique_ptr<Pathfinder> pf;
 	WallPieceObject *left = nullptr, *centre = nullptr, *right = nullptr;
-	explicit GatehouseWorld(bool withWalkway = true)
+	explicit GatehouseWorld(bool withWalkway = true, const PathfindConfig &config = testConfig())
 	{
 		auto piece = [&](PathfindObjectID id, float x) {
 			WallPieceObject *p = new WallPieceObject();
@@ -86,7 +92,7 @@ struct GatehouseWorld
 			centre->pos = { 300.0f, 10.0f, 0.0f }; // its one-cell footprint away from the passage
 			centre->walls.raised.push_back(quad(200.0f, 90.0f, 400.0f, 110.0f, 60.0f, 60.0f));
 		}
-		pf = std::make_unique<Pathfinder>(testConfig(), &world);
+		pf = std::make_unique<Pathfinder>(config, &world);
 		pf->newMap(terrain);
 		pf->addObjectToPathfindMap(*left);
 		pf->addObjectToPathfindMap(*right);
@@ -262,6 +268,85 @@ public:
 	bool canPathThroughGates() const override { return false; } // CanPathThroughGates = No (the mumakil, Grond, the siege towers)
 };
 } // namespace
+
+TEST_CASE("wall2 raised review of #63: a snapshot whose ground and raised cell infos each fit the pool but not together is refused by name, the "
+		  "loading pathfinder as it was")
+{
+	PathfindConfig config = testConfig();
+	config.cellInfoPoolSize = 1000; // the pool both pathfinders are configured with (the snapshot's configuration hash must match)
+	GatehouseWorld saved(true, config), loaded(true, config);
+	saved.pf->setUberLimits(true); // the saving game's pool grows past its 1000 (an Uber game); the snapshot is made Faithful below
+	PathfindCellInfoPool &pool = saved.pf->pool();
+	int raised = 0, ground = 0;
+	// a cell info on every passable walkway cell (x 18 .. 41, y 7 .. 12: the first test), then on ground cells until the ground holds exactly 1000
+	for (int x = 18; x < 42; ++x)
+	{
+		for (int y = 7; y < 13; ++y)
+		{
+			PathfindCell *c = saved.pf->getCell(LAYER_TOP, x, y);
+			if (c && c == saved.pf->raisedCellAt(LAYER_TOP, x, y))
+			{
+				if (!c->hasInfo())
+				{
+					REQUIRE(c->allocateInfo(pool, ICoord2D{ x, y }));
+				}
+				++raised;
+			}
+		}
+	}
+	for (int x = 0; x < 60; ++x)
+	{
+		for (int y = 0; y < 20; ++y)
+		{
+			ground += saved.pf->cellAt(x, y)->hasInfo() ? 1 : 0;
+		}
+	}
+	for (int x = 0; x < 60 && ground < 1000; ++x)
+	{
+		for (int y = 0; y < 20 && ground < 1000; ++y)
+		{
+			PathfindCell *c = saved.pf->getCell(LAYER_GROUND, x, y);
+			if (!c->hasInfo())
+			{
+				REQUIRE(c->allocateInfo(pool, ICoord2D{ x, y }));
+				++ground;
+			}
+		}
+	}
+	REQUIRE(ground == 1000);
+	REQUIRE(raised > 0); // tolerance: a precondition (the walkway has passable cells; the first test pins them)
+	std::vector<std::uint8_t> bytes;
+	{
+		AIXfer::StringTableScope strings;
+		XferSave save;
+		saved.pf->xfer(save);
+		bytes = save.data();
+	}
+	// the load's limit is the snapshot's profile (review of #62, Greptile P1): an Uber snapshot loads into a pool that grows. Cleared, its Uber flag
+	// (followed by the two ring lengths, 16,384 each) makes it a Faithful snapshot, whose pool of 1000 holds the two counts only apart
+	const std::uint8_t uberTail[] = { 1, 0x00, 0x40, 0, 0, 0x00, 0x40, 0, 0 };
+	auto flag = std::search(bytes.begin(), bytes.end(), std::begin(uberTail), std::end(uberTail));
+	REQUIRE(flag != bytes.end());
+	REQUIRE(std::search(flag + 1, bytes.end(), std::begin(uberTail), std::end(uberTail)) == bytes.end());
+	*flag = 0;
+	StateHasher before;
+	loaded.pf->crc(before);
+	std::string error;
+	try
+	{
+		AIXfer::StringTableScope strings;
+		XferLoad load(bytes);
+		loaded.pf->xfer(load);
+	}
+	catch (const XferException &e)
+	{
+		error = e.what();
+	}
+	CHECK(error == "pathfinder: the snapshot holds 1000 ground and " + std::to_string(raised) + " raised cell infos, more than the pool of 1000");
+	StateHasher after;
+	loaded.pf->crc(after);
+	CHECK(after.value() == before.value());
+}
 
 TEST_CASE("wall2 raised: wall tops and ramps carry bit 17 (RW 0x935051 / 0x93527F): a unit with CanPathThroughGates = No cannot path up the ramp onto the wall")
 {
@@ -606,4 +691,15 @@ TEST_CASE("wall2 raised: a group's formation search to a walkway point does not 
 	CHECK_FALSE(partial);
 	CHECK(own->getLastNode()->getLayer() == LAYER_TOP);
 	delete own;
+}
+
+TEST_CASE("wall2 raised: S-4858, the attack search's closest-cell fallback for a unit off the ground layer without a corridor, is in Pathfinder::allStops()")
+{
+	// lane WALL-2 with ATTACKPATH-1 (AIPathfindAttack.cpp): RotWK ranks the fallback cell only through its corridor, which the port builds on the ground grid
+	// only; the distance-ranked fallback off the ground is OpenBFME's own (Grond put on a Minas Tirith wall top reaches the gate through it)
+	const std::vector<std::string> all = Pathfinder::allStops();
+	CHECK(std::find(all.begin(), all.end(), std::string("S-4858 findAttackPath (RW 0x6FC18E) keeps its closest-cell fallback only with the corridor of RW 0x6F9829 (its RW 0x93AD93 ranking runs only"
+			  " when the corridor was found); the port's corridor runs on the ground grid only (S-162, S-4856), so a unit on a wall top, a raised walkway o"
+			  "r a ramp often has none and would get no path at all: such a search keeps the cell closest to the goal cell by its squared cell distance ins"
+			  "tead (OpenBFME's own, pending the corridor's raised branch)")) != all.end());
 }

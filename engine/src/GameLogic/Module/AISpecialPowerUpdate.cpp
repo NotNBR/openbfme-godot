@@ -74,10 +74,12 @@ const char *const kStop =
 	"partition's unsorted order";
 
 const char *const kStopSpellBook =
-	"[S-1875] AIPlayer's science upgrade builder (AIPlayer + 0x12C -> + 0xC, class RW 0x99FB84, vtables RW 0xC88208 / 0xC881FC, update RW 0x9A0023 -> RW "
-	"0x99FCC4 / 0x99FD0E / 0x99FE74 / 0x99FAEF / 0x99FA40, run by AIPlayer::update RW 0x8F0F39, S-412) is not ported: a computer player's sciences come "
-	"only from its AI scripts (PURCHASE_SCIENCE / GRANT_SCIENCE), so a spell book power whose science retail's builder buys may never become ready (the "
-	"science gates readiness, RW 0x8B708B; the command set's button activates the decision module, RW 0x8B714F)";
+	"[S-1875] computer players' science purchases (lane AI5): retail RotWK has no skirmish AI science buyer. Player::attemptToPurchaseScience RW 0x6AE36F is "
+	"called only by the script action PLAYER_PURCHASE_SCIENCE (RW 0x7BD210), MSG_PURCHASE_SCIENCE (RW 0x779A3D) and ZH's AIPlayer::doUpgradesAndSkills "
+	"(RW 0x8F7B3B, AIData SideInfo SkillSet1..5), which RW 0x8F9705 runs only for a computer player without a skirmish AI; the AIPlayer + 0x12C class "
+	"(RW 0x99FB84, AIUpgradeScienceBuilder) buys structure upgrades and expansions (ported, AIUpgrade.h). So a skirmish AI's sciences come from its "
+	"scripts as in retail. Not ported: doUpgradesAndSkills for a computer player without a skirmish AI (retail AIData defines no SkillSet: it buys and "
+	"draws nothing; a mod's SkillSets would make such players buy sciences)";
 
 const unsigned kExecuteFrames = 5u * LOGICFRAMES_PER_SECOND; // RW 0x993024: [0xD9F608] * 5
 
@@ -743,53 +745,23 @@ void AISpecialPowerUpdate::execute(Object &obj)
 
 void AISpecialPowerUpdate::runButton(Object &obj, Object *target, const Coord3D *loc)
 {
-	// RW 0x696FD2 / 0x697890 / 0x6979D9 with source 1 (CMD_FROM_SCRIPT) and no auto flag
+	// RW 0x696FD2 / 0x697890 / 0x6979D9 with source 1 (CMD_FROM_SCRIPT) and no auto flag (lane MODS-3: Object::doCommandButton and its target forms; their
+	// disabled gates and every command type are theirs)
 	const CommandButton *b = m_decision->button;
-	if (!b || obj.getDisabledMask() != 0)
-	{
-		return; // RW 0x9325B4: a disabled object does nothing (Object + 0xA0 bit 6 taken as clear)
-	}
-	if (b->m_command == GUI_COMMAND_SET_STANCE && !target && !loc)
-	{
-		// RW 0x696FD2 case 0x3A: the object's StancesBehavior (RW 0x861E6E / 0x68BDA5) takes the button's first stance (RW 0x75D324(0)); the debug checks aside
-		if (StancesBehavior *s = StancesBehavior::of(obj))
-		{
-			if (!b->m_stances.empty() && b->m_stances[0] >= 0 && b->m_stances[0] < STANCE_COUNT)
-			{
-				s->setStance((StanceType)b->m_stances[0]);
-			}
-		}
-		return;
-	}
-	if (b->m_command == GUI_COMMAND_TOGGLE_WEAPONSET && !target && !loc)
-	{
-		WeaponSetToggle::toggleFromCommandButton(obj); // RW 0x696FD2 case 0x2D (lane AIPOW-1)
-		return;
-	}
-	if (b->m_command != GUI_COMMAND_SPECIAL_POWER && b->m_command != GUI_COMMAND_SPELL_BOOK)
-	{
-		++stats().unportedCommands;
-		obj.logic().noteStop(kStop);
-		return;
-	}
-	const SpecialPowerTemplate *t = TheSpecialPowerStore && !b->m_specialPowerName.empty() ? TheSpecialPowerStore->findSpecialPowerTemplate(b->m_specialPowerName) : nullptr;
-	if (!t)
-	{
-		return; // a button without a power (+ 0x44 null) does nothing
-	}
-	const unsigned options = b->m_options | 0x40000u;
 	if (loc)
 	{
-		SpecialPowerModules::doSpecialPowerAtLocation(obj, t, *loc, options, true); // force: source == 1
+		obj.doCommandButtonAtPosition(b, *loc, CMD_FROM_SCRIPT, false); // RW 0xA01C54
 	}
 	else if (target)
 	{
-		SpecialPowerModules::doSpecialPowerAtObject(obj, t, target, options, true);
+		obj.doCommandButtonAtObject(b, target, CMD_FROM_SCRIPT, false); // RW 0xA02806
 	}
 	else if (m_decision->kind != AISpecialPowerDecision::KIND_OBJECT)
 	{
-		SpecialPowerModules::doSpecialPower(obj, t, options, true);
+		obj.doCommandButton(b, CMD_FROM_SCRIPT, false); // RW 0x993006
 	}
+	// INFERENCE (S-1421, as before): an object decision whose target is gone reaches RW 0x697890 with a null target; the port's power modules are not
+	// handed a null target, so nothing happens
 }
 
 void AISpecialPowerUpdate::crc(StateHasher &h) const

@@ -356,7 +356,8 @@ std::vector<PickHit> pickHits(const HudContext &ctx, const ICoord2D &pixel, unsi
 	const unsigned castMask = pickTypes | PICK_TYPE_SELECTABLE | PICK_TYPE_ENEMY | PICK_TYPE_HERO | PICK_TYPE_OWN;
 	for (Object *obj = ctx.logic.getFirstObject(); obj; obj = obj->getNextObject())
 	{
-		if (!isPickable(*obj) || InvisibilityManager::clientLook(*obj, ctx.localPlayer()) == 5) // lane STEALTH-1: an enemy's invisible object is not drawn, not picked
+		if (!isPickable(*obj) || InvisibilityManager::clientLook(*obj, ctx.localPlayer()) == 5 // lane STEALTH-1: an enemy's invisible object is not drawn, not picked
+			|| ctx.ui.isClientHidden(obj->getID())) // lane CHAT-1: an enemy's beacon (BeaconClientUpdate::hideBeacon, RW 0x8CDC11: hidden and deselected)
 		{
 			continue;
 		}
@@ -487,7 +488,7 @@ std::vector<Object *> objectsInRegion(const HudContext &ctx, const IRegion2D &re
 		{
 			continue;
 		}
-		if (hiddenFromDrag(ctx, *obj)) // lane VISUAL-2 r2
+		if (hiddenFromDrag(ctx, *obj) || ctx.ui.isClientHidden(obj->getID())) // lane VISUAL-2 r2; lane CHAT-1: an enemy's hidden beacon
 		{
 			continue;
 		}

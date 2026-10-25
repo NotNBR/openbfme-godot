@@ -39,11 +39,14 @@ std::vector<std::string> SpellStops::lines()
 		"engine, i.e. once map scripts are loaded (nothing else reads it); names compare by CRC_String as retail (a collision would match); a player index "
 		"outside the 20 lists is refused and noted (retail does not test it); the list has no cap (retail's); the heal's partition query RW 0x8CC532 runs on "
 		"ThePartitionManager (lane MODULES-2)",
-		"[S-530] ObjectCreationList: the block (RW 0x5F0462) and its five nugget tables parse; only CreateObject's name pick (RW 0x5F11CD draw), template, command point "
-		"test and creation on the source's team at the position + Offset (RW 0x5F0EE6) are ported: dispositions, forces, containers, formations, fades, veterancy, health, "
-		"just-built, invulnerable, MaxSimultaneousOfType, RequiresLivePlayer, waypoints, the secondary position and the other nugget kinds are counted, not run (and the logic "
-		"random draws they make are missing); OCLSpecialPower runs CREATE_AT_LOCATION, USE_OWNER_OBJECT, CREATE_ABOVE_LOCATION, USE_SECONDARY_OBJECT_LOCATION and "
-		"UpgradeName (lane SPELL-2); the map edge cases (0, 1, 2, 6) and the army spawn points (7) are counted",
+		"[S-530] ObjectCreationList: the block (RW 0x5F0462) and its five nugget tables parse; lane SUMMON-1: the CreateObject nugget runs (RW 0x5F275D / 0x5F0EE6 / "
+		"0x5F1B5A with their logic random draws: the upgrades test, RequiresLivePlayer, DestinationPlayer, MaxSimultaneousOfType, SpreadFormation, the lifetime, "
+		"JUST_BUILT, the health, onEnslave, the dispositions and their forces, ContainInsideSourceObject, VeterancyLevel, InheritScriptingName, the secondary "
+		"position's move and facing); not run (counted, noted once each as '[S-530] ObjectCreationList: not run: ...'): the other nugget kinds, PutInContainer, "
+		"ClearRemovables, TREE / SHRUB / OPTIMIZED_PROP templates, WaypointSpawnPoints, OffsetInLocalSpace, MoveUsesStrafeUpdate, StartingBusyTime, InvulnerableTime, "
+		"the FloatUpdate / FadeAndDieOrnamentUpdate / SpawnedModelConditionCreate dispositions; OCLSpecialPower runs CREATE_AT_LOCATION, USE_OWNER_OBJECT, "
+		"CREATE_ABOVE_LOCATION, USE_SECONDARY_OBJECT_LOCATION and UpgradeName (lane SPELL-2); its secondary position, the map edge cases (0, 1, 2, 6) and the army "
+		"spawn points (7) are counted",
 		"[S-531] casting: the ActionManager test (RW 0x82DFB7) keeps only the module / percent-ready / requirements parts (unit cost, range, terrain, shroud and forbidden objects "
 		"are not tested); a multi-member group casts with every member (the HERO preference RW 0x76F7A9 is not ported); the light point test and cost (RW 0x6AA8FB, 0x6AA91D) "
 		"are skipped; the spell book is made after the starting bases (RW 0x6B183D's place in the game start is not traced)",

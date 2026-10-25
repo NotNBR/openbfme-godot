@@ -1,0 +1,5 @@
+# Match .github/workflows/pr.yml; Python 3.13 is the CI interpreter.
+pytest==9.1.1
+pytest-xdist==3.8.0
+execnet==2.1.2
+PyYAML==6.0.3

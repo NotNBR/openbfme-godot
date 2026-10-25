@@ -149,3 +149,26 @@ TEST_CASE("shader text: instance lighting and colour share one flat interpolatio
 		}
 	}
 }
+
+TEST_CASE("shader text: the normal-mapped building permutation fits Intel Arc's 29 Forward+ locations")
+{
+	// Godot reported "Too many varyings used in shader (30 used, maximum supported is 29)" on an Intel Arc A770 (Mesa ANV, Vulkan 1.4)
+	// for this permutation with 16 declared varyings: Forward+ itself takes the other 14 locations. 14 declared varyings leave one spare.
+	W3DShaderKey key;
+	key.Fx = key.NormalMap = key.Tangents = key.HouseColor = key.Uv2 = true;
+	key.Tex[0] = key.Tex[1] = key.Texturing = true;
+	const auto code = Generate_W3D_Shader_Code(key, W3DSamplerPolicy::Metal16);
+	std::istringstream lines(code);
+	std::string line;
+	int varyings = 0;
+	while (std::getline(lines, line))
+	{
+		if (line.find("varying ") == 0) ++varyings;
+	}
+	CHECK(varyings == 14);
+	// the two UV sets share one interpolator, and the world position is a vertex() local
+	CHECK(has(code, "varying vec4 v_uv;"));
+	CHECK(has(code, "v_uv = vec4(UV, UV2);"));
+	CHECK_FALSE(has(code, "varying vec3 v_wpos;"));
+	CHECK(has(code, "vec3 wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;"));
+}

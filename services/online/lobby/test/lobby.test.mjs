@@ -9,8 +9,9 @@ import { createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_WAIT_S, MAX_WAITERS_PER_GAME, MAX_HOLDS_PER_ACCOUNT, HOLD_BACKOFF_S, Lobby, route, signTicket, signRejoinTicket, signSpectatorTicket, base64UrlDecode, parseKeyRing, configFromEnv, LobbyError } from '../src/lobby.mjs';
+import { MAX_WAIT_S, MAX_WAITERS_PER_GAME, MAX_HOLDS_PER_ACCOUNT, HOLD_BACKOFF_S, Lobby, route, signTicket, signRejoinTicket, signSpectatorTicket, sessionKey, base64UrlDecode, parseKeyRing, configFromEnv, LobbyError } from '../src/lobby.mjs';
 import { startServer, nodeEnv } from '../src/server.mjs';
+import { identityStorage } from './identity-storage.mjs';
 // node:sqlite (Node 22.5+) stands in for a Durable Object's SQLite storage; an older Node skips those tests loudly
 const sqlite = await import('node:sqlite').catch(() => null);
 const NO_SQLITE = !sqlite && 'SKIP LOUDLY: node:sqlite (Node 22.5+) is missing, so the Durable Object SQLite log store tests did not run';
@@ -58,6 +59,51 @@ test('the ticket is the 32 bytes the relay checks (pinned with engine/tests/test
   assert.equal(base64UrlDecode(t).length, 32);
   assert.throws(() => base64UrlDecode('AQJ'));
   assert.throws(() => parseKeyRing('1:00'));
+});
+
+test('NET-SYNC: the mode-flagged ticket is the version-7 36 bytes the relay checks (pinned with engine/tests/test_relay_canonical_ticket.cpp)', async () => {
+  const env = nodeEnv({});
+  const keys = parseKeyRing(ENV.TICKET_KEYS);
+  const t = await signTicket(env, 1, keys.get(1), '0123456789abcdef', 1, 0b0111, 2000000000, 3); // CANONICAL | EQUAL_DELAY
+  assert.equal(t, 'BwHvzauJZ0UjAQEHAAMAlDV3AAC1nFMUgIjmpFwx1dCxcbRU');
+  assert.equal(base64UrlDecode(t).length, 36);
+  assert.equal(base64UrlDecode(t)[0], 7);
+  assert.equal(base64UrlDecode(t)[13], 3);
+  // mode 0 signs the plain ticket unchanged (backward compatibility)
+  assert.equal(await signTicket(env, 1, keys.get(1), '0123456789abcdef', 1, 0b0111, 2000000000), 'AQHvzauJZ0UjAQEHAJQ1dxkKDPX40Zd_QbpSaTVc2UI');
+});
+
+test('ONLINE16-FIX: sessionKey is ANTICHEAT-1\'s HMAC-SHA256(the ticket key, "OBFME-SESSION-1" || the ticket bytes)[0..16), base64url (pinned)', async () => {
+  const env = nodeEnv({});
+  const key = parseKeyRing(ENV.TICKET_KEYS).get(1);
+  const t = await signTicket(env, 1, key, '0123456789abcdef', 1, 0b0111, 2000000000);
+  const want = createHmac('sha256', Buffer.from(KEY_HEX, 'hex'))
+    .update(Buffer.concat([Buffer.from('OBFME-SESSION-1'), Buffer.from(base64UrlDecode(t))])).digest().subarray(0, 16).toString('base64url');
+  assert.equal(await sessionKey(env, key, t), want);
+  assert.match(await sessionKey(env, key, t), /^[A-Za-z0-9_-]{22}$/);
+  // it binds to the exact ticket: another ticket, another key
+  const t2 = await signTicket(env, 1, key, '0123456789abcdef', 2, 0b0111, 2000000000);
+  assert.notEqual(await sessionKey(env, key, t2), want);
+  // lane/anticheat1's pin (the relay's RelayAuth::sessionKey and the Python fixture pin the same)
+  assert.equal(await sessionKey(env, key, await signTicket(env, 1, key, '0123456789abcdef', 0, 0b0111, 2000000000)), 'cHLqM4pf8wcINff_naIhJg');
+});
+
+test('p16 net: wide-mask ticket signers match the native pins', async () => {
+  const env = nodeEnv({});
+  const key = parseKeyRing(ENV.TICKET_KEYS).get(1);
+  const args = ['0123456789abcdef', 15, 0x8001, 2000000000];
+  const tickets = [
+    await signTicket(env, 1, key, ...args),
+    await signRejoinTicket(env, 1, key, ...args, 7),
+    await signSpectatorTicket(env, 1, key, ...args, 60),
+  ];
+  assert.deepEqual(tickets, [
+    'BAHvzauJZ0UjAQ8BgACUNXdOa7QxL-AwUkFh2DbLPmks',
+    'BQHvzauJZ0UjAQ8BgACUNXcHADQBXOzeSfKqAxyN2xoOJ_I',
+    'BgHvzauJZ0UjAQ8BgACUNXc8ANUT46PVjIjFzAeYYkpGaUI',
+  ]);
+  assert.deepEqual(tickets.map((ticket) => base64UrlDecode(ticket).length), [33, 35, 35]);
+  assert.deepEqual(tickets.map((ticket) => base64UrlDecode(ticket)[0]), [4, 5, 6]);
 });
 
 test('a game from sign-in to START: the profile check, ready flags, chat, one ticket per human slot', async () => {
@@ -113,6 +159,14 @@ test('a game from sign-in to START: the profile check, ready flags, chat, one ti
   // the ticket's MAC with the relay's key
   const mac = createHmac('sha256', Buffer.from(KEY_HEX, 'hex')).update(ticket.subarray(0, 16)).digest().subarray(0, 16);
   assert.deepEqual(Buffer.from(ticket.subarray(16)), mac);
+  // lane AUTH-1: every START carries the slot's session_key — HMAC-SHA256(ticket key, "OBFME-SESSION-1" || the exact
+  // ticket bytes) in hex — which never crosses UDP (the relay recomputes it from the HELLO's ticket)
+  const wantMacKey = (b64) => createHmac('sha256', Buffer.from(KEY_HEX, 'hex'))
+    .update(Buffer.concat([Buffer.from('OBFME-SESSION-1'), Buffer.from(base64UrlDecode(b64))])).digest().subarray(0, 16).toString('base64url');
+  assert.match(sa.session_key, /^[A-Za-z0-9_-]{22}$/);
+  assert.equal(sa.session_key, wantMacKey(sa.ticket));
+  assert.equal(polled.start.session_key, wantMacKey(polled.start.ticket));
+  assert.notEqual(polled.start.session_key, sa.session_key); // per-ticket: each slot's k differs
   assert.ok(polled.chat.some((c) => c.text === 'gl hf' && c.from === 'Bea'));
   // the started game left the list; joining it now is refused
   assert.equal((await call(lobby, 'GET', '/v1/games')).body.games.length, 0);
@@ -122,6 +176,7 @@ test('a game from sign-in to START: the profile check, ready flags, chat, one ti
   const replayStart = JSON.parse(new TextDecoder().decode(env.blobs.get(`starts/${id}.json`)));
   assert.equal(replayStart.kind, 'openbfme-replay-start');
   assert.equal(replayStart.ticket, undefined);
+  assert.equal(replayStart.session_key, undefined); // AUTH-1: the replay record is no credential either
   assert.equal(replayStart.slot, undefined);
   assert.equal(replayStart.relay, undefined);
   assert.equal(replayStart.setup.seed, sa.setup.seed);
@@ -240,13 +295,15 @@ test('ONLINE-2 r2 (Sol): a join while START signs its tickets is refused; every 
 test('ONLINE-2 r2 (Sol): the Durable Object runs one request at a time, even when they await', async () => {
   const { LobbyObject } = await import('../src/worker.mjs');
   const order = [];
-  const stored = new Map();
+  const storage = identityStorage();
+  const put = storage.put.bind(storage);
+  storage.put = async (k, v) => {
+    order.push(`put ${v.seq}`);
+    await new Promise((r) => setTimeout(r, 10));
+    await put(k, v);
+  };
   const state = {
-    storage: {
-      put: async (k, v) => { order.push(`put ${v.seq}`); await new Promise((r) => setTimeout(r, 10)); stored.set(k, v); },
-      delete: async (k) => stored.delete(k),
-      list: async () => new Map(),
-    },
+    storage,
     blockConcurrencyWhile: (fn) => fn(),
   };
   const obj = new LobbyObject(state, { ...ENV, LOGS: { put: async () => {}, get: async () => null } });
@@ -286,7 +343,7 @@ test('ONLINE-2 r2 (Sol): a chunked JSON body over 16 KiB is refused by its real 
 
 test('ONLINE-2 r3 (Sol r2): the Durable Object reads a body with a byte limit and a timeout before its queue: an endless body blocks nothing', async () => {
   const { LobbyObject } = await import('../src/worker.mjs');
-  const state = { storage: { put: async () => {}, delete: async () => {}, list: async () => new Map() }, blockConcurrencyWhile: (fn) => fn() };
+  const state = { storage: identityStorage(), blockConcurrencyWhile: (fn) => fn() };
   const obj = new LobbyObject(state, { ...ENV, BODY_TIMEOUT_MS: '300', LOGS: { put: async () => {}, get: async () => null } });
   // a body stream that sends `n` bytes and never ends
   const endless = (n) => new ReadableStream({ start(c) { for (let i = 0; i < n; i += 1000) c.enqueue(new TextEncoder().encode('x'.repeat(Math.min(1000, n - i)))); } });
@@ -357,6 +414,9 @@ function doStorage() {
   return {
     db,
     sql: {
+      get databaseSize() {
+        return db.prepare('PRAGMA page_count').get().page_count * db.prepare('PRAGMA page_size').get().page_size;
+      },
       exec: (q, ...args) => {
         const st = db.prepare(q);
         const rows = /^\s*SELECT/i.test(q) ? st.all(...args.map(arg)) : (st.run(...args.map(arg)), []);
@@ -410,6 +470,17 @@ async function doObject(env) {
   };
   return { obj, storage, upload, get, post, startGame };
 }
+
+test('p16 net: version 4 relay uploads require the wide header and are accepted', { skip: NO_SQLITE }, async () => {
+  const { upload, startGame } = await doObject({ ...ENV, LOG_STORE: 'durable-object' });
+  const { id } = await startGame();
+  const short = relayLog(25, 4, id);
+  new DataView(short.buffer).setUint32(8, 4, true);
+  assert.equal((await (await upload(id, short)).json()).error, 'bad_log');
+  const wide = relayLog(500, 5, id);
+  new DataView(wide.buffer).setUint32(8, 4, true);
+  assert.equal((await upload(id, wide)).status, 200);
+});
 
 test('CFDEPLOY-1: the relay logs are kept in the Durable Object\'s SQLite storage, in parts under the 2 MB row limit', { skip: NO_SQLITE }, async () => {
   const { storage, upload, get, startGame } = await doObject({ ...ENV, LOG_STORE: 'durable-object' });
@@ -483,6 +554,24 @@ test('CFDEPLOY-1 r2 (Sol r1): only the players of a game download its replay fil
   }
 });
 
+test('LOBBYSTATS-1: the SQLite store lists the write times of START records and relay logs since a time, not player lists, and writes nothing', { skip: NO_SQLITE }, async () => {
+  const { SqliteLogStore } = await import('../src/worker.mjs');
+  const storage = doStorage();
+  const store = new SqliteLogStore(storage);
+  store.putBlob('starts/0000000000000001.json', new TextEncoder().encode('{}'));
+  store.putBlob('starts/0000000000000002.json', new TextEncoder().encode('{}'));
+  store.putBlob('players/0000000000000001.json', new TextEncoder().encode('[]'));
+  store.putBlob('logs/0000000000000001.obfmerlog', relayLog(100, 1, '0000000000000001'));
+  storage.db.prepare("UPDATE blobs SET stored_at = 1000 WHERE key = 'starts/0000000000000002.json'").run();
+  const changes = storage.db.prepare('SELECT total_changes() AS n').get().n;
+  const t = store.gameTimes(2000);
+  assert.equal(t.started.length, 1, 'the old START record is before the window');
+  assert.equal(t.finished.length, 1);
+  assert.ok(t.started.every((at) => Number.isInteger(at) && at >= 2000));
+  assert.deepEqual(store.gameTimes(0).started.sort(), [1000, t.started[0]].sort());
+  assert.equal(storage.db.prepare('SELECT total_changes() AS n').get().n, changes);
+});
+
 test('CFDEPLOY-1: a log over the store\'s 8 MiB is refused (413 too_big) and a full store refuses with log_store_full; nothing is evicted', { skip: NO_SQLITE }, async () => {
   const { SqliteLogStore, SQL_MAX_LOG_BYTES } = await import('../src/worker.mjs');
   const { storage, upload } = await doObject({ ...ENV, LOG_STORE: 'durable-object' });
@@ -554,7 +643,7 @@ test('CFDEPLOY-1 r2 (Sol r1): a body of 20,000 empty chunks is refused (too_many
     let left = n;
     return new ReadableStream({ pull(c) { if (left-- > 0) c.enqueue(new Uint8Array(0)); else c.close(); } });
   };
-  const obj = new LobbyObject({ storage: { put: async () => {}, delete: async () => {}, list: async () => new Map() }, blockConcurrencyWhile: (fn) => fn() }, { ...ENV });
+  const obj = new LobbyObject({ storage: identityStorage(), blockConcurrencyWhile: (fn) => fn() }, { ...ENV });
   const r = await obj.fetch(post(empties(20000)));
   assert.equal(r.status, 413);
   assert.equal((await r.json()).error, 'too_many_chunks');
@@ -579,7 +668,7 @@ test('CFDEPLOY-1 r2 (Sol r1): a body of 20,000 empty chunks is refused (too_many
 
 test('CFDEPLOY-1 r2 (Sol r1): at most two log uploads and 64 bodies are received at once; more are refused with 503 overloaded', async () => {
   const { LobbyObject, MAX_LOG_UPLOADS, MAX_BODIES } = await import('../src/worker.mjs');
-  const obj = new LobbyObject({ storage: { put: async () => {}, delete: async () => {}, list: async () => new Map() }, blockConcurrencyWhile: (fn) => fn() },
+  const obj = new LobbyObject({ storage: identityStorage(), blockConcurrencyWhile: (fn) => fn() },
     { ...ENV, BODY_TIMEOUT_MS: '300' });
   const endless = () => new ReadableStream({ start(c) { c.enqueue(new Uint8Array(10)); } });
   const upload = (body) => obj.fetch(new Request('http://lobby/v1/relay/logs/0123456789abcdef', { method: 'POST', headers: { 'x-openbfme-signature': '00' }, body, duplex: 'half' }));
@@ -605,7 +694,7 @@ test('CFDEPLOY-1 r2 (Sol r1): at most two log uploads and 64 bodies are received
 
 test('CFDEPLOY-1 r3 (Sol r2): capacity is held while a body waits in the queue: six 8 MiB uploads behind a stalled request are not all accepted', async () => {
   const { LobbyObject, MAX_LOG_UPLOADS } = await import('../src/worker.mjs');
-  const storage = { put: async () => {}, delete: async () => {}, list: async () => new Map() };
+  const storage = identityStorage();
   const env = { ...ENV, BODY_TIMEOUT_MS: '2000' };
   const obj = new LobbyObject({ storage, blockConcurrencyWhile: (fn) => fn() }, env);
   // the first request stalls in the lobby (a signing that does not return until released), as Sol's did in HMAC signing
@@ -684,7 +773,10 @@ test('ONLINE-3: a player whose game restarted lists its running game and gets a 
   assert.equal(mine.games[0].rejoin, `/v1/games/${id}/rejoin`);
   assert.equal((await call(lobby, 'GET', '/v1/mine')).status, 401);
   // the rejoin START: the same game, slot and setup; a new ticket of generation 1, then 2
-  const r1 = (await call(lobby, 'POST', `/v1/games/${id}/rejoin`, { token: b.token })).body.start;
+  const rejoinResponse = await call(lobby, 'POST', `/v1/games/${id}/rejoin`, { token: b.token });
+  assert.equal(rejoinResponse.body.game.id, id);
+  assert.equal(rejoinResponse.body.game.slots[1].player_id, b.account.id);
+  const r1 = rejoinResponse.body.start;
   assert.equal(r1.kind, 'openbfme-start');
   assert.equal(r1.slot, 1);
   assert.equal(r1.rejoin, 1);
@@ -697,8 +789,14 @@ test('ONLINE-3: a player whose game restarted lists its running game and gets a 
   assert.equal(t1[16] | (t1[17] << 8), 1);
   const mac = createHmac('sha256', Buffer.from(KEY_HEX, 'hex')).update(t1.subarray(0, 18)).digest().subarray(0, 16);
   assert.deepEqual(Buffer.from(t1.subarray(18)), mac);
+  // AUTH-1: the rejoin START's session_key is the fresh generation's own k (its ticket differs, so the key differs)
+  const wantMacKey = (b64) => createHmac('sha256', Buffer.from(KEY_HEX, 'hex'))
+    .update(Buffer.concat([Buffer.from('OBFME-SESSION-1'), Buffer.from(base64UrlDecode(b64))])).digest().subarray(0, 16).toString('base64url');
+  assert.equal(r1.session_key, wantMacKey(r1.ticket));
   const r2 = (await call(lobby, 'POST', `/v1/games/${id}/rejoin`, { token: b.token })).body.start;
   assert.equal(r2.rejoin, 2);
+  assert.equal(r2.session_key, wantMacKey(r2.ticket));
+  assert.notEqual(r2.session_key, r1.session_key);
   // only the slot's own account: another player of the server gets nothing
   assert.equal((await call(lobby, 'POST', `/v1/games/${id}/rejoin`, { token: c.token })).body.error, 'not_in_game');
   assert.equal((await call(lobby, 'GET', '/v1/mine', { token: c.token })).body.games.length, 0);
@@ -737,6 +835,10 @@ test('ONLINE-3: a spectator (an account that is not a player) gets a spectator S
   const s0 = (await call(lobby, 'POST', `/v1/games/${id}/spectate`, { token: w.token })).body.start;
   assert.equal(s0.kind, 'openbfme-spectate');
   assert.equal(s0.spectator, 0);
+  // AUTH-1: the spectator START's session_key authenticates relay->spectator datagrams (nothing it sends reaches players)
+  const wantSpec = (b64) => createHmac('sha256', Buffer.from(KEY_HEX, 'hex'))
+    .update(Buffer.concat([Buffer.from('OBFME-SESSION-1'), Buffer.from(base64UrlDecode(b64))])).digest().subarray(0, 16).toString('base64url');
+  assert.equal(s0.session_key, wantSpec(s0.ticket));
   assert.equal(s0.delay, 60);
   assert.equal(s0.slot, undefined);
   assert.equal(s0.setup.seed, first.setup.seed);
@@ -1095,7 +1197,7 @@ test('ONLINE-5: through the HTTP server a held poll does not block other request
 
 test('ONLINE-5: the Durable Object answers other requests while polls are held, and held polls take no body place', async () => {
   const { LobbyObject, MAX_BODIES } = await import('../src/worker.mjs');
-  const obj = new LobbyObject({ storage: { put: async () => {}, delete: async () => {}, list: async () => new Map() }, blockConcurrencyWhile: (fn) => fn() }, { ...ENV });
+  const obj = new LobbyObject({ storage: identityStorage(), blockConcurrencyWhile: (fn) => fn() }, { ...ENV });
   const req = async (method, path, token, body) => {
     const r = await obj.fetch(new Request(`http://lobby${path}`, { method, headers: token ? { authorization: `Bearer ${token}` } : {}, body: body === undefined ? undefined : JSON.stringify(body) }));
     return { status: r.status, body: await r.json() };
@@ -1210,7 +1312,7 @@ test('ONLINE-5 (Sol r1): an emptied slot keeps no choices: a reopened AI slot\'s
   const before = snapshot();
   const refused = await post(a, 'slot', { slot: 3, startPos: 5 });
   assert.equal(refused.body.error, 'bad_field');
-  assert.equal(refused.body.message, 'an open or closed slot has no faction, color, startPos or team');
+  assert.equal(refused.body.message, 'an open or closed slot has no faction, color, startPos, team or handicap');
   assert.equal((await post(a, 'slot', { slot: 4, state: 'open', startPos: 6 })).body.error, 'bad_field');
   assert.equal(snapshot(), before);
   assert.equal((await post(a, 'slot', { slot: 3, state: 'open', startPos: -1, color: -1, faction: -1, team: -1 })).status, 200);
@@ -1609,4 +1711,247 @@ test('ONLINEUX-1: a player who leaves a started game is done with it: not in /v1
   assert.equal((await call(reloaded, 'POST', `/v1/games/${id}/rejoin`, { token: b.token })).body.error, 'left');
   assert.equal((await call(reloaded, 'GET', '/v1/mine', { token: b.token })).body.games.length, 0);
   assert.deepEqual((await call(reloaded, 'GET', '/v1/mine', { token: b.token })).body.left, [id]);
+});
+
+test('ONLINEMENU-1: a slot\'s handicap (0, -5 .. -95): the owner and the host\'s AIs set it, the room and the START carry it, everything else is refused unchanged', async () => {
+  const { env, lobby, a, b, c, id, post, snapshot } = await room5();
+  const view = async (who) => (await call(lobby, 'GET', `/v1/games/${id}?since=0`, { token: who.token })).body.game;
+  // the room shows every slot's handicap; a new room's slots have none
+  assert.deepEqual((await view(b)).slots.map((s) => s.handicap), [0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal((await post(b, 'slot', { handicap: -25 })).status, 200);
+  assert.equal((await post(a, 'slot', { slot: 3, handicap: -95 })).status, 200); // the host's AI
+  assert.equal((await post(a, 'slot', { handicap: -5 })).status, 200);
+  assert.deepEqual((await view(c)).slots.map((s) => s.handicap), [-5, -25, 0, -95, 0, 0, 0, 0]);
+  // a handicap change unreadies everyone, as every change of the room does (S-4553)
+  assert.equal((await post(c, 'ready', { ready: true })).status, 200);
+  assert.equal((await post(b, 'slot', { handicap: -30 })).status, 200);
+  assert.equal(lobby.games.get(id).slots[2].ready, false);
+  const before = snapshot();
+  const refused = async (who, body, status, code) => {
+    const r = await post(who, 'slot', body);
+    assert.equal(r.status, status, `${JSON.stringify(body)}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, code);
+    assert.equal(snapshot(), before, `${JSON.stringify(body)} changed the room`);
+  };
+  // outside the closed set: not a step of 5, above 0, below -95, not an integer
+  for (const h of [-3, 5, -100, -96, 1.5, '-10', null, true]) await refused(b, { handicap: h }, 400, 'bad_field');
+  // one bad field refuses the whole change (the good handicap is not kept)
+  await refused(b, { handicap: -50, color: 64 }, 400, 'bad_field');
+  // another player's handicap: neither a player nor the host sets it
+  await refused(c, { slot: 1, handicap: -50 }, 403, 'not_host');
+  await refused(a, { slot: 1, handicap: -50 }, 403, 'player_slot');
+  // an open or closed slot has none
+  await refused(a, { slot: 4, handicap: -10 }, 400, 'bad_field');
+  await refused(a, { slot: 3, state: 'closed', handicap: -10 }, 400, 'bad_field');
+  // a new game's slots may carry one (the host's own and an AI's); an open slot's is not kept
+  const d = (await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Dee' } })).body;
+  const made = await call(lobby, 'POST', '/v1/games', { token: d.token, body: { name: 'h', profile: PROFILE, setup: { ...setup, slots: [{ state: 'player', handicap: -10 }, { state: 'open' }, { state: 'easy', handicap: -15 }] } } });
+  assert.equal(made.status, 200, JSON.stringify(made.body));
+  assert.deepEqual(lobby.games.get(made.body.id).slots.slice(0, 3).map((s) => s.handicap), [-10, 0, -15]);
+  const e = (await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Eve' } })).body;
+  const badMade = await call(lobby, 'POST', '/v1/games', { token: e.token, body: { name: 'h2', profile: PROFILE, setup: { ...setup, slots: [{ state: 'player', handicap: -7 }] } } });
+  assert.equal(badMade.body.error, 'bad_field');
+  // the START (each player's and the replay's record) carries every occupied slot's handicap
+  for (const p of [b, c]) assert.equal((await post(p, 'ready', { ready: true })).status, 200);
+  const started = await post(a, 'start');
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual(started.body.start.setup.slots.map((s) => s.handicap), [-5, -30, 0, -95]);
+  const replayStart = JSON.parse(new TextDecoder().decode(env.blobs.get(`starts/${id}.json`)));
+  assert.deepEqual(replayStart.setup.slots.map((s) => s.handicap), [-5, -30, 0, -95]);
+});
+
+test('ONLINEMENU-1: an emptied slot keeps no handicap: a kick, a leave and a closed AI slot reset it, so the next player starts at 0', async () => {
+  const { lobby, a, b, c, id, post } = await room5();
+  await post(b, 'slot', { handicap: -40 });
+  await post(c, 'slot', { handicap: -20 });
+  await post(a, 'slot', { slot: 3, handicap: -60 });
+  assert.equal((await post(a, 'kick', { slot: 1 })).status, 200);
+  assert.equal((await post(c, 'leave')).status, 200);
+  assert.equal((await post(a, 'slot', { slot: 3, state: 'closed' })).status, 200);
+  assert.deepEqual(lobby.games.get(id).slots.slice(0, 4).map((s) => s.handicap), [0, 0, 0, 0]);
+  assert.equal((await post(a, 'slot', { slot: 3, state: 'easy' })).status, 200);
+  const d = (await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Dee' } })).body;
+  assert.equal((await call(lobby, 'POST', `/v1/games/${id}/join`, { token: d.token, body: { profile: PROFILE } })).status, 200);
+  assert.deepEqual(lobby.games.get(id).slots.slice(0, 4).map((s) => s.handicap), [0, 0, 0, 0]);
+});
+
+test('ONLINEMENU-1: a player\'s Create-a-Hero record rides with their own slot into the room and the START; bad records, other slots and AIs are refused unchanged', async () => {
+  const { env, lobby, a, b, c, id, post, snapshot } = await room5();
+  const view = async (who) => (await call(lobby, 'GET', `/v1/games/${id}?since=0`, { token: who.token })).body.game;
+  const rec = (n, fill) => Buffer.from(Uint8Array.from({ length: n }, (_, i) => (i * 7 + fill) & 0xff)).toString('base64');
+  const bea = rec(301, 1);
+  assert.equal((await post(b, 'slot', { cah: bea })).status, 200);
+  assert.equal((await post(a, 'slot', { cah: rec(4096, 2) })).status, 200); // the largest record
+  let slots = (await view(c)).slots;
+  assert.equal(slots[1].cah, bea);
+  assert.equal(slots[0].cah, rec(4096, 2));
+  assert.deepEqual(slots.slice(2).map((s) => s.cah), [null, null, null, null, null, null]);
+  // a change unreadies everyone; null takes the hero away
+  assert.equal((await post(c, 'ready', { ready: true })).status, 200);
+  assert.equal((await post(a, 'slot', { cah: null })).status, 200);
+  assert.equal(lobby.games.get(id).slots[2].ready, false);
+  assert.equal((await view(b)).slots[0].cah, null);
+  const before = snapshot();
+  const refused = async (who, body, code = 'bad_field', status = 400) => {
+    const r = await post(who, 'slot', body);
+    assert.equal(r.status, status, `${JSON.stringify(body).slice(0, 80)}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, code);
+    assert.equal(snapshot(), before, `${JSON.stringify(body).slice(0, 80)} changed the room`);
+  };
+  // not base64, not canonical, url alphabet, no padding, empty, one byte over the limit, not a string
+  for (const v of ['%%%%', 'QUJDRA', 'QUJDRA=', 'QUJDRB==', '-_-_', '', rec(4097, 3), 42, {}, [], true]) await refused(c, { cah: v });
+  // with a good field beside it, the whole change is refused
+  await refused(c, { cah: 'xyz', faction: 3 });
+  // another player's, an AI's and an empty slot's
+  await refused(c, { slot: 1, cah: bea }, 'not_host', 403);
+  await refused(a, { slot: 1, cah: bea }, 'player_slot', 403);
+  await refused(a, { slot: 3, cah: bea });
+  await refused(a, { slot: 4, cah: bea });
+  // a kick empties the slot's hero with it
+  assert.equal((await post(c, 'slot', { cah: rec(64, 4) })).status, 200);
+  assert.equal((await post(a, 'kick', { slot: 2 })).status, 200);
+  assert.equal(lobby.games.get(id).slots[2].cah, null);
+  const d = (await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Dee' } })).body;
+  assert.equal((await call(lobby, 'POST', `/v1/games/${id}/join`, { token: d.token, body: { profile: PROFILE } })).status, 200);
+  assert.equal((await view(d)).slots[2].cah, null);
+  // the START: the player's record in every START and in the replay's record; none for a slot without
+  for (const p of [b, d]) assert.equal((await post(p, 'ready', { ready: true })).status, 200);
+  const started = await post(a, 'start');
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual(started.body.start.setup.slots.map((s) => s.cah), [undefined, bea, undefined, undefined]);
+  const replayStart = JSON.parse(new TextDecoder().decode(env.blobs.get(`starts/${id}.json`)));
+  assert.equal(replayStart.setup.slots[1].cah, bea);
+});
+
+test('ONLINEMENU-1: a player reports their own link to the relay for the Connections screen; the room shows it, unready nobody, and refuses everything else unchanged', async () => {
+  const { env, lobby, a, b, c, id, post, snapshot } = await room5();
+  const view = async (who) => (await call(lobby, 'GET', `/v1/games/${id}?since=0`, { token: who.token })).body.game;
+  // the room names the relay its START will use (the first of RELAYS), before the game starts
+  assert.equal((await view(b)).relay, '192.0.2.10:7350');
+  assert.deepEqual((await view(b)).slots.map((s) => s.link), [null, null, null, null, null, null, null, null]);
+  assert.equal((await post(b, 'ready', { ready: true })).status, 200);
+  const seq0 = lobby.games.get(id).seq;
+  assert.equal((await post(b, 'link', { rtt: 42, loss: 0 })).status, 200);
+  assert.equal((await post(c, 'link', { rtt: null })).status, 200); // the relay never answered C
+  assert.equal((await post(a, 'link', { rtt: 640, loss: 12 })).status, 200);
+  const slots = (await view(c)).slots;
+  assert.deepEqual(slots.slice(0, 4).map((s) => s.link), [{ rtt: 640, loss: 12 }, { rtt: 42, loss: 0 }, { rtt: null, loss: 100 }, null]); // an AI has none
+  assert.equal(lobby.games.get(id).slots[1].ready, true, 'a link report unreadies nobody');
+  assert.equal(lobby.games.get(id).seq, seq0 + 3);
+  // the same report again takes no new seq (no held poll is woken for nothing)
+  assert.equal((await post(b, 'link', { rtt: 42, loss: 0 })).status, 200);
+  assert.equal(lobby.games.get(id).seq, seq0 + 3);
+  const before = snapshot();
+  const refused = async (who, body, status, code) => {
+    env.advance(2500); // the per-player limit (30 a minute) refills between the cases
+    const r = await post(who, 'link', body);
+    assert.equal(r.status, status, `${JSON.stringify(body)}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, code);
+    assert.equal(snapshot(), before, `${JSON.stringify(body)} changed the room`);
+  };
+  for (const body of [{ rtt: 0, loss: 0 }, { rtt: 10001, loss: 0 }, { rtt: 50 }, { rtt: 50, loss: 101 }, { rtt: 50, loss: -1 }, { rtt: 1.5, loss: 0 },
+    { rtt: '50', loss: 0 }, { rtt: null, loss: 3 }, {}]) await refused(b, body, 400, 'bad_field');
+  await refused(b, { rtt: 50, loss: 0, name: 'x' }, 400, 'unknown_field');
+  await refused(b, { slot: 2, rtt: 50, loss: 0 }, 403, 'not_your_slot');
+  await refused(a, { slot: 1, rtt: 50, loss: 0 }, 403, 'not_your_slot');
+  // an outsider and a started game
+  const d = (await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Dee' } })).body;
+  const out = await call(lobby, 'POST', `/v1/games/${id}/link`, { token: d.token, body: { rtt: 50, loss: 0 } });
+  assert.equal(out.status, 403);
+  assert.equal(snapshot(), before);
+  // a flood of reports is limited per player (30 a minute, a burst of 10): the 11th at once is refused, the room unchanged
+  env.advance(60000);
+  for (let i = 0; i < 10; ++i) assert.equal((await post(b, 'link', { rtt: 42, loss: 0 })).status, 200);
+  const flood = await post(b, 'link', { rtt: 99, loss: 0 });
+  assert.equal(flood.status, 429);
+  assert.equal(lobby.games.get(id).slots[1].link.rtt, 42);
+  // the link goes with the slot: a kick empties it
+  assert.equal((await post(a, 'kick', { slot: 2 })).status, 200);
+  assert.equal(lobby.games.get(id).slots[2].link, null);
+  // it is not part of the START (each player's or the replay record)
+  for (const p of [b]) assert.equal((await post(p, 'ready', { ready: true })).status, 200);
+  const started = await post(a, 'start');
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal(JSON.stringify(started.body.start).includes('"link"'), false);
+  env.advance(60000);
+  const late = await post(b, 'link', { rtt: 43, loss: 0 });
+  assert.equal(late.status, 409);
+  assert.equal(late.body.error, 'started');
+});
+
+// LOBBYSEC-1 (PR #93's review, 2026-10-22): a lone UTF-16 surrogate is legal in a JSON escape but is not text. /v1/games echoed it, and the
+// client's JSON parser refuses the whole answer, so one guest could blank everyone's game list. Every text a player sends is refused (400).
+test('LOBBYSEC-1: names, maps, passwords, chat and AI names that are not well-formed Unicode are refused, so the game list stays parseable', async () => {
+  const lobby = new Lobby(fakeEnv(), configFromEnv(ENV));
+  const lone = '\ud800x';
+  const guest = await call(lobby, 'POST', '/v1/auth/guest', { body: { name: lone } });
+  assert.equal(guest.status, 400, JSON.stringify(guest.body));
+  assert.equal(guest.body.error, 'bad_field');
+  const { a, b } = await twoGuests(lobby);
+  for (const body of [{ name: lone, profile: PROFILE, setup }, { name: 'ok', profile: PROFILE, setup: { ...setup, map: lone } },
+    { name: 'ok', profile: PROFILE, password: lone, setup },
+    { name: 'ok', profile: PROFILE, setup: { ...setup, slots: [setup.slots[0], { state: 'hard', name: lone, faction: 2, color: 2, startPos: 2, team: 1 }] } }]) {
+    const r = await call(lobby, 'POST', '/v1/games', { token: a.token, body });
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.equal(r.body.error, 'bad_field');
+  }
+  const created = await call(lobby, 'POST', '/v1/games', { token: a.token, body: { name: 'ok', profile: PROFILE, setup } });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = created.body.game.id;
+  assert.equal((await call(lobby, 'POST', `/v1/games/${id}/join`, { token: b.token, body: { profile: PROFILE } })).status, 200);
+  const chat = await call(lobby, 'POST', `/v1/games/${id}/chat`, { token: b.token, body: { text: lone } });
+  assert.equal(chat.status, 400, JSON.stringify(chat.body));
+  const list = await call(lobby, 'GET', '/v1/games');
+  assert.equal(list.status, 200);
+  assert.ok(JSON.stringify(list.body).isWellFormed() && !/\\ud[89a-f]/i.test(JSON.stringify(list.body)));
+});
+
+// LOBBYSEC-1 (PR #93's review, 2026-10-22): text that is not well-formed Unicode (a lone UTF-16 surrogate) must never reach a shared answer. Intake
+// refuses it since a4953ead8; two older ways in remain: a session token signed before then (it carries the name; tokens last 30 days) and a game
+// stored before then (Durable Object storage). The token is refused (sign in again); the stored game's text is repaired (U+FFFD) when loaded.
+test('LOBBYSEC-1: a session token whose name is not well-formed is refused, and stored games are repaired on load', async () => {
+  const env = fakeEnv();
+  const lobby = new Lobby(env, configFromEnv(ENV));
+  const lone = '\ud800x';
+  const old = await lobby.makeToken({ id: 'guest:00112233aabbccdd', name: lone, kind: 'guest' });
+  const made = await call(lobby, 'POST', '/v1/games', { token: old, body: { name: 'ok', profile: PROFILE, setup } });
+  assert.equal(made.status, 401, JSON.stringify(made.body));
+  assert.equal(made.body.error, 'signed_out');
+  const { a, b } = await twoGuests(lobby);
+  const created = await call(lobby, 'POST', '/v1/games', { token: a.token, body: { name: 'ok', profile: PROFILE, setup } });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = created.body.game.id;
+  assert.equal((await call(lobby, 'POST', `/v1/games/${id}/join`, { token: b.token, body: { profile: PROFILE } })).status, 200);
+  assert.equal((await call(lobby, 'POST', `/v1/games/${id}/chat`, { token: b.token, body: { text: 'gl hf' } })).status, 200);
+  // a game as an older lobby stored it, with unpaired surrogates in its texts
+  const stored = JSON.parse(JSON.stringify(lobby.games.get(id)));
+  stored.name = lone;
+  stored.setup.map = `maps/${lone}`;
+  stored.slots[0].name = lone;
+  if (Array.isArray(stored.chat) && stored.chat.length) stored.chat[0].text = lone;
+  const reloaded = new Lobby(env, configFromEnv(ENV));
+  reloaded.load([stored]);
+  const list = await call(reloaded, 'GET', '/v1/games');
+  assert.equal(list.status, 200);
+  const text = JSON.stringify(list.body);
+  assert.ok(text.isWellFormed() && !/\\ud[89a-f]/i.test(text), text);
+  assert.ok(list.body.games.some((g) => g.id === id && g.name === '�x'));
+  const view = await call(reloaded, 'GET', `/v1/games/${id}`, { token: b.token });
+  assert.equal(view.status, 200);
+  assert.ok(JSON.stringify(view.body).isWellFormed() && !/\\ud[89a-f]/i.test(JSON.stringify(view.body)));
+});
+
+test('LOBBYSEC-1: stored nicknames that repair to the same text keep the first (no load failure); emoji (surrogate pairs) stay accepted', async () => {
+  const { validateSighting } = await import('../src/lobby.mjs');
+  const install = '0123456789abcdef0123456789abcdef';
+  const clean = validateSighting({ install, nicks: [{ nick: 'Odd\ud800', first_seen: 1, last_seen: 2 }, { nick: 'Odd\udbff', first_seen: 1, last_seen: 3 }],
+    first_seen: 1, last_seen: 3, signins: 2, platform: null, version: 'v0.4\ud800', devices: [] });
+  assert.deepEqual(clean.nicks.map((n) => n.nick), ['Odd�']);
+  assert.equal(clean.version, 'v0.4�');
+  const lobby = new Lobby(fakeEnv(), configFromEnv(ENV));
+  const guest = await call(lobby, 'POST', '/v1/auth/guest', { body: { name: 'Elf 🧝' } });
+  assert.equal(guest.status, 200, JSON.stringify(guest.body));
+  const game = await call(lobby, 'POST', '/v1/games', { token: guest.body.token, body: { name: 'Mordor 🔥', profile: PROFILE, setup } });
+  assert.equal(game.status, 200, JSON.stringify(game.body));
+  assert.equal(game.body.game.name, 'Mordor 🔥');
 });

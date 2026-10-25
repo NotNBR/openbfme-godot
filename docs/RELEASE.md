@@ -246,8 +246,10 @@ The repository is a build-time setting (`package.sh --repo`, default `Open-BFME/
 4. **Channels.** *Stable* offers non-prerelease releases. The pre-release channel offers all releases (non-draft,
    release-version tags); its id is `preview` (state.cfg, `--channel=preview`, the manifests). Since VERSION-1 the launcher shows
    stable as *Alpha* (the plain releases, "Alpha 0.4.5"; `--channel=alpha` is stable) and the pre-release channel as *Preview*
-   (RELNAME-1 had shown it as *Alpha*). The ids never changed, so a player's remembered pick and every launcher's default keep
-   working: both channels offer the plain releases. The two newest installed versions are kept, plus the user's pick.
+   (RELNAME-1 had shown it as *Alpha*). NIGHTLY-1 (owner, 2026-10-21): the two channels are shown as *Stable* and *Nightly*
+   (`--channel=nightly` is the pre-release channel), the plain releases keep their "Alpha 0.4.12" name (the game is in alpha), and
+   the nightly builds `v<x>.<y>.<z>-nightly.<n>` (*Nightly builds* below) are on the pre-release channel. The ids never
+   changed, so a player's remembered pick and every launcher's default keep working: both channels offer the plain releases. The two newest installed versions are kept, plus the user's pick.
    *Freeze warning:* when the newest manifest the launcher can get is signed with a date more than 60
    days ago, it shows a plain warning (an old list may be being served). It is not a block: a quiet
    project looks the same. The warning has its own line in the window. In round 2 it was folded into
@@ -536,6 +538,25 @@ the page: nothing found; the rule asks for a new bridge 5 releases earlier; the 
 The owner gave a **standing approval** (2026-10-09) to publish preview releases automatically, so testers' launchers pick up new
 builds as they become available. It covers the preview channel only; a stable release still needs the owner.
 
+**Candidate first, tag last (RELCAND-1, 2026-10-19).** A release first builds and tests a *candidate*: the exact public commit and the
+exact annotated tag it will publish, both made on the Deck and kept local. Only when every build, test and check has passed are they
+pushed, in one atomic push, and the artifacts that were tested are then sealed, signed and published as they are, never rebuilt. A
+failure before that push leaves nothing public and no version number used: the next run releases the same number. Before RELCAND-1
+the sync and the tag were pushed first and the build came after, so every build or test failure burned a number (tags cannot be
+deleted): v0.4.7, v0.4.8 and v0.4.10 went that way, and v0.4.11 stopped at the Mac build after Linux, Windows and HUD6 had passed.
+The order now:
+
+| step | what | public? |
+| --- | --- | --- |
+| 1 | checks, the Mac host's readiness, the public metadata audited | no |
+| 2 | the public tree audited; reviewed community pull requests merged on GitHub (GHPR-1); the candidate's public commit made locally | only the community merges |
+| 3 | the candidate's annotated tag made locally (intent step `candidate`) | no |
+| 4, 4m | the Linux / Windows / Mac builds, package.sh, test_export.sh, the Windows start + HUD6, from a checkout of the local tag | no |
+| 5, 6, 7 | the Deck's checks (package.sh --verify ...), sealing, the manifests and their signatures, the notes | no |
+| 7c | the pre-flight: publish_release.sh's dry run on the signed folder; `candidate.ok` records it | no |
+| P | main unchanged? the tag free? the version still next? Then **one** `git push --atomic` of the commit to main and the tag | yes |
+| 8 | publish the candidate's folder (`publish_release.sh --execute`), read back | yes |
+
 `tools/release/autorelease.sh <archive sha>` runs on the Deck and needs no prompt. The coordinator starts it with an
 `archive-legacy-codebase` commit that passed the full gate, after recording that gate:
 `tools/release/record_gate.sh <sha> <remote-verify name>`. That script reads the run's RESULT lines (`remote-verify.sh --result`) and
@@ -559,7 +580,7 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
    - An open release intent (below) is reconciled first, and while one is open no other sha is accepted.
 2. **Sync.** The public `main` gets the sha's tree without `archive/` and the paths of its `tools/release/sync_exclude.txt`, with the
    README line about the legacy code and nothing else (the sync recipe, `autorelease.py sync-tree`). The public `main` has no `PRIVACY.md` since its PR #34; a file that exists only on the
-   public side is not carried (the sync PR deletes it if it comes back), so a public-only file needs a pipeline change first. Before anything is pushed, that tree passes the privacy audit (`autorelease.py audit-tree`):
+   public side is not carried (the sync commit deletes it if it comes back), so a public-only file needs a pipeline change first. Before anything is pushed, that tree passes the privacy audit (`autorelease.py audit-tree`):
    - only the public top-level entries (`PUBLIC_TOP`);
    - no `workspace`, `archive` or `reference` folder anywhere;
    - no file that one of the tree's `.gitignore` rules ignores, even a tracked one;
@@ -577,18 +598,21 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
    - **file names**: no tracked path (or member name) holds a private path (an absolute home or Windows user folder path, a `home/` or `Users/`
      component) or the user's name as a component.
 
-   It is then one commit on top of `main`, pushed as `sync/<date>-<sha>`, a PR titled `Sync the rebuild: <date> (<summary>)`, merged
-   with a merge commit; then the branch is deleted. A merge whose answer was lost is read back. The merge commit must have exactly the
-   audited tree. If `main` already has it, there is no PR and `main` is released as it is.
+   It is then one commit on top of `main`, made on the Deck with exactly the audited tree and the message `Sync the rebuild: <date>
+   (<summary>)` (the player items, the community credits, the verification line), and **not pushed yet** (RELCAND-1: there is no sync
+   branch and no sync PR any more: GitHub's merge commit cannot be known before it exists, and the builds embed the public commit). If
+   `main` already has the tree, there is no new commit and `main` itself is the candidate's commit.
 3. **Version and tag.** The next plain number (VERSION-1, "Plain version numbers"): v0.4.5 after the alpha builds, then the highest
    plain tag on origin with its last number + 1 (`--minor`: the middle number + 1); it must be above every release tag on origin in
    the launcher's order, or the run stops. Until v0.4.0-alpha.4 it was `v0.4.0-alpha.<n>` with bridges (RELNAME-1), before that
-   `v0.3.0-preview.<n>`. The release is named "OpenBFME Alpha 0.4.5" (`autorelease.py title`). An annotated tag on the merged public commit, pushed (a push whose answer was lost is checked on the remote).
-   A commit carries one release tag at most: a second one would make `git describe`, the build's version, pick either. A failed run
-   leaves its pushed tag on origin with no release, and the tag cannot be deleted: the repository's ruleset forbids deleting tags
-   (GH013). It does not need to be: the run's release intent stays open, and the next real run (for the same sha or a later one)
-   reconciles it and resumes that same version from that tag (see *The release intent*). Never delete the tag.
-4. **Build and test** on the build host, from a clean checkout of the tag, through the operator's builder (`OPENBFME_RELEASE_BUILDER`,
+   `v0.3.0-preview.<n>`. The release is named "OpenBFME Alpha 0.4.5" (`autorelease.py title`). An annotated tag on the candidate's public commit, made on the Deck and **pushed last** (step P).
+   A commit carries one release tag at most: a second one would make `git describe`, the build's version, pick either. A run that fails
+   before step P deletes its local tag: nothing of the version left the Deck. A run that fails after step P leaves its pushed tag on
+   origin with no release, and the tag cannot be deleted: the repository's ruleset forbids deleting tags (GH013). It does not need to
+   be: the run's release intent stays open, and the next real run (for the same sha or a later one) reconciles it and resumes that same
+   version from that tag (see *The release intent*). Never delete the tag.
+4. **Build and test** on the build host, from a clean checkout of the (still local) tag: `git describe` is the version, and the
+   libraries, VERSION files and build records name the tag and the public commit that step P will push. Through the operator's builder (`OPENBFME_RELEASE_BUILDER`,
    kept outside this repository, PUBLISH-2; it has the interface of the tests' stand-in, `<builder> <checkout> <version> <out dir>`):
    - the Linux GDExtension (`build_linux.sh`: with Godot 4.7's own Linux SDK, buildroot `godot-2023.08.x-4`: GCC 13.2 on a glibc 2.28
      sysroot, run on the host, so it needs GLIBC 2.28 at most and loads wherever Godot 4.7 runs, Ubuntu 20.04+ and Debian 10+: lane DEP-1;
@@ -602,7 +626,10 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
      private `APPDATA`. It must exit 0, print `GAME screen: MainMenu.apt` and load 4657 templates (`windows_start_check.sh`); the
      folder is removed.
 
-   The packages are copied back to the signing machine.
+   The packages are copied back to the signing machine. The Mac package (MACREL-1) is built from the same local tag on the Mac host;
+   its checkout there is a fresh repository that fetches the tag alone over git's transport (`file://`): v0.4.11's local clone
+   (`git clone --no-checkout <host>/repo.git`) hardlinks the host repository's files and died with "hardlink different from source"
+   while another job wrote a pack there (`test_macos_release.py` runs the script against a local stand-in Mac with such a writer).
 5. **The signing machine's checks of what came back.** Everything from here on runs the scripts of a trusted checkout: a fresh worktree
    of the tag made on the signing machine. The build host never writes to it. Its tree must be the audited sync tree of the archive sha
    (`autorelease.py sync-tree` of the sha, recomputed). Every file of its `tools/release/` and `tools/precommit.py` must also be
@@ -619,7 +646,7 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
 6. **Manifest and signature** on the signing machine: the trusted checkout's `make_manifest.py` and `sign_manifest.py --key <release
    key>`. The key never leaves the signing machine: no GitHub Actions, no secret, not the build host.
    GitHub only hosts the source and the assets.
-7. **Public metadata** (round 6): the sync commit's message, the PR title and body, the merge subject, the tag message, the release
+7. **Public metadata** (round 6): the sync commit's message, the tag message, the release
    title and the release notes go to the public repository too. They are written before anything is pushed, and they must pass the
    privacy rules (`autorelease.py audit-text`). A hit stops the run: nothing is redacted into them. The rules, checked on the text as
    written, without Markdown escapes and NFKC-normalised:
@@ -661,7 +688,28 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
    - URLs are removed;
    - `@` and `#` are written full-width (GitHub links neither), and `GH-<n>` gets a non-breaking hyphen;
    - the Markdown (the notes, the PR body) escapes every special character, with `& < >` as HTML entities.
-9. **Publish**: the trusted checkout's `publish_release.sh <dir> --notes-file <notes> --execute --confirm-tag <tag>`. `--confirm-tag`
+9. **The pre-flight and the push** (RELCAND-1). The trusted checkout's `publish_release.sh` runs as a dry run on the sealed, signed
+   folder (the manifest against the archives, both signatures under `launcher/release_key.pub`, the local tag on the manifest's commit,
+   the privacy gate on the tag's tree, the notes, the name and every asset). `$WORK/candidate.ok` then records the candidate: the sha,
+   the version, the tree, the public commit, the tag object, and the SHA-256 of every file of `pkg/` and of `notes.md`. Then, and only
+   then, the push:
+   - `main` on the remote must still be the commit the candidate was made on (when it already had the tree: must still hold it). If it
+     moved (someone pushed, a community pull request was merged by hand), the candidate is **stale**: its commit has the old `main` as
+     its parent and is not what `main` would get, and every build embeds that commit, so everything would have to be redone. The run
+     stops with `STALE CANDIDATE` and pushes nothing; the next run makes a new candidate on the new `main`, with the same number;
+   - the tag must not be on the remote, and (outside a resumed intent) `release-version` must still give this version;
+   - the pre-push hook's own check (`public_push_guard.py`) runs first, so a privacy refusal stops the run before anything is sent;
+   - one `git push --atomic <remote> <public commit>:refs/heads/main refs/tags/<version>` (only the tag when `main` already had the
+     tree): both refs move or neither does. A push that `main` moved under is refused as a non-fast-forward, and the tag with it. An
+     uncertain answer is read back from the remote: the candidate's tag object, it went through (then `main` must hold the public
+     commit); no tag and `main` moved elsewhere, it can never land (nothing public, the number free); no tag and `main` unchanged
+     proves nothing (Sol r1: a server can still be applying a push whose client is gone), so the intent stays at step `pushing` with
+     the local tag, and the next run decides.
+
+   The public pull request CI (PUBLICCI-1) runs on that push to `main`. With a required status check on `main` (the owner's settings
+   below) the push needs the release account's bypass on the ruleset, as the sync PR's immediate merge did.
+10. **Publish**: the trusted checkout's `publish_release.sh <dir> --notes-file <notes> --execute --confirm-tag <tag>` on the candidate's
+    folder, nothing rebuilt. `--confirm-tag`
    works for preview tags only; a stable release still waits for the typed tag. After every check of the dry run:
    1. The tag on GitHub must be the manifest's commit, and no release may exist for it.
    2. A draft is created through the API, the release's assets are uploaded, and the draft is read back: exactly those assets, uploaded,
@@ -681,24 +729,43 @@ ref, so a tag or branch named like the abbreviation cannot stand in for it.
    homepage=<url>`) and reads it back. A failure there is an `AUTORELEASE WARNING` line in the summary, not a failed release: the
    release is already out; set the link by hand. A release finished by reconciling an open intent does not move the link (the next
    release does). The README's Download button links to the releases list, whose top entry is the newest preview.
-10. **Discord**: `bfme-community` has no release announcement command yet; the run logs that and posts nothing.
-11. **Report.** A one-line summary (`AUTORELEASE OK|SKIP|FAIL ...`), also appended to `autorelease-summary.log` in
+11. **Discord**: `bfme-community` has no release announcement command yet; the run logs that and posts nothing.
+12. **Report.** A one-line summary (`AUTORELEASE OK|SKIP|FAIL ...`), also appended to `autorelease-summary.log` in
     `$OPENBFME_RELEASE_LOGS`, and the log `autorelease-<version>.log` there.
     The state records the released archive sha.
 
 On a failure it stops at that step and publishes nothing further:
-- no release is ever deleted: a draft stays for the next run to resume, or for the operator;
-- a pushed tag stays when no release was created for it (tags cannot be deleted, GH013); the run says so, and running autorelease.sh
-  again resumes the same version from that tag through the open intent;
+- before the push (anything up to the pre-flight, or a stale candidate): the local tag and the candidate's intent are deleted, nothing
+  of the version is public (the run says `nothing was pushed: ... <version> is not used and the next run releases it`); only the
+  community merges of step 2, if any, stay merged, and the next run takes them as already merged and credits them;
+- after the push: no release is ever deleted: a draft stays for the next run to resume, or for the operator; a pushed tag stays when no
+  release was created for it (tags cannot be deleted, GH013); the run says so, and running autorelease.sh again resumes the same
+  version from that tag through the open intent, publishing the candidate's own folder when `candidate.ok` still verifies;
 - nothing is retried.
 
-**The release intent.** A run that has started to change GitHub leaves a record of it:
-- Before `main` moves or a tag is pushed, `~/.local/state/openbfme-release/intent` records the sha, the version, the audited tree,
-  the work folder, the public commit once it is known, and the step (`sync`, `tag`, `tagged`, `publishing`).
+**The release intent.** A run leaves a record of its candidate and of what it changed on GitHub:
+- Before the candidate's local tag is made, `~/.local/state/openbfme-release/intent` records the sha, the version, the audited tree,
+  the work folder, the candidate's public commit, the `main` it was made on, and then the tag object. The step is `candidate` (nothing
+  public), `pushing` (the push was sent, its outcome not known yet), `tagged` (the tag is on the remote) or `publishing`. Intents of
+  the order before RELCAND-1 also had `sync` (a sync branch pushed) and `tag` (the sync PR merged, the tag not pushed yet).
 - `intent.rid` next to it holds the id of the draft `publish_release.sh` created (`--id-file`).
 - A successful run closes the intent when it records the release in `last-released`.
 
-Every real run first reconciles an open intent through GitHub API reads. If a read fails, it stops (fail closed). The intent file
+Every real run first reconciles an open intent through GitHub API reads. If a read fails, it stops (fail closed).
+A `candidate` or `pushing` intent is decided by the remote's tag first:
+- **not on the remote, step `candidate`**: the push was never sent (the step becomes `pushing` before it is). Its local tag is
+  deleted (only when it is the candidate's: on its public commit, its recorded tag object; another tag of that name stops the run), the
+  intent is discarded, and the run goes on with the sha it was asked for, under the same version number. This is the run that was
+  killed during its build;
+- **not on the remote, step `pushing`**: discarded the same way only when `main` has moved elsewhere since (the candidate's push, a
+  fast-forward of the `main` it was made on, can never land). Otherwise the very same candidate is pushed again (the same commit and
+  tag object, so a push that landed meanwhile makes it a no-op), after every field is checked (`validate_intent`), its local tag is
+  its tag object, its commit is one commit on its `main`, and `candidate.ok` verifies (the candidate is known to have passed); a
+  mismatch stops the run with nothing pushed. Then it goes on as `tagged`;
+- **on the remote, the candidate's own tag object**: the push happened and its answer was lost; the intent goes on as `tagged`. Any
+  other tag object stops the run (the intent does not hold).
+
+Then, for the other steps: The intent file
 is untrusted: before it records a completion or resumes, every field is checked, and a mismatch stops the run with nothing changed.
 - the sha is a commit on the archive branch, has its own gate record, contains `MIN_CONTROL`, and descends from the last released
   sha;
@@ -714,12 +781,17 @@ The cases:
 - **A published release for the intent's version**, with the assets of the intent's package folder (`release_assets.py`), is
   recorded as released and the intent closes. The run then goes on with the requested sha. This is the case where an earlier run's
   last read-back was lost, and it is what stops a later run from giving older source a newer version.
-- **A draft** that is the intent's own (`intent.rid`) is resumed: the packages are rebuilt and checked again, then
-  `publish_release.sh --resume-id` finishes the draft. Another draft stops the run.
-- **A tag without a release**, or no tag yet, resumes that same sha and version. The tag already on the remote is used, never a
-  second one.
+- **A draft** that is the intent's own (`intent.rid`) is resumed: the candidate's folder (or, when `candidate.ok` does not verify, a
+  rebuild at the pushed tag, checked again) goes to `publish_release.sh --resume-id`, which finishes the draft. Another draft stops the
+  run.
+- **A tag without a release** resumes that same sha and version. The tag already on the remote is used, never a second one. When
+  `$WORK/candidate.ok` still verifies (the same sha, version, tree, public commit and tag object, exactly the recorded files with their
+  SHA-256), that folder is published as it is (`published as it is, not rebuilt`); otherwise the packages are built and tested again at
+  the pushed tag (`candidate.ok does not verify`), as every resume did before RELCAND-1.
+- An intent of the earlier order at step `tag` (its sync merged, no tag) becomes the candidate: that public commit is built and tested
+  and only the tag is pushed. At step `sync` its sync branch, if still on the remote, is left for the operator (below).
 
-While an intent is open, the run resumes the intent's sha whatever sha was asked for. If it was asked for another sha, it exits 3
+While a `tagged` or `publishing` intent is open, the run resumes the intent's sha whatever sha was asked for. If it was asked for another sha, it exits 3
 (`AUTORELEASE RESUMED ONLY`), and the next run takes the requested one. `--dry-run` and `--plan` refuse to start while an intent is
 open.
 
@@ -731,7 +803,9 @@ open.
   Either delete the draft by hand and run again (the run resumes the release), or finish it by hand.
 - *An intent that does not hold* (a field does not match): find out how it changed. Correct the file, or remove `intent` and
   `intent.rid` once the release's real state is known (and record a published release in `last-released` by hand).
-- *An earlier run's sync branch on the remote, not merged*: close its PR, delete the branch, and run again. The run makes a new one.
+- *An earlier run's sync branch on the remote, not merged* (the order before RELCAND-1): close its PR, delete the branch, and run
+  again. The run makes a candidate commit instead.
+- *A local tag of the candidate's version that is not the candidate's*: delete it by hand (it never reached the remote), run again.
 - *Two or more releases for one version*: remove the extra releases on GitHub, then run again.
 - *A release tag on the public commit that no intent explains*: the intent of the run that pushed it was lost. Tags cannot be deleted
   (the repository's ruleset, GH013), so write the intent back by hand: `sha=<archive sha>`, `version=<the tag>`, `tree=<the public
@@ -817,7 +891,7 @@ committer who encodes data on purpose, for example as base64 or hex text, or by 
 that, and the commit gate (`tools/precommit.py`) and review cover the committers. A deliberate leak through text is out of scope.
 
 `--dry-run` runs everything without publishing, and since round 3 it writes nothing to GitHub:
-- the sync branch push, the PR, the merge and the tag push are printed as `WOULD RUN: ...`;
+- the community merges and the one atomic push are printed as `WOULD RUN: ...`;
 - the tag stays local and is deleted at the end;
 - the manifest is signed with a throwaway key;
 - `publish_release.sh` runs as a dry run.
@@ -834,6 +908,66 @@ The tests (`tools/release/test_autorelease.py`) run real mode end to end and eac
 
 The reference PC's gate (`verify.sh`, run by `remote-verify.sh`) also cross-builds Windows (`build_windows.sh --no-export`: the tests, the
 peer and the DLL). A change that breaks the Windows build fails the gate.
+
+### Nightly builds (NIGHTLY-1)
+
+Owner, 2026-10-21: "build the pulled in PRs every night with patch notes and what to test for for people ... stable vs nightly ... but
+the game is still in alpha". Players pick **Stable** (the numbered releases, "Alpha 0.4.12", made by hand with the owner's OK as before)
+or **Nightly** (everything merged, built every night) in the launcher's Settings.
+
+- **When.** The operator's user timer `openbfme-nightly.timer` on the coordinator's machine runs the private wrapper, which loads the
+  release environment and runs `tools/release/nightly.sh`. NIGHTLY-1 ran it at 03:00 US Eastern; since NIGHTLY-2 (owner, 2026-10-23: "i
+  would like the nightly to run twice a day on actions") it runs at **07:00 and 19:00 UTC**. That takes the archive branch's head, makes
+  a clean detached checkout of it and runs ITS `autorelease.sh <head> --nightly`. A run with nothing new under the release paths since
+  the last nightly (the morning's or the evening's) is skipped (`AUTORELEASE SKIP`, exit 0).
+- **Builders (NIGHTLY-2).** The wrapper sets `OPENBFME_RELEASE_{MAC,LINUX,WINDOWS}_BUILDER=actions` for the nightly only (switch-over step
+  (a) below; the stable releases stay on the build hosts): macOS is built on `macos-15`, Linux and Windows on GitHub and on the build
+  host, whose libraries must match GitHub's. The signer stays the Deck (`deck`); the nightly gate subset and the package tests stay on
+  the build host (they need the game files).
+- **Version.** `v<next plain>-nightly.<n>` (`autorelease.py nightly-version`). NIGHTLY-1 made one a UTC date, n = `YYYYMMDD`
+  (v0.4.12-nightly.20261022). Since NIGHTLY-2, n = `<YYMMDD><s>00`, 9 digits (the launcher's limit), s = `1` for the **morning** build
+  (a run started 00:00-11:59 UTC) and `2` for the **evening** one (12:00-23:59 UTC); one nightly per half day, and a nightly is never
+  below an existing release tag. Any 9-digit number is above every 8-digit date, so the order is run order:
+
+  | tag | new launcher (and the GitHub title, "OpenBFME ...") | a launcher shipped before NIGHTLY-2 |
+  | --- | --- | --- |
+  | v0.4.12-nightly.20261022 | Nightly 0.4.12 (2026-10-22) | Nightly 0.4.12 (2026-10-22) |
+  | v0.4.12-nightly.261023100 | Nightly 0.4.12 (2026-10-23, morning) | Nightly 0.4.12 build 261023100 |
+  | v0.4.12-nightly.261023200 | Nightly 0.4.12 (2026-10-23, evening) | Nightly 0.4.12 build 261023200 |
+
+  The final `00` is on purpose: NIGHTLY-1's `semver.gd` reads the last two digits of a nightly number as the day, and day 00 is no
+  date, so a launcher already installed shows a build number, never a wrong date (checked for every date to 2099 in
+  `launcher/tests/unit_test.gd` and `test_nightly.py`). All nightlies are below the next plain release, which replaces them on both
+  channels. Launchers from before NIGHTLY-1 do not parse the word `nightly` and skip those releases (they stay on the plain releases until
+  they update themselves).
+- **On GitHub.** Each nightly is its own pre-release; after publishing only the newest 7 nightly releases are kept
+  (`nightly_notes.py prune`; the tags all stay, GH013). This is required: every launcher reads one page of 30 releases, so piled-up
+  nightlies would push the stable releases off it. A nightly also moves the public main (its candidate commit, as a release does) and
+  lands the reviewed community pull requests whose ports it carries (GHPR-1). A public main that already carries a release tag gets a new
+  commit for the next release, also with the same tree (two release tags on one commit make the build's version ambiguous).
+- **Gate.** No gate record: the full gate is the merge queue's job. The nightly's candidate is checked as it is built (a failure
+  anywhere publishes nothing, and the next run uses the same number): the Linux, Windows and macOS builds and packages with their audits;
+  `test_export.sh` on the Linux package (a skirmish start, the smoke, crash and fresh-user runs); the launcher's unit and
+  layout tests (`tools/release/test_launcher.py -k 'unit_rules or layout'`; the whole file is the merge gate's) and `godot/tests/end_test.gd` (a skirmish to its end) on the build host; the Windows start and the
+  help-box run of the Windows package (under Wine on a Linux host, judged by `windows_start_check.sh` / `windows_hud6_check.sh`); the
+  Deck's package checks; the metadata, tree and asset privacy audits with the private denylist. The builder is the operator's
+  (`OPENBFME_RELEASE_BUILDER`, called with `AR_NIGHTLY=1`); it runs on the dedicated release CI host, never on a player's PC.
+- **State.** `$OPENBFME_RELEASE_STATE/nightly/` holds the nightly's intent, `last-released` and `releases.log`, so a stable release's
+  version, notes baseline and intent are untouched; the lock and the community pull request lists are shared. The first nightly's notes
+  start at the last stable release.
+- **Notes** (`tools/release/nightly_notes.py`): the first-parent changes since the last nightly (`nightly/last-released`: the previous
+  run that published, morning or evening, not the previous day), and for each the community pull requests
+  it carries (a `(cherry picked from commit X)` line whose X GitHub links to a pull request of the repository: its number and author).
+  A change with `Release-note:` lines is described by exactly those (`none` hides it), and its `Test:` lines are its test steps. For the
+  rest, the operator's model command (`OPENBFME_NIGHTLY_LLM`) writes one plain sentence and 1 to 6 concrete test steps per change, and
+  per community pull request. Each text is checked (the patch notes' jargon rule, no markup, mentions, references or links, the length
+  limits); a draft that fails is sent back once with the problems, then the run fails. The page: the build, how to get it, the download
+  table, **Thanks to our community** (each pull request: "Thanks to @login (#n): ..."), What's new / Changed / What's fixed (community
+  first, credited), **What to test** (numbered, community first), how to report a problem, the known issues. The logins and numbers come
+  from GitHub's record; they are the only mentions and references on the page. The whole page passes `audit-text` with the private
+  denylist like every published text.
+- **On a failure** the wrapper leaves `logs/nightly-<date>-<HH>.done` (`HH` the run's UTC hour; `logs/nightly-<date>.done` before NIGHTLY-2) with the exit code and the coordinator's unseen list shows
+  `NIGHTLY FAILED`. A dry run (`nightly.sh --dry-run`) builds and checks everything and publishes nothing.
 
 ### The Mac package (MACREL-1)
 
@@ -891,6 +1025,99 @@ themselves from it: the launcher's macOS mode (mac-release-1, `launcher/scripts/
   The stand-in build (`OPENBFME_RELEASE_STANDIN/build-mac`) returns a package that passes the strict audit, and
   `OPENBFME_RELEASE_MAC_SSH` (stand-in mode only) replaces ssh for the readiness check.
 
+### Release builds on GitHub Actions (MACACT-1)
+
+Since MACACT-1 a release can have its platforms built on GitHub's own runners instead of (macOS) or beside (Linux, Windows) the build
+hosts, so a release no longer needs the owner's MacBook awake on a known address (a nightly shipped without macOS on 10-21/22 for that).
+Each platform has its own switch; **the default is `host` for all three** until the owner switches:
+
+| variable | `host` (default) | `actions` |
+| --- | --- | --- |
+| `OPENBFME_RELEASE_MAC_BUILDER` | the Mac build host (step 4m, `build_macos_release.sh`) | the package is built on `macos-15` (arm64) by `package_macos.py`, the Mac host is not asked |
+| `OPENBFME_RELEASE_LINUX_BUILDER` | the build host's GDExtension | GitHub builds it too (`build_linux.sh`, ubuntu-24.04) and the build host's, inside the returned package, must be byte for byte GitHub's |
+| `OPENBFME_RELEASE_WINDOWS_BUILDER` | the build host's GDExtension | the same with `build_windows.sh --no-export` (ubuntu-24.04, the pinned llvm-mingw) |
+
+The Windows DLL is built on `ubuntu-24.04`, not on a `windows-2022` runner: `build_windows.sh` is a Linux-hosted cross build with a pinned
+llvm-mingw (`...-ubuntu-22.04-x86_64`), and only the same toolchain binary gives bytes the release can compare with the build host's; a
+Windows-hosted llvm-mingw is another compiler binary with other paths.
+
+Switch by setting the variable in the operator's release environment (`release.env`), e.g.
+`export OPENBFME_RELEASE_MAC_BUILDER=actions`; any value but `host` / `actions` stops the run before anything happens.
+`OPENBFME_RELEASE_SKIP_MAC=1` stays the one way to ship without macOS (it wins over the Mac builder).
+`OPENBFME_RELEASE_ACTIONS_TIMEOUT` (default 7200 s) bounds one GitHub build.
+
+**The flow** (`autorelease.sh`, `tools/release/actions_build.py`, `.github/workflows/release-package.yml`):
+
+1. `actions-check` (with the other step 1 checks, before anything is pushed): GitHub knows the workflow and it is active. GitHub dispatches
+   only a workflow it has seen: one that was on `main` once, or registered by a push (MACACT-1 registered it once from a probe branch on
+   2026-10-22; the first release after this lane carries it to `main` for good).
+2. `actions-dispatch` (step 4a, after the candidate's tag is made locally and the trusted checkout is checked): the candidate's public
+   commit, whose tree passed the privacy audit (step 2), the `.github` policy and the pre-push guard, is pushed to
+   `refs/heads/staging/<version>` of the public repository (a leftover from a killed run is replaced; both pushes carry a lease, so a
+   concurrent push is never overwritten). Only the commit goes: the tag stays on the Deck until step P. GitHub can only build what it
+   has, so this push is the release's second write to GitHub before the candidate passed (after the GHPR-1 merges); it makes public a
+   commit that will be public anyway, and a dry run pushes it too (and deletes it). Then one `workflow_dispatch` per platform, with the
+   commit, the version and a fresh 32-hex request id, through the REST API with `return_run_details`: GitHub answers with the id of the
+   run this very dispatch created, recorded in `$WORK/actions.json`. Nothing is looked up by name or time.
+3. The runs build while the build host builds (step 4). `actions_build.py collect` then waits for each recorded run (step 4m for macOS,
+   step 5x for Linux / Windows) and accepts it only when: it is the recorded run; event `workflow_dispatch`; the workflow file
+   `release-package.yml`; on `staging/<version>` at the candidate commit (`head_sha`); actor and triggering actor the release account
+   (`gh api user`); attempt 1 (a re-run could upload other files); the title naming platform, version and request; concluded
+   `success`; only the platform's job ran. It must have exactly one artifact, named `<stem>-<request>`, made by that run at that commit,
+   not expired; the downloaded ZIP's SHA-256 and size must be GitHub's recorded digest and size; the ZIP must hold exactly the platform's
+   files, plain names, no folders. A failed, refused or timed-out run (cancelled at the timeout) **fails the release**: no fallback to a
+   host (CLAUDE.md, "no fallbacks").
+4. The Deck then checks the result like a host build. macOS: the exact package set, the strict audit, the checksum, `VERSION` naming the
+   tag and the public commit, the launcher's key and repository (`make_macos_manifest.py --verify-package`). Linux / Windows
+   (`actions-compare`): the library inside the build host's returned package must be byte for byte GitHub's, else the release fails
+   ("a GitHub build can't silently differ from ours"; it also catches a build host that differs from GitHub). The packages, `test_export.sh`
+   and the native Windows start stay on the build hosts: they need the game files, which never go to GitHub.
+5. `actions-unstage`: the staging branch is deleted (lease on the candidate commit: a branch someone moved is left and named, and the
+   release fails). On any failure the cleanup cancels unfinished runs, best effort (a dispatch whose answer was lost is found by the request id it
+   recorded first) and deletes the branch too. The staging push never carries a tag (`--no-follow-tags`, whatever `push.followTags` says).
+6. Only then the seal, the manifests and the signatures, all on the Deck (step 6), the pre-flight (7c) and the push of `main` and the tag
+   (P). Nothing is published, and nothing is signed, before every GitHub build was verified.
+
+**The security model.** What runs on GitHub: the public workflow on the public commit (exactly the tree that is published), on GitHub-hosted
+runners, with `permissions: contents: read`, no secrets, no caches (a fresh build; no cache another workflow could have written), actions
+pinned by commit sha, every download (Godot 4.7.2, its templates, ninja, the Godot Linux SDK, llvm-mingw) checked against a pinned hash, the
+inputs reaching the shell only through the environment and checked first. It produces unsigned build outputs, kept 7 days as run
+artifacts (public, like the code they come from; the Windows PDB, private, is never uploaded). What never leaves the Deck: the release key
+and everything signed with it (`payload.json` signatures, `manifest.json`, `manifest-macos.json` and their `.sig`), the private denylist,
+the release state. The Deck's `gh` token needs `repo` and `workflow` (pushing a commit that carries `.github/workflows`, dispatching,
+reading runs and artifacts); the runners get only their own read-only `GITHUB_TOKEN`. Who can tamper: someone with write access to the
+public repository can dispatch runs or push to `staging/*`; the Deck accepts only its own run at its own commit, so either fails the
+release, never changes what is published. A compromised GitHub runner image could build a different binary: for Linux and Windows the
+byte comparison with the build host catches it; for macOS the Deck's checks cover the package's structure, version, commit, key and
+repository, not the compiled code (as with the Mac build host before). Suggested for the owner: a ruleset that limits creating
+`refs/heads/staging/*` to the release account.
+
+**Reproducibility across the two builds** (measured 2026-10-22: probes on one CI host, then the dry run below on the nightly builder's host).
+`build_linux.sh` and `build_windows.sh` set `SOURCE_DATE_EPOCH` to the commit's time (the build date the library records was the build
+day). The libraries record source paths relative to the build folder, so the workflow uses the release builder's layout (the checkout in
+`src/`, the build folders beside it as `src.linux` / `src.win`), and builds the DLL through ccache with `CCACHE_BASEDIR` above both, as
+the build hosts do: ccache's base_dir rewriting is what makes the DLL's `__FILE__` strings `..\..\src\engine\...` (without it the first
+probe differed in 800 bytes of paths and in size). The runner's checkout drops the git-lfs filter: `.gitattributes` marks `*.png` as LFS
+while the public tree holds the four PNGs as plain blobs, and a git-lfs clean filter makes such a checkout read as dirty (`git describe
+--dirty`; the build hosts have no git-lfs; where a system gitconfig has it, the release scripts run with `GIT_CONFIG_NOSYSTEM=1`).
+
+| platform | GitHub Actions vs the build host, same commit | why |
+| --- | --- | --- |
+| Linux `.so` | byte for byte identical (two build hosts) | the same pinned Godot SDK; prefix maps; commit-dated build record |
+| Windows `.dll` | identical but for the 16-byte CodeView GUID (`pdb_tools.py same-build`) | lld derives the GUID from the PDB, which holds the build folder's absolute path (`/home/<user>/...` vs the runner's); the GUID only pairs the DLL with its private PDB for crash symbols |
+| macOS zip | not byte-identical (compared by hand, not a release step): same file set; identical `VERSION`, both `.pck`s, `Info.plist`s, icons, licences, README; the two app executables identical up to their code signature (only `__LINKEDIT` / `LC_CODE_SIGNATURE` sizes and the signature blob differ); the GDExtension dylib and the swap helper differ, and so do the two `CodeResources` | the compilers differ: the Mac build host has Apple clang 21 / macOS SDK 26.4 (Command Line Tools on macOS 26.6), `macos-15` has Xcode 16.4, Apple clang 17 / SDK 15.5; the ad-hoc signatures come from different `codesign` versions (different sizes); `CodeResources` hashes the differing files |
+
+So the comparison is a release step for Linux and Windows (`actions-compare`), and not for macOS: two Mac builds of one commit do not
+match today, and the Mac host would have to be awake to compare, which is what this lane removes.
+
+**The proof** (2026-10-22, lane head `185e35641`, a stable dry run with all three builders on `actions`, on the nightly builder's
+hosts, notes since `afedb8cf9`): staging/v0.4.12 at the candidate `a3455cb23d`, runs
+[macOS 39806291285](https://github.com/Open-BFME/openbfme-godot/actions/runs/39806291285),
+[Linux 39806296840](https://github.com/Open-BFME/openbfme-godot/actions/runs/39806296840),
+[Windows 39806302508](https://github.com/Open-BFME/openbfme-godot/actions/runs/39806302508); the Mac package passed the Deck's checks, the
+Linux library was the build host's byte for byte, the DLL the build host's but for the GUID, the staging branch was deleted, `AUTORELEASE DRY RUN OK`; no tag,
+no release, `main` unchanged.
+
 ### The updater's threat model
 
 The launcher downloads and runs code, so the release key is its root of trust. Each threat below is
@@ -921,7 +1148,9 @@ covered by the listed defence:
   once.
 - **A crash while a game version is replaced.** The old folder is kept until the new one is in place.
   `recover()` finishes or undoes the replacement at the next start.
-- **The private key.** It is offline, never in the repository or CI, and stored with mode 600.
+- **The private key.** SIGNKMS-1 replaces this with two keys: the KMS key that signs on GitHub Actions and the Deck key as the
+  recovery key ("Release signing" below has their threat model). Until the transition starts, the Deck key is the only one.
+  It is offline, never in the repository or CI, and stored with mode 600.
   - If it is lost: no new releases can be installed by existing launchers. Testers download a new
     launcher by hand.
   - If it leaks: an attacker with the key and the GitHub account can ship code. The response is a new
@@ -930,6 +1159,237 @@ covered by the listed defence:
   - There is no revocation list.
 - **Out of scope.** Anyone who can write the launcher's or the user data folder can already replace the
   launcher. Code-signing of the executables (Authenticode) does not exist yet.
+
+### Release signing (SIGNKMS-1)
+
+Owner, 2026-10-22: "the nightly can sign automatically, that's fine, let's switch". The release key moves from the Deck into AWS KMS,
+and the release workflow on GitHub Actions signs with it. Stable releases still need the owner: his approval of the GitHub
+environment `stable` comes before the KMS key signs.
+
+**The keys.** `launcher/release_keys.pub` is the trusted list every launcher and game is built with (`package.sh`,
+`build_launcher.sh` and `package_macos.py` write it into `build_info.json` as `release_keys` and into the game's
+`release_trust.gd` as `RELEASE_KEYS`). Each line holds a key in 64 hex digits and a label:
+
+| label | where the private half lives | signs |
+|---|---|---|
+| `deck-2026` | the Deck key: on the key host during the transition, then only as an encrypted offline backup. It is also `launcher/release_key.pub`, which every launcher before this lane trusts. | raw Ed25519 over the file (scheme v1), as since LAUNCH-1 |
+| `kms-2026` | AWS KMS (`alias/openbfme-release`, `ECC_NIST_EDWARDS25519`, created in KMS and never exportable). Added by a one-line commit once the owner has created it. | the signature envelope (scheme v2) |
+
+A signature (64 bytes) is valid when it verifies under ANY listed key, raw or as an envelope. An unknown key, a changed byte, a wrong
+size or an envelope of another kind of file fails, and an empty list fails. The launcher, the game, `sign_manifest.py --verify`,
+`seal_package.py check`, `make_macos_manifest.py` and `publish_release.sh` all apply this one rule (`tools/release/release_keys.py`).
+
+**The signature envelope.** KMS signs at most 4096 bytes with pure Ed25519 (`ED25519_SHA_512`, `MessageType RAW`). Our manifests are
+5 to 64 KiB, and payload.json is bigger. The prehash variant `ED25519_PH_SHA_512` is a different scheme that no launcher verifies, so
+it is not used. Instead, the KMS key signs a short text that names the file:
+
+    OpenBFME signature v2\n<kind>\n<SHA-512 of the file, 128 hex>\n        kind: manifest.json | manifest-macos.json | payload.json
+
+The signature is still 64 bytes, so every bounded read stays the same. An envelope starts with `OpenBFME`, while a manifest is JSON
+starting with `{`, so a raw signature can never pass as an envelope signature or the other way round. The kind stops a payload
+signature from being replayed as a manifest signature.
+
+**Signature slots.** A release carries `manifest.json.sig` and `manifest-macos.json.sig`, which every launcher reads, and, when
+it is signed on Actions, `manifest.json.sig2` and `manifest-macos.json.sig2`, which only launchers with the list read. A new
+launcher tries `.sig` first. If that is missing or does not verify, it tries `.sig2`. It keeps whichever verified under the plain
+`.sig` name (its caches, `versions/<v>/`, the launcher proof). `payload.json.sig` inside a package holds one signature, made by
+whoever sealed it. Only the launcher and game in that same package read it, and they were built with the list.
+
+**The phase** (`tools/release/signing_policy.json`, committed and reviewed like code):
+- `transition` (the start): the workflow writes `.sig2` (KMS) only. The Deck verifies the draft, adds `.sig` with the Deck key
+  (`tools/release/cosign_release.py`) and publishes. Launchers from before this lane keep updating.
+- `kms` (the end): the workflow writes the KMS signature into `.sig` and `.sig2`. The Deck verifies and publishes without any key.
+
+**Who does what.**
+
+| step | where | why there |
+|---|---|---|
+| the full gate, the nightly gate subset, the Windows start and HUD checks | our hosts | they need the retail game files, which never go to GitHub |
+| the public sync: tree audit with the private denylist, community pull request merges and credit, push of main and the tag | the Deck (autorelease.sh steps 1-3, P) | the archive and the denylist are private |
+| building the packages that are signed | GitHub Actions (`release.yml`: macos, linux-lib, windows-lib, package) | the signer signs only what its own run built from a commit on main |
+| sealing and signing | GitHub Actions, job `sign` (environment `nightly` or `stable`; OIDC to AWS; KMS) | the private key never leaves KMS |
+| the draft release with the signed assets | GitHub Actions (`actions_release.py draft`) | read back by name, size and SHA-256 |
+| comparing the draft with the tested candidate, the privacy gate with the private denylist on every asset, the notes, the transition's co-signature, publishing | the Deck (`actions_release.py wait`, `cosign_release.py`, `publish_release.sh`) | the private denylist; the tested candidate; the Deck key during the transition |
+
+The workflow never publishes: a release goes public only after the Deck has checked what Actions signed. `OPENBFME_RELEASE_SIGNER`
+chooses the path (`deck`, the default until the owner switches it, or `actions`). On the `actions` path, autorelease.sh
+dispatches `release.yml` after its push (step P) and waits for the run. A stable run waits for the owner's approval in the GitHub
+environment, and the next autorelease run resumes the wait. Then autorelease.sh checks the draft and publishes it.
+
+**The workflow's guards** (`.github/workflows/release.yml`, `tools/release/actions_release.py`):
+- Trigger and inputs: only `workflow_dispatch`. Every input reaches the scripts through the environment, never pasted into a script.
+  `plan` requires:
+  - main of `Open-BFME/openbfme-godot`;
+  - a kind of `nightly` with a `v<x.y.z>-nightly.<YYMMDD><1|2>00` (or earlier `<YYYYMMDD>`) tag, or `stable` with a plain `v<x.y.z>`, so a nightly signing can never
+    make a stable-channel manifest without the owner's approval;
+  - a tag that names the commit, and a commit on main.
+- Jobs: the build jobs have read-only contents, no AWS access and no caches. Only `sign` gets the OIDC token and write access to
+  contents. `public_workflows.py` allows those two permissions in this file alone, in one job whose environment is `nightly` or
+  `stable`.
+- Supply chain: actions are pinned by commit sha, Godot and the templates are pinned by hash, and the templates are checked against
+  `godot_templates.txt`.
+- AWS: the session lasts 15 minutes and is named `openbfme-<run id>-<attempt>`. Its credentials live only in the environment of the
+  `aws` processes.
+- Signatures: every one is verified against the committed list before anything is uploaded.
+
+**Threat model of the new model.**
+- *Who can make the KMS key sign.* Only a run of `.github/workflows/release.yml` on refs/heads/main of this repository (pinned by
+  repository id), in the environment `nightly` or `stable`. The role's trust policy checks GitHub's customised OIDC subject, and the key
+  policy denies `kms:Sign` to every other principal.
+  - In practice: anyone who can dispatch workflows (write access) can get a nightly signed, and a stable signed once the owner
+    approves it. The signed bytes are always a fresh build of a commit that is already on main.
+  - So signing authority equals the authority to put code on main. Protect main and the release files (step 8 of the owner's setup):
+    a community pull request that touches `.github/workflows/release.yml`, `tools/release/` or `launcher/release_keys.pub` gets the
+    owner's review and never takes the coordinator's automatic PR fast track ("Community pull requests").
+- *Workflow injection.* No input is expanded into a script, and `run-name` is display only. The workflow never runs on pull request,
+  push or `workflow_run` triggers, so a fork's code never runs with the OIDC permission.
+- *Artifact substitution.* Artifacts are this run's own: no caches, no cross-run downloads. The Deck accepts only the draft whose
+  body names its one-time request id, and only from the run that names that id. It re-verifies every signature and checksum, and
+  compares the draft's archives with the candidate it tested before it publishes.
+- *Downgrade through the old key.* The Deck key stays trusted, so whoever holds it can still sign for every launcher. That is the price
+  of the recovery path below.
+  - After the transition the key is kept only as an encrypted offline backup. Nothing online can use it, unlike today, where it sits
+    on the key host for every nightly.
+  - A later launcher release can drop it from the list if the owner prefers losing that recovery path.
+- *Rollback.* Unchanged: older signed releases are never installed automatically, and a stale list gives the freeze warning.
+- *A compromised AWS account.* Only the account root can rewrite the key policy and then sign. Every `kms:Sign`, every change to the
+  key's policy, alias or state, and every change to the signing role sends an e-mail (CloudTrail + EventBridge + SNS).
+  - Response: disable the key in KMS, then publish a launcher release signed with the Deck key that drops `kms-2026` from the list.
+- *A compromised GitHub account.* It can dispatch the workflow but cannot change what main holds without the push being visible.
+  The stable environment still needs the owner's approval. Publishing still goes through the Deck's checks, and every signature
+  sends an e-mail.
+
+**Recovery.**
+- *The KMS key is lost* (deleted, disabled, or the AWS account is gone):
+  1. Sign with the Deck key from its encrypted backup (`OPENBFME_RELEASE_SIGNER=deck`); every launcher trusts it.
+  2. If a new KMS key is made, ship it in a launcher release signed with the Deck key (a new line in `release_keys.pub`).
+- *The Deck key's backup is lost:* nothing changes for launchers that already have the list. The KMS key keeps signing. Only
+  launchers from before this lane can no longer be updated after the cut-over, so they recover by a manual download (below).
+- *A launcher that missed the transition* (one from before the trust release, started for the first time after the cut-over):
+  1. It refuses the new release ("the manifest's signature is not valid") and keeps playing its installed version. It fails closed.
+  2. The player downloads the current package from the releases page by hand, and the launcher in it has the list.
+  3. The cut-over release's notes and the README say so.
+
+**Rollout and the transition plan:** see "Moving releases to GitHub Actions (RELSIGN-1)" below: the four switch-over steps, the
+cut-over's conditions included.
+
+**The owner's setup (click by click; he runs it, this lane created nothing).** Nothing here needs a long-lived AWS key: GitHub uses
+OIDC, and the owner uses his own console login.
+
+1. *GitHub, repository id:* run `gh api repos/Open-BFME/openbfme-godot --jq .id`, or open https://api.github.com/repos/Open-BFME/openbfme-godot
+   and read `"id"`. Note the number.
+2. *GitHub, the OIDC subject:* this has no settings page, so run once, as the owner:
+
+       gh api -X PUT repos/Open-BFME/openbfme-godot/actions/oidc/customization/sub -F use_default=false \
+         -f 'include_claim_keys[]=repo' -f 'include_claim_keys[]=repository_id' -f 'include_claim_keys[]=context' \
+         -f 'include_claim_keys[]=workflow_ref'
+
+   Check it with `gh api repos/Open-BFME/openbfme-godot/actions/oidc/customization/sub`. No other workflow of the repository uses OIDC.
+3. *GitHub, environments* (repository Settings > Environments > New environment):
+   - `nightly`: under Deployment branches and tags choose "Selected branches and tags", then Add deployment branch rule: `main`.
+     No reviewers.
+   - `stable`: the same branch rule `main`, plus "Required reviewers": add yourself (leave "Prevent self-review" off: the Deck
+     dispatches as your account). Save.
+4. *AWS, the stack:*
+   1. Sign in to the AWS console with your own login and pick region **US East (N. Virginia) us-east-1** at the top right. IAM's
+      events reach EventBridge only there.
+   2. Look under IAM > Identity providers. If `token.actions.githubusercontent.com` is already listed, copy its ARN.
+   3. Look under CloudTrail > Trails. If a trail already logs management events here, you can reuse it (CreateTrail false). Otherwise
+      the stack makes one.
+   4. Find your key-admin ARN: IAM > Users > your user > copy the ARN. For an SSO login, use the role's ARN from IAM > Roles.
+   5. CloudFormation > Create stack > With new resources (standard) > "Upload a template file" >
+      `tools/release/aws/release-signing.yaml` > Next.
+   6. Stack name `openbfme-release-signing`. Parameters:
+      - GitHubRepositoryId: step 1's number;
+      - KeyAdminArn: your ARN;
+      - AlertEmail: your address;
+      - ExistingGitHubOidcProviderArn: the ARN from step 2, or empty;
+      - CreateTrail: true, or false per step 3.
+
+      Then Next.
+   7. On the review page tick "I acknowledge that AWS CloudFormation might create IAM resources with custom names", then Submit.
+      Wait for CREATE_COMPLETE (a few minutes). If it fails with "invalid principals" on the key, the new role had not propagated
+      yet: delete the stack and create it again.
+   8. Open the e-mail "AWS Notification - Subscription Confirmation" and click "Confirm subscription".
+   9. Open the stack's Outputs tab and note SigningRoleArn and Region.
+   10. KMS > Customer managed keys > `alias/openbfme-release` > tab "Public key" > Download. Send the file to the coordinator. It is
+       public and safe to share, and it becomes the `kms-2026` line.
+5. *GitHub, the role and the region:* in Settings > Environments > `nightly`:
+   - under Environment secrets, Add environment secret `OPENBFME_SIGNING_ROLE_ARN` = SigningRoleArn;
+   - under Environment variables, Add environment variable `OPENBFME_SIGNING_REGION` = Region.
+
+   Do the same for `stable`. The ARN is not a credential. It is a secret only because it names the AWS account, and GitHub masks
+   secrets in the public logs, while a variable would be printed with the job's environment. No AWS credential is stored anywhere.
+6. *Billing:* the stack costs about $1.05 a month (the key $1, signing under 1 cent, the trail's storage a few cents; see the
+   template's header). The existing $90 budget alarm covers it.
+7. *A test signature,* after the `kms-2026` commit is merged and synced: dispatch the workflow for a nightly. The coordinator does
+   this; it creates a draft only. Expect one e-mail per signature (about six per release).
+8. *Repository rules* (Settings > Rules > Rulesets, on main):
+   - keep "Restrict deletions" and "Block force pushes";
+   - only the owner and the release account may push to main and create `v*` tags.
+
+   Community pull requests that touch the release workflow, `tools/release/` or `launcher/release_keys.pub` take the normal path with
+   the owner's review, never the automatic fast track.
+
+### Moving releases to GitHub Actions (RELSIGN-1)
+
+Owner, 2026-10-22: "make sure the nightly builds are on github actions and compile + publish automatically for all 3 systems". MACACT-1
+(the builds) and SIGNKMS-1 (the signing) are one design since RELSIGN-1:
+
+- **One definition of the builds.** `.github/workflows/release-package.yml` holds the three build jobs (macOS package, Linux library,
+  Windows library) with the build host's folder layout, ccache's path rewriting and the commit-dated build record, so the Linux library is
+  the build host's byte for byte and the Windows DLL the build host's but for its CodeView GUID (the table above). It runs two ways:
+  - **dispatched by the Deck** on `staging/<version>` at the candidate commit, one platform per run (`OPENBFME_RELEASE_*_BUILDER=actions`):
+    the Deck collects and compares the artifacts and keeps sealing and signing itself (MACACT-1's flow above);
+  - **called by `.github/workflows/release.yml`** (`workflow_call`, `OPENBFME_RELEASE_SIGNER=actions`): its jobs `macos`, `linux-lib` and
+    `windows-lib` are calls of that file (its definition is the one on `main`, the caller's commit; each job checks out and builds the
+    tag's commit); then `package` (`package.sh` for Linux and Windows) and `sign` (OIDC + KMS,
+    the draft) as in SIGNKMS-1.
+  Each build job's first step tells the two apart by `GITHUB_WORKFLOW_REF`, which the runner sets and no input can change: a dispatch must
+  run release-package.yml from `staging/<version>` with the ref's head at the commit; a call must come from `release.yml` on
+  `refs/heads/main` (whose `plan` job checked that the tag names the commit and the commit is on main). Anything else fails.
+- **The policy** (`public_workflows.py`) allows `workflow_call` in `release-package.yml` alone (beside `workflow_dispatch`, declaring inputs
+  only), a job that calls a workflow in `release.yml` alone (exactly `./.github/workflows/release-package.yml`, no `permissions` or
+  `secrets` of its own: it runs with the top-level `contents: read`), and refuses a `secrets:` key everywhere (`secrets: inherit` would
+  hand a called workflow every secret without one `secrets.` reference). The build jobs therefore have no secret, no write access and no
+  OIDC token on either path; only `release.yml`'s `sign` job has them, in the `nightly` / `stable` environment.
+- **The comparison on the signer's path.** `actions_release.py compare` holds the draft's archives to the tested candidate: byte for byte
+  without the seal, except the game's Windows ZIP, which may differ in its DLL's CodeView GUID and nothing else (member by member,
+  `pdb_tools.same_build`). The Mac package is compared byte for byte too, and the Mac build host's compiler is not `macos-15`'s, so a
+  signer = `actions` release needs `OPENBFME_RELEASE_MAC_BUILDER=actions` (the candidate's Mac package then comes from the same runner
+  image; if two `macos-15` builds of one commit still differ, the release fails closed and `OPENBFME_RELEASE_ACTIONS_COMPARE=report`
+  is the owner's call).
+
+**The switch-over, in order** (each step is the owner's call; the defaults stay `host` builders and the `deck` signer):
+
+1. **(a) Nightly builds on Actions.** Prerequisite: the workflows are on public `main` (the next release carries them; GitHub dispatches
+   only a workflow it has seen). Then, in the operator's release environment (`release.env`, or only the nightly wrapper's environment to
+   keep stable releases on the hosts for a while):
+
+       export OPENBFME_RELEASE_MAC_BUILDER=actions
+       export OPENBFME_RELEASE_LINUX_BUILDER=actions
+       export OPENBFME_RELEASE_WINDOWS_BUILDER=actions
+
+   The nightly then builds macOS on `macos-15` (the Mac host is not asked), and Linux and Windows on GitHub as well as on the build host,
+   whose library must match GitHub's; the packages and their tests stay on the build host (game files). The Deck still seals, signs and
+   publishes automatically as now. Proof that this works: the RELSIGN-1 dry run below.
+2. **(b) After the owner's AWS setup: signer on Actions.** The owner runs "The owner's setup" (SIGNKMS-1 above); the coordinator commits the
+   KMS public key as `kms-2026` (`python3 tools/release/release_keys.py --spki-to-hex <the public key file>`) and dispatches one nightly
+   test signature (a draft only). Then `export OPENBFME_RELEASE_SIGNER=actions` (with step (a)'s three builders), phase `transition` in
+   `signing_policy.json`: Actions builds, seals and signs `.sig2` through KMS and leaves a draft; the Deck compares it with the tested
+   candidate, co-signs `.sig` with the Deck key and publishes. A stable release waits for the owner's approval of the `stable`
+   environment; `OPENBFME_RELEASE_SIGN_TIMEOUT` (default 14400 s) bounds that wait, then the intent stays open and the next run waits
+   again (`OPENBFME_RELEASE_ACTIONS_TIMEOUT` stays MACACT-1's bound on one staging build).
+3. **(c) The trust release.** The next stable release after `kms-2026` is committed (signed either way) ships launchers and games whose
+   `release_keys.pub` trusts both keys. Every launcher that updates to it can follow the cut-over.
+4. **(d) The cut-over to phase `kms`** (a one-line commit to `signing_policy.json`), when ALL of these hold:
+   - at least 60 days since the trust release (twice the freeze-warning window; a launcher updates itself at every start);
+   - at least two stable releases since the trust release;
+   - no report in the community channels of a launcher older than the trust release still in use.
+
+   Actions then writes the KMS signature into `.sig` and `.sig2`, the Deck publishes without any key, and the Deck key leaves the key host
+   (deleted there, kept only as the encrypted offline backup and listed as the recovery key). A launcher that missed the transition refuses
+   the new release, keeps playing its installed version and recovers by a manual download (the cut-over's notes say so).
 
 ## Community pull requests (GHPR-1)
 
@@ -957,10 +1417,13 @@ would overwrite it unless the archive carries it, and a pull request closed with
    Every pull request is checked before the first one is merged. A failed check stops the run with `COMMUNITY REFUSED: #<n> ...` and
    nothing written to GitHub. Then each open pull request is merged with a merge commit (`gh pr merge --merge --match-head-commit
    <reviewed sha>`; a push in between makes GitHub refuse) and read back. The sync commit goes on top of the `main` that holds those
-   merges, and the sync PR's body says "Includes #37 by @login". After the sync's merge, the landed pull requests are recorded in
+   merges, and the sync commit's message says "Includes #37 by @login" (RELCAND-1; the sync PR's body before). These merges are the
+   one write to GitHub before the candidate has passed: they publish the pull request's own, already public commits, no tag and no
+   version. A candidate that fails leaves them merged; the next run takes them as already merged and credits them. After the push,
+   the landed pull requests are recorded in
    `$OPENBFME_RELEASE_STATE/community-landed.tsv`: the next releases skip them (remove them from the reviewed list at leisure).
    - A pull request whose port is not in the released sha waits for a later release (printed, not merged, not credited).
-   - When the public `main` already holds the release's whole tree once the pull requests are merged, there is no sync PR: the release
+   - When the public `main` already holds the release's whole tree once the pull requests are merged, there is no sync commit: the release
      tags the last merge commit, and the merged pull request is the record.
    - A run resumed after its sync was merged merges nothing more; a pull request reviewed in between waits for the next release.
 
@@ -1017,8 +1480,8 @@ poison what `main` builds with).
 4. Rules, Rulesets, the existing `main-protection` ruleset (today: no deletion, no force push, no bypass actors): add "Require status
    checks to pass" with the one check **`CI`** (source: GitHub Actions);
    optionally "Require merge queue" (the workflow already runs on `merge_group`). Before turning the required check on,
-   `autorelease.sh` must be able to merge its sync pull request, which it does right after creating it: either give the release account
-   a bypass on that ruleset, or change the sync to `gh pr merge --auto` and wait (a later lane). Community pull requests then need a
+   `autorelease.sh` must be able to push its tested sync commit to `main` (RELCAND-1: one atomic push of `main` and the tag, no sync
+   PR): give the release account a bypass on that ruleset. Community pull requests then need a
    green CI before the release merges them (`community_prs.py` merges with `--match-head-commit`, unaffected otherwise).
 
 ### Pushing to the public repository (PUBLICCI-1)
@@ -1028,10 +1491,8 @@ before anything is pushed public):
 
 | path | what goes public | the scan before it |
 | --- | --- | --- |
-| `autorelease.sh` step 2, `git push <sync commit>:refs/heads/sync/...` | the sync commit (the public tree of the released sha) | `autorelease.py audit-tree --denylist` on that tree, `public_workflows.py`; the commit's message, PR title / body: `audit-text --denylist` |
-| `autorelease.sh` step 2, `gh pr create` / `gh pr merge` of the sync PR | the PR text, the merge commit | the audited texts; the merge commit's tree is checked equal to the audited tree |
+| `autorelease.sh` step P, `git push --atomic <candidate commit>:refs/heads/main refs/tags/<version>` (RELCAND-1) | the sync commit (the public tree of the released sha) and the tag, after the candidate passed | `autorelease.py audit-tree --denylist` on that tree, `public_workflows.py`; the commit's message and the tag message: `audit-text --denylist`; `publish_release.sh`'s privacy gate in the pre-flight |
 | `community_prs.py land` (from `autorelease.sh`) | merges of already public community pull requests | runs after the tree audit; each pull request's diff must be contained in the audited tree |
-| `autorelease.sh` step 3, `git push refs/tags/<version>` | the tag (on the audited merge commit) | the tag message: `audit-text --denylist` |
 | `publish_release.sh --execute` | the release's name, notes and assets | `autorelease.py privacy-gate` (notes, tree, assets, `--denylist` required), every output line redacted |
 | a hand-made `git push` to the public remote (`origin` in the operator's checkout) | whatever it carries (a lane branch would carry the private history) | **`tools/release/public_push_guard.py`**, the pre-push hook below |
 | the GitHub web UI (merging a community pull request by hand) | the pull request's already public commits | none: don't (see "Community pull requests") |

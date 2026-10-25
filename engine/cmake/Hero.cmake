@@ -11,6 +11,7 @@ list(APPEND OPENBFME_SIM_SOURCES
     src/GameLogic/Module/HeroAbilityModules.cpp
     # HERO-2: Create-a-Hero (the record is loaded into the game state: its upgrades, command sets and the build surcharge)
     src/Common/CreateAHeroRecord.cpp
+    src/Common/AwardSystemManager.cpp
     src/GameLogic/CreateAHeroSystem.cpp
 )
 set(OPENBFME_HERO_TESTS

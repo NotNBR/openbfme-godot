@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { Lobby, route, configFromEnv, PRESENCE_S, STATS_CACHE_S, MAX_PRESENT } from '../src/lobby.mjs';
+import { Lobby, route, configFromEnv, PRESENCE_S, STATS_CACHE_S, MAX_PRESENT, GAME_DAYS } from '../src/lobby.mjs';
 import { StatsAdmission, STATS_ADMIT_BURST } from '../src/worker.mjs';
 import { nodeEnv } from '../src/server.mjs';
 import worker, { statsFromCache } from '../src/worker.mjs';
@@ -22,10 +22,22 @@ function fakeEnv() {
   let t = 1_700_000_000_000;
   let r = 0;
   const blobs = new Map();
+  const storedAt = new Map();
   const games = new Map();
-  const env = nodeEnv({ putBlob: (k, b) => blobs.set(k, b), getBlob: (k) => blobs.get(k) ?? null, saveGame: (g) => games.set(g.id, JSON.parse(JSON.stringify(g))) });
+  const reads = { gameTimes: 0 };
+  // LOBBYSTATS-1: the store's write times of the START records and relay logs, as the SQLite store's gameTimes answers them
+  const gameTimes = (since) => {
+    reads.gameTimes += 1;
+    const out = { started: [], finished: [] };
+    for (const [k, at] of storedAt) if (at >= since) (k.startsWith('starts/') ? out.started : k.startsWith('logs/') ? out.finished : []).push(at);
+    return out;
+  };
+  const env = nodeEnv({ putBlob: (k, b) => { blobs.set(k, b); storedAt.set(k, t); }, getBlob: (k) => blobs.get(k) ?? null, gameTimes,
+    saveGame: (g) => games.set(g.id, JSON.parse(JSON.stringify(g))) });
   env.savedGames = games;
   env.blobs = blobs;
+  env.storedAt = storedAt;
+  env.reads = reads;
   env.now = () => t;
   env.advance = (s) => { t += s * 1000; };
   env.randomBytes = (n) => Uint8Array.from({ length: n }, () => (r = (r * 1103515245 + 12345) & 0xff));
@@ -54,11 +66,13 @@ test('an empty lobby counts nothing; the answer has exactly the counts and the t
   const lobby = new Lobby(fakeEnv(), configFromEnv(ENV));
   const r = await stats(lobby);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { v: 1, players: 0, games_open: 0, games_running: 0, as_of: 1_700_000_000 });
+  // 1_700_000_000 s is 2023-11-14 22:13:20 UTC
+  const days = ['2023-11-08', '2023-11-09', '2023-11-10', '2023-11-11', '2023-11-12', '2023-11-13', '2023-11-14'].map((day) => ({ day, games: 0 }));
+  assert.deepEqual(r.body, { v: 1, players: 0, games_open: 0, games_running: 0, games_started_24h: 0, games_finished_24h: 0, games_started_by_day: days, as_of: 1_700_000_000 });
   const a = await guest(lobby, 'Ann', '203.0.113.7');
   const id = (await call(lobby, 'POST', '/v1/games', { token: a.token, body: { name: 'Secret game name', profile: PROFILE, setup } })).body.id;
   const text = JSON.stringify((await stats(lobby, { token: a.token, ip: '203.0.113.7' })).body);
-  assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['as_of', 'games_open', 'games_running', 'players', 'v']);
+  assert.deepEqual(Object.keys(JSON.parse(text)).sort(), ['as_of', 'games_finished_24h', 'games_open', 'games_running', 'games_started_24h', 'games_started_by_day', 'players', 'v']);
   for (const leak of ['Ann', 'Secret', a.account.id, a.token, id, '203.0.113.7', 'guest:']) assert.ok(!text.includes(leak), `the answer leaks ${leak}`);
 });
 
@@ -88,6 +102,94 @@ test('a player counts for PRESENCE_S seconds after the lobby last saw their toke
   assert.equal((await stats(lobby)).body.players, 0);
 });
 
+// ---- LOBBYSTATS-1: games per day ----
+function relayLogOf(id) {
+  const log = new Uint8Array(25);
+  log.set(Buffer.from('OBFMERLG'));
+  new DataView(log.buffer).setUint32(8, 1, true);
+  new DataView(log.buffer).setBigUint64(12, BigInt(`0x${id}`), true);
+  return { log, sig: createHmac('sha256', Buffer.from(ENV.UPLOAD_KEY, 'hex')).update(log).digest('hex') };
+}
+const uploadLogOf = async (lobby, id) => {
+  const { log, sig } = relayLogOf(id);
+  return (await call(lobby, 'POST', `/v1/relay/logs/${id}`, { body: log, headers: { 'x-openbfme-signature': sig } })).status;
+};
+const today = (r) => r.games_started_by_day.at(-1).games;
+
+test('LOBBYSTATS-1: a started game counts in the last 24 h and on its UTC day; it counts as finished when its relay log arrives; open games do not count', async () => {
+  const env = fakeEnv();
+  const lobby = new Lobby(env, configFromEnv(ENV));
+  const [a, b, c, d] = [await guest(lobby, 'Ann'), await guest(lobby, 'Bea'), await guest(lobby, 'Cy'), await guest(lobby, 'Di')];
+  const one = await startedGame(lobby, a, b);
+  await startedGame(lobby, c, d);
+  await call(lobby, 'POST', '/v1/games', { token: a.token, body: { name: 'open', profile: PROFILE, setup } });
+  env.advance(STATS_CACHE_S);
+  let r = (await stats(lobby)).body;
+  assert.deepEqual([r.games_started_24h, r.games_finished_24h, today(r)], [2, 0, 2]);
+  assert.equal(r.games_started_by_day.length, GAME_DAYS);
+  assert.equal(r.games_started_by_day.reduce((n, x) => n + x.games, 0), 2);
+  assert.equal(await uploadLogOf(lobby, one), 200);
+  assert.equal(await uploadLogOf(lobby, one), 200, 'the uploader\'s retry of the same log');
+  r = (await stats(lobby)).body;
+  assert.deepEqual([r.games_started_24h, r.games_finished_24h], [2, 1], 'one finish, however many uploads of its log');
+  for (const leak of [one, 'Ann', a.account.id, '198.51.100.1']) assert.ok(!JSON.stringify(r).includes(leak), `the answer leaks ${leak}`);
+});
+
+test('LOBBYSTATS-1: the 24 hours roll, the days are UTC days (oldest first, today last) and a game leaves the list after GAME_DAYS days', async () => {
+  const env = fakeEnv();
+  const lobby = new Lobby(env, configFromEnv(ENV));
+  const [a, b] = [await guest(lobby, 'Ann'), await guest(lobby, 'Bea')];
+  await startedGame(lobby, a, b); // 2023-11-14 22:13 UTC
+  env.advance(2 * 3600); // 00:13 the next day
+  let r = (await stats(lobby)).body;
+  assert.equal(r.games_started_by_day.at(-1).day, '2023-11-15');
+  assert.deepEqual(r.games_started_by_day.slice(-2).map((x) => x.games), [1, 0], 'the game is on the 14th');
+  assert.equal(r.games_started_24h, 1);
+  env.advance(22 * 3600 + 1); // just past 24 h after the start
+  r = (await stats(lobby)).body;
+  assert.equal(r.games_started_24h, 0);
+  assert.deepEqual(r.games_started_by_day.at(-2), { day: '2023-11-14', games: 1 }, 'still listed on its day');
+  env.advance((GAME_DAYS - 1) * 24 * 3600); // the 21st: the 14th is GAME_DAYS days back, out of the list
+  r = (await stats(lobby)).body;
+  assert.equal(r.games_started_by_day[0].day, '2023-11-15');
+  assert.equal(r.games_started_by_day.reduce((n, x) => n + x.games, 0), 0);
+});
+
+test('LOBBYSTATS-1: the times are read from the store once (a restarted lobby counts the games it stored before), then kept in memory; the counts write nothing', async () => {
+  const env = fakeEnv();
+  const lobby = new Lobby(env, configFromEnv(ENV));
+  const [a, b, c, d] = [await guest(lobby, 'Ann'), await guest(lobby, 'Bea'), await guest(lobby, 'Cy'), await guest(lobby, 'Di')];
+  const one = await startedGame(lobby, a, b);
+  assert.equal(await uploadLogOf(lobby, one), 200);
+  const again = new Lobby(env, configFromEnv(ENV));
+  again.load([...env.savedGames.values()]);
+  const reads = env.reads.gameTimes;
+  let r = (await stats(again)).body;
+  assert.deepEqual([r.games_started_24h, r.games_finished_24h, today(r)], [1, 1, 1], 'the restarted lobby read them from the store');
+  assert.equal(env.reads.gameTimes, reads + 1);
+  const blobs = env.blobs.size;
+  const saves = env.savedGames.size;
+  for (let i = 0; i < 5; i++) {
+    env.advance(STATS_CACHE_S);
+    await stats(again);
+  }
+  await startedGame(again, c, d); // stored by this lobby: counted from memory, not read again
+  env.advance(STATS_CACHE_S);
+  r = (await stats(again)).body;
+  assert.deepEqual([r.games_started_24h, r.games_finished_24h, today(r)], [2, 1, 2]);
+  assert.equal(env.reads.gameTimes, reads + 1, 'one read of the store in the lobby\'s lifetime');
+  assert.equal(env.blobs.size, blobs + 2, 'only the new game\'s own START record and player list');
+  assert.equal(env.savedGames.size, saves + 1, 'only the new game\'s own record');
+});
+
+test('LOBBYSTATS-1: a store that cannot list its write times (R2, no log store) answers null, not zero', async () => {
+  const env = nodeEnv({ saveGame: () => {} });
+  const lobby = new Lobby(env, configFromEnv(ENV));
+  const r = (await stats(lobby)).body;
+  assert.deepEqual([r.games_started_24h, r.games_finished_24h, r.games_started_by_day], [null, null, null]);
+  assert.equal(r.players, 0);
+});
+
 test('S-4830: the health check says what "players online" means', async () => {
   const lobby = new Lobby(fakeEnv(), configFromEnv(ENV));
   const h = (await call(lobby, 'GET', '/v1/health')).body;
@@ -95,14 +197,15 @@ test('S-4830: the health check says what "players online" means', async () => {
   assert.equal(h.stats.includes(`${PRESENCE_S} s`), true, 'the stop names the window the code uses');
 });
 
-test('a bad or foreign token is ignored: the answer is still given and nobody is counted for it', async () => {
+test('a bad or foreign token is rejected instead of falling through to the anonymous answer', async () => {
   const lobby = new Lobby(fakeEnv(), configFromEnv(ENV));
   const other = new Lobby(fakeEnv(), configFromEnv({ ...ENV, SESSION_KEY: 'cc'.repeat(32) }));
   const foreign = await guest(other, 'Mallory');
   for (const authorization of ['Bearer nonsense', 'Bearer a.b', 'Basic abc', '', `Bearer ${foreign.token}`]) {
     const r = await stats(lobby, { headers: { authorization } });
-    assert.equal(r.status, 200, authorization);
-    assert.equal(r.body.players, 0, authorization);
+    if (!authorization) continue;
+    assert.equal(r.status, 401, authorization);
+    assert.equal(r.body.error, 'signed_out', authorization);
   }
 });
 
@@ -286,5 +389,29 @@ test('r2 (Sol): the whole Worker path: fetch handler -> admission -> cache -> ob
   } finally {
     delete globalThis.caches;
     statsAdmission.buckets.clear();
+  }
+});
+
+test('LOBBYSTATS-1: the self-hosted server\'s file store lists its START records\' and relay logs\' write times (file mtimes), not player lists', async () => {
+  const { mkdtempSync, rmSync, utimesSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { fileStore } = await import('../src/server.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'openbfme-gametimes-'));
+  try {
+    const store = fileStore(dir);
+    const bytes = new TextEncoder().encode('{}');
+    store.putBlob('starts/0000000000000001.json', bytes);
+    store.putBlob('starts/0000000000000002.json', bytes);
+    store.putBlob('players/0000000000000001.json', bytes);
+    store.putBlob('logs/0000000000000001.obfmerlog', bytes);
+    utimesSync(join(dir, 'starts/0000000000000002.json'), 1000, 1000); // 1000 s
+    const since = Date.now() - 60_000;
+    const t = store.gameTimes(since);
+    assert.deepEqual([t.started.length, t.finished.length], [1, 1]);
+    assert.ok([...t.started, ...t.finished].every((at) => at >= since));
+    assert.deepEqual(store.gameTimes(0).started.sort((x, y) => x - y)[0], 1_000_000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

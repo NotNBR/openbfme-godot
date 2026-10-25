@@ -3,6 +3,7 @@
 // TheSkirmishAIManager (lane AI-1, step 1). See SkirmishAIManager.h for the binary facts; each function cites the RW function it ports.
 
 #include "GameLogic/SkirmishAI/SkirmishAIManager.h"
+#include "GameLogic/SkirmishAI/AIUpgrade.h"
 
 #include <algorithm>
 #include <iterator>
@@ -100,6 +101,7 @@ int SkirmishAIManager::newGame(bool skirmishOrMultiplayer, bool loadingSave, con
 			ai.build.baseBuilderDisabled = m_store->data().disableBaseBuilding;
 			ai.build.units.disabled = m_store->data().disableUnitBuilding; // RW 0x8F033F -> + 0x3C
 			ai.build.economy.disabled = m_store->data().disableEconomyBuilding; // RW 0x8F02CC -> + 0xC4
+			AIUpgrade::init(ai, m_store->data()); // RW 0x8F02DD .. 0x8F030B: the listeners (unit upgrader, upgrade builder) and their Disable flags (lane AI5)
 			// RW 0x9A10D8 (unit builder init): copies the army's HeroBuildOrder (AIBaseBuilder::init, lane DECOMP-2)
 		}
 	}
@@ -401,7 +403,12 @@ void SkirmishAIManager::objectAdded(Object &obj)
 	}
 	if (AIStatCollector *r = m_started && obj.getControllingPlayer() ? record(obj.getControllingPlayer()->getPlayerIndex()) : nullptr)
 	{
-		r->registerObject(obj);
+		// lane AI5: the record's listeners (RW 0x8E3D4C) are its player's AI sub systems; they listen from AIPlayer::init on (a disabled AI's too)
+		const unsigned lists = r->registerObject(obj);
+		if (AISkirmishPlayer *ai = lists ? listenerAI(r->playerIndex()) : nullptr)
+		{
+			AIUpgrade::onRegister(m_logic, *ai, obj, lists);
+		}
 	}
 	// lane SAVE-4c (review r3 .. r5): an object that becomes another player's (a capture, RW 0x854712 / 0x85474D, or any change of owner: Object::joinTeam
 	// runs objectRemoved with the old owner, then this) is out of every other AI's tactic teams (in retail a Team object: the owner change takes the unit
@@ -447,8 +454,25 @@ void SkirmishAIManager::objectRemoved(Object &obj)
 	}
 	if (AIStatCollector *r = m_started && obj.getControllingPlayer() ? record(obj.getControllingPlayer()->getPlayerIndex()) : nullptr)
 	{
-		r->unRegisterObject(obj);
+		const unsigned lists = r->unRegisterObject(obj); // RW 0x8E3D77 (lane AI5)
+		if (AISkirmishPlayer *ai = lists ? listenerAI(r->playerIndex()) : nullptr)
+		{
+			AIUpgrade::onUnRegister(m_logic, *ai, obj, lists);
+		}
 	}
+}
+
+AISkirmishPlayer *SkirmishAIManager::listenerAI(int playerIndex)
+{
+	for (auto &g : m_groups)
+	{
+		auto it = g->players.find(playerIndex);
+		if (it != g->players.end())
+		{
+			return it->second.get();
+		}
+	}
+	return nullptr;
 }
 
 void SkirmishAIManager::makeRecord(const Player &player)
@@ -609,11 +633,11 @@ std::vector<std::string> SkirmishAIManager::stopLines()
 		"before RW's table (the port rejects it, S-411)",
 		"[S-412] skirmish ai: TheSkirmishAIManager's creation rules, groups and update cadence are ported (RW 0x6AA030, 0x6A9EAD, 0x6A96A0, 0x8EDDF6, "
 		"0x6C7946); the bodies they call are not: the manager object + 0xA74, the group tasks (RW 0x8EDB2C), "
-		"AISkirmishPlayer RW 0x6C75B5 / the shutdown, the AIPlayer sub systems other than the base, unit and team builders (RW 0x8F0EB4: "
-		"+ 0xC0 economy builder, + 0x108 unit upgrader, + 0x12C science builder, + 0xE4 wall builder): a computer player builds its base (S-413), trains its army "
-		"(S-415) builds farms (S-419) and attacks with SimpleAttack teams (S-417); lane BACKLOG6: AIPlayer::update RW 0x8F0EB4 is checked against the BFME2 "
+		"AISkirmishPlayer RW 0x6C75B5 / the shutdown, the wall builder (RW 0x8F0EB4's + 0xE4); a computer player builds its base (S-413), trains its army "
+		"(S-415) builds farms (S-419), attacks with its tactic teams (S-417) and (lane AI5) buys its units' and structures' upgrades and its plots' expansions "
+		"(+ 0x108 AIUnitUpgrader, + 0x12C AIUpgradeScienceBuilder, the player info record's listeners: S-1876); lane BACKLOG6: AIPlayer::update RW 0x8F0EB4 is checked against the BFME2 "
 		"byte-matched source (RotWK adds the code 9 failure RW 0x8F1048): a request left in the queue gives up its producer; its last call, the money saver "
-		"RW 0x8F0502, is not ported (S-413)",
+		"RW 0x8F0502, is ported by lane AI5 (S-413)",
 		"[S-417] skirmish ai tactical layer: the enemy manager, the targets and their ENEMY_STRUCTURE heuristics, the best target, the difficulty gate, the 10 "
 		"offensive prototypes' applicability, team counts and team sizes (RW 0x90BE31: SimpleAttack x2, FormationAttack x2, FlankAttack, PincerAttack, FeintAttack, "
 		"AIBasePenetrationTroopsTactic, SimpleSiege, SiegeGates) with the pick's draw, the SimpleAttack body, the team builder and (lane AI-2) the started "
@@ -629,6 +653,11 @@ std::vector<std::string> SkirmishAIManager::stopLines()
 		"[S-419] skirmish ai economy builder (+ 0xC0, RW 0x8EEF8F): farms on the map's FarmTemplate sites (RW 0x8EEC71), the farm decision (RW 0x8EE765), the "
 		"difficulty gate (RW 0x99327C), the farm priority growth (RW 0x99F313) and the unit request's effective priority (RW 0x9EDA17) are ported; inference: the "
 		"farm site pool is made at newGame in object list order (lane DECOMP-3: the economy structure count is the player info record's economy list)",
+		"[S-1876] skirmish ai upgrades (lane AI5, AIUpgrade.h): AIUnitUpgrader (+ 0x108: Register RW 0x9A155C, update RW 0x9A1696), "
+		"AIUpgradeScienceBuilder (+ 0x12C: Register RW 0x9A018B, update RW 0x9A0023 with RW 0x99FCC4 / 0x99FD0E / 0x99FE74 / 0x99FAEF), the upgrade and expansion "
+		"requests (RW 0x99F88B / 0x99F7EF, RW 0x9ED764 / 0x9ED8C4), the heuristics IMPORTANT, BOILINGOIL, FACTORY_UNITUNLOCK and FORTRESS and the record's "
+		"listeners (RW 0x8E3D4C / 0x8E3D77) and the money saver / reserve (RW 0x8F0502, 0x99E766, 0x99E79A, the wrappers RW 0x961975 / 0x96190B, "
+		"S-413) are ported; not ported: the SUMMON_ANTI* heuristics (answer 3, counted), RW 0x695338's WALL_UPGRADE body test; INFERENCE: a plot's occupant is the port's CastleMemberBehavior occupant (S-952)",
 		"[S-420] skirmish ai vs ai: games end through the fortress fall, the spawned worker's fade on its structure's delete (RW 0x85750D -> 0x85730B) and "
 		"unfinished structures as targets (lane DECOMP-2: RW's AI::findClosestEnemy RW 0x701443 -> 0x7006D7 and its attack test RW 0x68D6A6 / 0x6C9147 / "
 		"0x6C8652 never test UNDER_CONSTRUCTION); INFERENCE: the worker kill runs at the port's delete point, the defeat frames are engine pins",

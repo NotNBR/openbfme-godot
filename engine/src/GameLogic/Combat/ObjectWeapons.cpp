@@ -324,6 +324,23 @@ void ObjectWeapons::fireExtraWeapon(Weapon &w, Object &victim)
 	w.privateFireWeapon(host(), delivery, args);
 }
 
+// lane MODS-3: RW 0x6CF3AE -> privateFireWeapon RW 0x6CEF6D (source, source position, victim, victim id, no position, 1, 1, 0, 0)
+void ObjectWeapons::fireExtraWeaponDetonationAt(Weapon &w, Object &victim)
+{
+	if (!w.getTemplate())
+	{
+		return;
+	}
+	Weapon::FireArgs args;
+	args.target.hasVictim = true;
+	args.target.victimID = victim.getID();
+	args.target.victimPosition = *victim.getPosition();
+	args.ignoreRanges = true;           // argument 6
+	args.isProjectileDetonation = true; // argument 7
+	ObjectWeaponDelivery delivery(*m_owner, *this, *w.getTemplate(), w);
+	w.privateFireWeapon(host(), delivery, args);
+}
+
 // RW 0x6CF3D2 -> privateFireWeapon RW 0x6CEF6D with the position as the target (its sixth argument 1: ZH forceFireWeapon's ignoreRanges)
 void ObjectWeapons::fireExtraWeaponAt(Weapon &w, const Coord3D &pos)
 {
@@ -1338,6 +1355,25 @@ float ObjectWeapons::attackDistance(const Object &victim) const
 	const RangeSubject src = subjectOf(*m_owner);
 	const RangeSubject vic = subjectOf(victim);
 	return WeaponGetAttackDistance(*w->getTemplate(), bonus, *self->m_rangeHost, src, &vic, nullptr);
+}
+
+float ObjectWeapons::attackDistanceTo(const Object *victim, const Coord3D *position) const
+{
+	const Weapon *w = weaponInSlot(m_curSlot);
+	if (!w || !w->getTemplate())
+	{
+		return 0.0f;
+	}
+	ObjectWeapons *self = const_cast<ObjectWeapons *>(this);
+	WeaponBonus bonus;
+	w->computeBonus(*self->m_host, 0, bonus);
+	const RangeSubject src = subjectOf(*m_owner);
+	if (victim)
+	{
+		const RangeSubject vic = subjectOf(*victim);
+		return WeaponGetAttackDistance(*w->getTemplate(), bonus, *self->m_rangeHost, src, &vic, nullptr);
+	}
+	return WeaponGetAttackDistance(*w->getTemplate(), bonus, *self->m_rangeHost, src, nullptr, position);
 }
 
 float ObjectWeapons::currentAttackRange() const

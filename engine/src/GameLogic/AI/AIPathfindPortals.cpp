@@ -428,16 +428,18 @@ unsigned Pathfinder::costToGoal(const PathfindCell *cell, const PathfindCell *go
 	{
 		return cell->costToGoal(goal);
 	}
+	// review of #63: the sum in unsigned 32-bit arithmetic, which wraps as RW's 32-bit adds do (a signed overflow on a long portal chain is undefined in C++);
+	// below 2^31 the values are the signed ones
 	int x = cell->info()->m_pos.x, y = cell->info()->m_pos.y;
-	int acc = 0;
+	std::uint32_t acc = 0;
 	for (size_t k = m_portalHops.size(); k-- > 0;)
 	{
 		const ICoord2D &h = m_portalHops[k].cell;
-		acc = legCost(x - h.x, y - h.y) + 2 * acc + 1400;
+		acc = (std::uint32_t)legCost(x - h.x, y - h.y) + 2u * acc + 1400u;
 		x = h.x;
 		y = h.y;
 	}
-	return (unsigned)(legCost(x - (int)goal->getXIndex(), y - (int)goal->getYIndex()) + acc);
+	return (unsigned)((std::uint32_t)legCost(x - (int)goal->getXIndex(), y - (int)goal->getYIndex()) + acc);
 }
 
 // ---------------------------------------------------------------------------------------------------------

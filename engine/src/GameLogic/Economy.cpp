@@ -3,6 +3,8 @@
 
 #include "GameLogic/Economy.h"
 
+#include "GameLogic/SimMath.h"
+#include "Common/ModEngineFeatures.h"
 #include "Common/NumericState.h"
 #include "Common/Audio/AudioRequests.h"
 #include "Common/Player.h"
@@ -551,6 +553,16 @@ float Economy::attributeModifierProduct(const Object &obj, int type) const
 	return product;
 }
 
+float Economy::productionMoneyProduct(const Object &obj) const
+{
+	const float production = attributeModifierProduct(obj, ATTRIBUTE_MODIFIER_PRODUCTION);
+	if (!ModEngineFeatures::has(ModEngineFeature::EdainUnchainedProductionSplit))
+	{
+		return production;
+	}
+	return SimMath::mulf32(production, attributeModifierProduct(obj, 28)); // PRODUCTION_MONEY (AttributeModifiers.h ATTRIBUTE_PRODUCTION_MONEY)
+}
+
 bool Economy::objectHasModelCondition(const Object &obj, const char *modelCondition) const
 {
 	return m_modelConditions ? m_modelConditions(obj, modelCondition) : false;
@@ -578,7 +590,7 @@ void Economy::grantBuildingExperience(Object &obj, float points)
 	}
 }
 
-void Economy::noteIncome(Object &obj, Player &owner, int amount)
+void Economy::noteIncome(Object &obj, Player &owner, int amount, IncomeEvent::TextAnchor anchor)
 {
 	++m_incomePayments;
 	IncomeEvent e;
@@ -586,6 +598,12 @@ void Economy::noteIncome(Object &obj, Player &owner, int amount)
 	e.playerIndex = owner.getPlayerIndex();
 	e.amount = amount;
 	e.frame = m_logic.getFrame();
+	e.textPos = *obj.getPosition();
+	e.textAnchor = anchor;
+	if (anchor == IncomeEvent::TEXT_GEOMETRY_TOP && obj.getTemplate())
+	{
+		e.templateName = obj.getTemplate()->getName();
+	}
 	m_incomeLog.push_back(e);
 	if (m_incomeLog.size() > kIncomeLogLimit)
 	{

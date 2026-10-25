@@ -29,8 +29,10 @@
 #include <string>
 #include <vector>
 
+class Object;
 struct ScriptActionRec;
 class ScriptEngine;
+class Team;
 
 class ScriptActions
 {
@@ -41,6 +43,11 @@ public:
 	static void clientRequest(ScriptEngine &engine, const ScriptActionRec &a);
 	// lane SCRIPT-2 (ScriptActionsUnits.cpp): the unit / team / relationship / counter-math actions; false when `name` is not one of them
 	static bool executeUnitAction(ScriptEngine &engine, const ScriptActionRec &a, const std::string &name);
+	// lane SCRIPT-4 (ScriptActionsOrders.cpp): the guard / idle / stand-ground orders, the team moves, recruiting, garrisons, the timed model condition;
+	// false when `name` is not one of them
+	static bool executeOrderAction(ScriptEngine &engine, const ScriptActionRec &a, const std::string &name);
+	// lane SCRIPT-3: RW 0x7A3D3D Team::getTeamAsAIGroup (ScriptActionsUnits.cpp): the members in list order but a horde's member and one under construction
+	static std::vector<Object *> teamAIGroup(Team &t);
 	// lane CAMP-1 (ScriptActionsCampaign.cpp): the actions of the Angmar campaign missions; false when `name` is not one of them
 	static bool executeCampaignAction(ScriptEngine &engine, const ScriptActionRec &a, const std::string &name);
 	// lane SIEGE-1 (ScriptActionsSiege.cpp): the siege engines' deploy / retract actions; false when `name` is not one of them

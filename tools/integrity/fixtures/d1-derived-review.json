@@ -1,0 +1,62 @@
+{
+    "v": 1,
+    "detector": "D1-orders-into-fog",
+    "detector_version": 1,
+    "game_id": "00000000000ae1e0",
+    "status": "ok",
+    "abstain_reason": null,
+    "frames": 1701,
+    "crc_parity": "match",
+    "settings": {
+        "window_frames": 27,
+        "encounter_frames": 150,
+        "alert_confidence": 0.9,
+        "alert_encounters": 3,
+        "alert_span_frames": 600
+    },
+    "players": [
+        {
+            "player_index": 3,
+            "slot": 0,
+            "name": "Player_1",
+            "band": "review",
+            "score": 0.97,
+            "encounters": 1,
+            "strong_encounters": 1,
+            "orders_judged": 42,
+            "orders_on_remembered": 0,
+            "orders_stale": 0,
+            "orders_abstained": 0,
+            "events": [
+                {
+                    "frame": 101,
+                    "time_s": 20.2,
+                    "command": "MSG_DO_ATTACK_OBJECT",
+                    "target_id": 85,
+                    "target_template": "MordorFortress",
+                    "target_owner_index": 4,
+                    "reason": "never_seen",
+                    "last_visible_frame": null,
+                    "x": 2672.808105,
+                    "y": 4581.574707,
+                    "confidence": 0.97,
+                    "encounter": 1
+                },
+                {
+                    "frame": 101,
+                    "time_s": 20.2,
+                    "command": "MSG_DO_ATTACK_OBJECT",
+                    "target_id": 109,
+                    "target_template": "MordorFortressExpansionPadCorner",
+                    "target_owner_index": 4,
+                    "reason": "never_seen",
+                    "last_visible_frame": null,
+                    "x": 2591.860596,
+                    "y": 4500.627441,
+                    "confidence": 0.97,
+                    "encounter": 1
+                }
+            ]
+        }
+    ]
+}

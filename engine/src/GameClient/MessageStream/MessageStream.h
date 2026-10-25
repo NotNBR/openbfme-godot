@@ -162,6 +162,8 @@ public:
 	ClientMessage &append(int type);
 	// ZH insertMessage: the message goes right after `after` (the click derived from a button up comes before the button up's later translators)
 	ClientMessage &insertAfter(int type, const ClientMessage &after);
+	// Replay a deferred input before the event that ended its wait. Later translators see both in input order.
+	ClientMessage &insertBefore(int type, const ClientMessage &before);
 	size_t pending() const { return m_messages.size(); }
 
 	// One pass (ZH propagateMessages). The messages that reach the end are returned in order; the stream is empty afterwards.

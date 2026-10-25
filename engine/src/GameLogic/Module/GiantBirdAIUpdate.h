@@ -15,7 +15,8 @@
 //   * aiDoCommand (RW 0x76D995): the gate (vslot 0x250), then a command that arrives while attacking (+ 0x61C) waits (RW 0x75307D) for the update to
 //     re-issue it; move (0, 0x4E) -> GiantBirdNormalFlightState 0x3E9; attack object (0xB, 0xC, 0x39) -> AIGiantBirdSwoopState 0x3F2 (level attack 0x3F3);
 //     attack position (0xE) and level attack position (0x40): nothing; attack move (0xF) -> GiantBirdAttackMoveToState 0x3FB; waypoint paths (6 / 7 / 0x32 /
-//     0x33) -> GiantBirdFollowWaypointPathState 0x3F7 / 0x3F8; guard (0x23) RW 0x76A1F5; anything else the base aiDoCommand (RW 0x66A7EC). Every routed
+//     0x33) -> GiantBirdFollowWaypointPathState 0x3F7 / 0x3F8 (RW 0x76D84B); hunt (0x12) AI vslot 0xAC; 0x23 RW 0x76A1F5 (the swoop loop 0x3EF; lane STEALTHFLY1 read:
+//     not "guard"); 0x41 RW 0x76A0E6 (state 0x3FD); 0x40 nothing; anything else flag 0 cleared and the base aiDoCommand (RW 0x66A7EC). Every routed
 //     command clears the machine, sets the source and the goal and makes the goal type 1;
 //   * the machine (RW 0x7695C2, vslot 0x258): the base states (RW 0x753755) plus 0x3E9 .. 0x400 (see makeStateMachine) and AIGoingIdleState 0x4E (RW 0x7410C2:
 //     the StancesBehavior move end RW 0x86228E, then failure -> idle);
@@ -32,8 +33,17 @@
 //     looks ahead (1 something is in the way: climb 5 and rebuild with the lowered start; 2 above the path and the next point higher: sink 1 and rebuild)
 //     and RW 0x76A933 applies it; RW 0x769F24 "well above": over twice the preferred height, or z over it and the height over 0.3 of it.
 //
-// NOT PORTED / INFERENCE: stop S-4040 (GiantBirdAIUpdate::stopLines): the states 0x3F6 (follow path), 0x3F7 / 0x3F8 (waypoint paths), 0x3FC / 0x3FF (face),
-// 0x3FD / 0x3FE (the death flight), the guard machine (RW 0x76A6CC) and the guard command; the "eat" branch (CreateObjectDie, the MACHINE victim of flag 0x20); the
+//   * lane STEALTHFLY1: the follow states (RW 0x7695C2 defines them): GiantBirdFollowPathState 0x3F6 (ctor RW 0x7691AB, vtable RW 0xC2D940: enter RW 0x76A2B8,
+//     update RW 0x76ABC1, exit RW 0x76AC9F, next point RW 0x76A320), entered by privateFollowPath (vslot 0x78, RW 0x76B491: a queued waypoint through
+//     privateFollowPathAppend vslot 0x84 RW 0x76D659, a production exit path) and GiantBirdFollowWaypointPathState 0x3F7 / 0x3F8 (ctor RW 0x7692DA, vtable
+//     RW 0xC2DB00: enter RW 0x76A451, update RW 0x76B14A, exit RW 0x76B228, next point RW 0x76A496), entered by RW 0x76D84B; each next point is the path's
+//     point at the terrain height + the path height, the following one the look-ahead (AI flags bit 7), built with RW 0x769EA5 (mask RW 0xDE7908); the
+//     loop flag + 0x614 restarts the path when the waypoint chain closes on its first waypoint. BFME2 decomp GiantBirdFollowPathStates.cpp,
+//     GiantBirdAIUpdatePrivateFollowPathAppend.cpp, Rva003697F9.cpp, Rva00368344Rva0036BB2F.cpp (RotWK read in Ghidra: the same statements);
+//
+// NOT PORTED / INFERENCE: stop S-4040 (GiantBirdAIUpdate::stopLines): the states 0x3FC / 0x3FF and 0x3FD / 0x3FE and the commands that enter them (0x41 RW
+// 0x76A0E6 -> 0x3FD; 0x23 RW 0x76A1F5 -> the swoop loop 0x3EF: no ported caller issues 0x23 / 0x41), the guard machine (RW 0x76A6CC) and the guard command,
+// RW 0x76D778 (vtable slot 0x68: a waypoint chain to state 0x3F6; its caller is not identified); the "eat" branch (CreateObjectDie, the MACHINE victim of flag 0x20); the
 // collision push (onCollide RW 0x76B56B, the AI's collide interface at + 0x24, is not ported: + 0x630 stays 0); a deferred command is kept for the routed commands only; the attack-move's crate
 // pick-up (RotWK has no crates) and the mood re-check clock RW 0x662E01 (taken as the MoodAttackCheckRate interval); vslot 0x164 (RW 0x76D3B1).
 //
@@ -83,6 +93,9 @@ public:
 		STATE_SWOOP_LEVEL = 0x3F3,        // Swoop(1, 1): the level attack (AI command 0x3F)
 		STATE_ATTACK = 0x3F4,             // Attack(1)
 		STATE_FOLLOW_THRU = 0x3F5,        // FollowThru(0)
+		STATE_FOLLOW_PATH = 0x3F6,        // GiantBirdFollowPathState (lane STEALTHFLY1): a path of points (queued waypoints, a production exit)
+		STATE_FOLLOW_WAYPOINTS = 0x3F7,   // GiantBirdFollowWaypointPathState(0) (lane STEALTHFLY1): AI commands 6 / 0x32
+		STATE_FOLLOW_WAYPOINTS_TEAM = 0x3F8, // GiantBirdFollowWaypointPathState(1): AI commands 7 / 0x33
 		STATE_ATTACK_MOVE = 0x3FB,        // GiantBirdAttackMoveToState
 		STATE_FLY_400 = 0x400             // NormalFlight(0, 1) -> 0: the ability approach (AI commands 0x47 / 0x48)
 	};
@@ -103,6 +116,9 @@ public:
 	bool aiAbilityMoveTo(const Coord3D &pos, CommandSourceType source);
 	// RW 0x76A139 with the level flag (AI command 0x3F, FellBeastSwoopPower): the level swoop at `victim`
 	bool aiLevelAttackObject(Object *victim, CommandSourceType source);
+	// lane STEALTHFLY1: AI command 0x39 (RW 0x77131B, the script's group / named attack of a GiantBirdAIUpdate: AI vslot 0x168 RW 0x68BA5C): RW 0x76D995 routes it
+	// as the attack object order (RW 0x76A139(victim, source, 0): the swoop 0x3F2)
+	bool aiSwoopAttackObject(Object *victim, CommandSourceType source);
 
 	// ---- the state of the flight (tests, the states) ----
 	const GiantBirdAIUpdateData &data() const { return m_data; }
@@ -123,6 +139,7 @@ public:
 	bool attacking() const { return m_attacking; }
 	void setAttacking(bool on) { m_attacking = on; }
 	int duelMode() const { return m_duelMode; }
+	bool loopPath() const { return m_loopPath; } // + 0x614: the waypoint path closes on its first waypoint (lane STEALTHFLY1)
 	void setDuelMode(int m) { m_duelMode = m; }
 	unsigned long long swoopsStarted() const { return m_swoopsStarted; }   ///< diagnostics (not state)
 	unsigned long long strikes() const { return m_strikes; }               ///< diagnostics: weapon shots of the attack states (not state)
@@ -150,6 +167,9 @@ public:
 
 protected:
 	bool routeCommand(const RoutedCommand &command) override;
+	// lane STEALTHFLY1: AI vslots 0x78 / 0x84 (RW 0x76B491 / 0x76D659): the bird's own follow path state 0x3F6
+	void privateFollowPath(const std::vector<Coord3D> &path, Object *ignoreObject, CommandSourceType source, bool exitProduction) override;
+	void privateFollowPathAppend(const Coord3D &pos, CommandSourceType source) override;
 	const char *machineName() const override { return "GiantBirdAIUpdateMachine"; }
 	std::unique_ptr<AIStateMachine> makeStateMachine() override; // RW 0x769E50 -> RW 0x7695C2
 
@@ -166,6 +186,14 @@ private:
 	void separationNudge();          // RW 0x76A9CB
 	void toss();                     // RW 0x76CB71
 	void startCommand(unsigned state, CommandSourceType source);
+	// RW 0x76D84B (AI commands 6 / 7 / 0x32 / 0x33): the waypoint chain from `first` as the goal path, state 0x3F7 (+ 1 as a team)
+	void followWaypointPath(int first, bool asTeam, CommandSourceType source);
+	// RW 0x76D9B6 .. 0x76D9C7 for a command the base routes to a vslot (the follow paths): true when it is kept for after the attack
+	bool deferWhileAttacking(const RoutedCommand &c);
+	// the commands the bird keeps while attacking (m_deferred.type): the routed AI command numbers and the two follow path bodies (OpenBFME markers)
+	static const int kDeferredFollowPath = -3;
+	static const int kDeferredFollowPathAppend = -4;
+	static bool deferrable(int type);
 
 	GiantBirdAIUpdateData m_data;
 	std::unique_ptr<BirdHost> m_host;
@@ -185,6 +213,7 @@ private:
 	Coord3D m_lastPosition{ 0.0f, 0.0f, 0.0f }; // + 0x624
 	Coord3D m_collisionPush{ 0.0f, 0.0f, 0.0f }; // + 0x630
 	bool m_collisionPushed = false;  // + 0x63C
+	bool m_loopPath = false;         // + 0x614 (lane STEALTHFLY1): the follow states start again at the first point
 	// + 0x4B4: the command deferred while attacking (the routed ones)
 	bool m_deferredValid = false;
 	RoutedCommand m_deferred;

@@ -236,7 +236,7 @@ note	lanstrategic: opaque-character: character type 10 id 16 in GameWindowGadget
 note	lanstrategic: opaque-character: character type 10 id 20 in GameWindowGadgets	6
 note	lanstrategic: opaque-character: character type 10 id 25 in GameWindowGadgets	2
 note	lanstrategic: opaque-character: character type 10 id 302 in MpGameSetup	16
-note	libsnow: duplicate-copies-placement-only: 	150
+note	libsnow: duplicate-copies-placement-only: 	1
 note	loadscreen: apt-transform-unverified: _width [S-1262]	64
 note	loadscreen: call-without-function: method 'gotoAndPlay' is not a function on a value of type undefined [in _level1]	2
 note	loadscreen: movieclip-native-unread: Color	69

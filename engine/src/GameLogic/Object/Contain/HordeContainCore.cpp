@@ -212,6 +212,19 @@ int HordeContainCore::addMember(ObjectId id, const std::string &templateName)
 	return -1;
 }
 
+bool HordeContainCore::hasFreeSlotFor(const std::string &templateName) const
+{
+	for (int idx : m_freeList)
+	{
+		const RankInfo *rank = findRank(m_slots[(size_t)idx].rank);
+		if (rank && m_matcher(rank->unitType, templateName))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 // RW 0x87370B
 void HordeContainCore::removeMember(ObjectId id, bool templateIsSpecial)
 {

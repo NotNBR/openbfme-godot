@@ -110,7 +110,7 @@ void Pathfinder::classifyObjectFootprint(PathfindObject &obj, bool insert)
 	{
 		return;
 	}
-	const bool walkOnWall = obj.isKindOf(PK_WALK_ON_TOP_OF_WALL);
+	bool walkOnWall = obj.isKindOf(PK_WALK_ON_TOP_OF_WALL); // RW 0x936BCE .. 0x936BDD: template + 0x10F bit 4 (`local_16`, [EBP + 0x56])
 	if (!walkOnWall && obj.getFenceWidth() > 0.0f && !obj.isKindOf(PK_DEFENSIVE_WALL))
 	{
 		classifyFence(obj, insert);
@@ -141,21 +141,32 @@ void Pathfinder::classifyObjectFootprint(PathfindObject &obj, bool insert)
 	{
 		return; // under construction
 	}
+	// review of #63 (RW 0x936C68 .. 0x936C97): the wall flag of a WALK_ON_TOP_OF_WALL template is cleared by the object status CAN_NOT_WALK_ON (RW
+	// 0x44DDEC(0x4D)) unless the template is a WALL_UPGRADE (template + 0x11A bit 6), whose flag becomes the drawable's answer instead (RW 0x672F44: the OR
+	// of every draw module's vslot 0xDC). NOT PORTED (S-4840): that answer; the W3DModelDraw family's vtables (RW 0xBE3B78, 0xBE1AD0, 0xBE1E58) have a bare
+	// `ret` there (RW 0x63F3BF), so AL is the vtable address' low byte, nonzero: set, the KindOf's value kept here
+	if (walkOnWall && !obj.isKindOf(PK_WALL_UPGRADE) && obj.cannotWalkOn())
+	{
+		walkOnWall = false;
+	}
 	if (obj.getHeightAboveTerrain() > 10.0f && !walkOnWall)
 	{
 		return; // don't add bounds that are up in the air
 	}
-	internal_classifyObjectFootprint(obj, insert);
-	if (insert)
+	internal_classifyObjectFootprint(obj, insert, walkOnWall);
+	if (insert && walkOnWall)
 	{
-		// lane WALL-1: BFME2 0x930212 -> Pathfinder::ClassifyWall (0x92F63F) for an object whose drawable has a WallBoundsMesh / RampMesh (AIPathfindWalls.cpp)
+		// lane WALL-1: BFME2 0x930212 -> Pathfinder::ClassifyWall (0x92F63F) for an object whose drawable has a WallBoundsMesh / RampMesh (AIPathfindWalls.cpp).
+		// From lane BRIDGE-1: only with the wall flag (RW 0x936B7D's tail tests [EBP + 0x56] at RW 0x937881 before the call RW 0x9378A3): a structure with
+		// the meshes but without the KindOf (Erebor's DaleBridge, flush with the terrain) is no wall top or ramp
 		classifyWall(obj, true);
 	}
 }
 
-void Pathfinder::internal_classifyObjectFootprint(PathfindObject &obj, bool insert)
+void Pathfinder::internal_classifyObjectFootprint(PathfindObject &obj, bool insert, bool walkOnWall)
 {
-	const bool wall = obj.isKindOf(PK_BLOCKING_GATE) || obj.isKindOf(PK_WALK_ON_TOP_OF_WALL);
+	// RW 0x936CDF .. 0x936CF3: [EBP + 0x7F] = BLOCKING_GATE (template + 0x119 bit 1) or the wall flag above
+	const bool wall = obj.isKindOf(PK_BLOCKING_GATE) || walkOnWall;
 	const bool s22 = insert ? obj.isKindOf(PK_SCALEABLE_WALL) : false;
 	if (wall || s22)
 	{

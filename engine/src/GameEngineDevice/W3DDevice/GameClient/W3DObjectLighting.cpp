@@ -45,6 +45,11 @@ void fillSet(const GlobalLight (&lights)[3], float scale, W3DLightSet &out)
 namespace W3DObjectLightingUtil
 {
 
+float effectColorScale(const GlobalLightingData &lighting)
+{
+	return lighting.version >= 5 && lighting.terrainLightingMultiplier > 1.0f ? 2.0f : 1.0f;
+}
+
 bool fromMap(const GlobalLightingData &lighting, W3DObjectLighting &out, std::string *error)
 {
 	if (lighting.timeOfDay < 1 || lighting.timeOfDay > 4)
@@ -58,8 +63,7 @@ bool fromMap(const GlobalLightingData &lighting, W3DObjectLighting &out, std::st
 	out = W3DObjectLighting();
 	out.timeOfDay = lighting.timeOfDay;
 	// RW 0x4AC97F: version >= 5 and multiplier > 1.0 sets the byte RW 0xD9B03C; the SAS callbacks then scale by 2.0 (RW 0xBD889C).
-	const bool doubled = lighting.version >= 5 && lighting.terrainLightingMultiplier > 1.0f;
-	out.colorScale = doubled ? 2.0f : 1.0f;
+	out.colorScale = effectColorScale(lighting);
 	const TimeOfDayLights &tod = lighting.tod[lighting.timeOfDay - 1];
 	fillSet(tod.objects, out.colorScale, out.objects);
 	fillSet(tod.infantry, out.colorScale, out.infantry);

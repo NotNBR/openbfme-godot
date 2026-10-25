@@ -220,7 +220,7 @@ TEST_CASE("fb7 options retail: InitGadgets shows the saved settings (sliders on 
 	}
 	const std::string *version = fx.wm->aptText("APT:VersionNum");
 	REQUIRE(version);
-	CHECK(*version == "Version 2.1");
+	CHECK(*version == "Version 2.01"); // lane MENUFIX-1: Version:Format2 is "Version %d.%02d" (RotWK 2.01); "Version 2.1" dropped the width
 }
 
 TEST_CASE("fb7 options retail: Save writes RotWK's entries for the controls and closes; Cancel re-applies the saved volumes")
@@ -1701,6 +1701,16 @@ TEST_CASE("opts4 gadget layer retail: an open drop-down list is drawn after ever
 
 	// clicked: the entry "Enhanced", at a point inside the row below, is the list's
 	const float clickX = 755.0f, clickY = 275.0f; // inside the list's second entry (268 .. 290) and inside the row below (254 .. 280)
+	SUBCASE("uninterrupted dropdown") {}
+	SUBCASE("destroying an unrelated combo during hover preserves the open list")
+	{
+		GameWindow *transient = fx.layer->createEngineGadget("window/apt/combobox.wnd", 0, 0, 200, 26, nullptr, &error);
+		REQUIRE_MESSAGE(transient, error);
+		fx.layer->mouseMove(clickX, clickY);
+		fx.layer->destroyEngineGadget(transient);
+		REQUIRE(fx.layer->openDropDown() == look);
+		REQUIRE_FALSE(lookList->winIsHidden());
+	}
 	clickStage(fx, clickX, clickY);
 	const std::vector<OpenBFMEPageEvent> events = options->takeExtensionEvents();
 	REQUIRE(events.size() == 1);
@@ -3232,7 +3242,7 @@ TEST_CASE("shellfix1 options retail: in the BFME2 style no frame border of the r
 		CHECK(border->instName().empty());
 		CHECK_FALSE_MESSAGE(border->globallyVisible(), "depth " << depth);
 	}
-	// the version label's holder (depth 1: "Version 2.1" above ACCEPT) stays
+	// the version label's holder (depth 1: "Version 2.01" above ACCEPT) stays
 	AptCharacterInst *version = main->asSprite()->childAtDepth(1);
 	REQUIRE(version);
 	CHECK(version->globallyVisible());

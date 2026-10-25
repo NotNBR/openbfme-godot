@@ -9,7 +9,8 @@
 // local player's units, through the same lockstep command path as the HUD. The AI players are the logic's own skirmish AI.
 //
 // Usage:
-//   openbfme_peer --rotwk DIR --bfme2 DIR (or ROTWK_INSTALL / BFME2_INSTALL; OPENBFME_EXTRA_ARCHIVES: user .big files over the retail mount, as the game's)
+//   openbfme_peer --rotwk DIR --bfme2 DIR (or ROTWK_INSTALL / BFME2_INSTALL) [--mod PATH ...] (lane MODS-1: RotWK -mod, Common/ModMount.h)
+//     OPENBFME_EXTRA_ARCHIVES: user .big files over the retail mount
 //     --host PORT [--bind IP] --map KEY --seed N --slot "human|easy|medium|hard|brutal,FactionName,startPos,team[,handicap]" (repeated, in slot order;
 //       lane OWNERFIX-2: the handicap 0, -5 .. -95, default 0; the report lists each playable player's `player_handicap`)
 //     | --join IP:PORT --name NAME
@@ -42,6 +43,10 @@
 //     then the leave, GodotGameWorld self_destruct + net_finish); its report says quit_at;
 //     [--paced] the game advances by the real time elapsed (a client's render loop at about 200 Hz: the 5 Hz logic clock paces the frames) instead of
 //     --step-ms per loop; the report's input_latency / stall lines measure the smoothness (LockstepDriver::SmoothStats)
+//     lane NETLAG-2: [--script-phase MS|random] with --script: the orders go out MS ms into each frame (random: anywhere in it, as a click lands);
+//     the report's run_ahead_frames line counts the frames run at each run-ahead; [--hitch-at FRAME:MS] (repeated) at that protocol frame the process
+//     stops for MS ms without servicing anything (a client's render hitch: its acknowledgements come late); [--no-early-orders] every order waits for
+//     the run-ahead's frame (NetworkConfig::earlyOrders off); the report's early_orders line counts the orders that ran a frame sooner
 //     lane HERO-2: [--create-a-hero SLOT:FILE.cah] (host, repeated) the slot's Create-a-Hero, read at the setup and carried by the START to every peer;
 //     with --lan-join [--create-a-hero FILE.cah] the own slot's, sent to the lobby's host (LANAPI::requestSlotCreateAHero); [--recruit-create-a-hero FRAME]
 //     with --script: from that frame the local player recruits its Create-a-Hero at its fortress until it exists
@@ -54,6 +59,18 @@
 //     frame); [--net-resume-ms MS] once the game has been paused MS ms this peer resumes it (any player may); [--rejoin-window-ms N] an online
 //     game's rejoin window (default 300000)
 //   openbfme_peer --rotwk DIR --bfme2 DIR --replay FILE [--report FILE]
+//   lane ANTICHEAT-1: ... --replay FILE --fog-check OUT.json [--game-id ID]   also runs the integrity check D1 (GameNetwork/OrdersIntoFog.h: orders on
+//     objects the player could not see) over the re-simulation and writes its JSON report; the check abstains when the replay lost a command, has no
+//     recorded hashes, starts from a save or the re-simulation does not reproduce them (crc_parity); without an end record (a relay log's replay) the
+//     orders up to the last recorded hash are judged;
+//     [--input-rate-check OUT2.json] D5 (GameNetwork/CommandStreamChecks.h: more than 100 commands in 5 s of game time, informational),
+//     [--packet-check OUT.json --game-id ID] with --relay-log (lane ANTICHEAT-1) D7: each slot's input as the relay received it (the log's INPUT
+//     records, version 4: verified under AUTH-1 or plain, and what the relay refused for the slot);
+//     [--command-check OUT3.json] D6 (commands a clean client never sends), [--view-check OUT4.json] D2 (GameNetwork/ViewChecks.h: the pointer resting
+//     over a hidden enemy, from the replay's VIEW records), in the same pass and under the same abstain rules;
+//     [--fog-check-dump DIR --fog-check-view PLAYER --fog-check-around F1,F2 [--fog-check-before 50] [--fog-check-after 15]] the evidence view: for every
+//     state from `before` frames ahead of each listed frame to `after` frames past it, DIR/frame_NNNNNN.txt holds PLAYER's shroud cells (c / f / s) and
+//     every player object (own / ally / neutral / enemy, seen or not by PLAYER), DIR/terrain.txt the grid's ground heights (tools/integrity/render_evidence.py)
 //   lane SAVE-2 (docs/SAVES.md T1, the fresh process): openbfme_peer ... --load-save SAVE --replay FILE [--report FILE]   loads the save (an .obfmesave of
 //     this build: its log is caught up to its frame F, every recorded hash compared, GameClient/CommandLogLoad.h), then plays the rest of FILE (the
 //     uninterrupted game's replay, the same game) from F with every frame's hash compared; the report adds save_frame and catch_up_hashes; exit 2 on a
@@ -63,7 +80,9 @@
 //     writes this build's profile identity text to FILE (what a test records
 //     the game under, so the save is this build's) and exits
 //   lane ONLINE-2: openbfme_peer --rotwk DIR --bfme2 DIR --print-profile   prints this build's profile identity MD5 (what the lobby compares),
-//     then "faction INDEX NAME" lines (the START's faction numbers)
+//     then "faction INDEX NAME" lines (the START's faction numbers); lane STATS-1: [--print-ids] also "thing ID NAME", "upgrade BIT NAME",
+//     "science KEY NAME" and "power ID NAME" lines: the names behind the ids a GameMessage carries (they follow this build's INI load order), for
+//     the console's stats pipeline (reads the relay logs; never runs the game)
 //     lane ONLINE-3: a spectator START ("openbfme-spectate", the lobby's /v1/games/<id>/spectate) watches the game read-only: the relay's log (held back by
 //     the spectator delay) is re-simulated as it grows, with no local slot (the observer's ReplayObserver side: no shroud), until --frames or the
 //     log's end; the report's spectate lines (frames, CRCs compared with the players', the relay's refusals) and final_hash at that frame;
@@ -88,6 +107,8 @@
 #include "Common/System/SaveGame/SaveGameFile.h"
 #include "GameClient/CommandLogLoad.h"
 #include "Common/Sha256.h"
+#include "Common/ModEngineFeatures.h"
+#include "Common/ModMount.h"
 #include "Common/RetailArchivePolicy.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -118,13 +139,23 @@
 #include "Common/Crc32.h"
 #include "GameLogic/SelfDestruct.h"
 #include "GameNetwork/ScriptedPlayer.h"
+#include "GameLogic/System/InvisibilityManager.h"
+#include "GameLogic/System/ShroudManager.h"
+#include "GameNetwork/CommandStreamChecks.h"
+#include "GameNetwork/FogCheckDriver.h"
+#include "GameNetwork/OrdersIntoFog.h"
 #include "GameLogic/ObjectTemplateInfo.h"
 #include "Common/PlayerScience.h"
+#include "Common/Science.h"
+#include "Common/SpecialPower.h"
+#include "Common/Upgrade.h"
+#include "GameLogic/SpellStores.h"
 #include "Libraries/WWVegas/WW3D2/assetmgr.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -151,7 +182,16 @@ struct Args
 	int runAhead = 1; // lane NETLAG-1 (was 2)
 	int crcInterval = 100;
 	bool script = false, realtime = false;
+	// lane NETLAG-2: --script-phase MS|random: the scripted orders go out MS ms after the frame they are issued on began (random: uniform 0 .. 199 per
+	// frame, a human's click lands anywhere in the 200 ms frame), not at its start; the click-to-effect times then sample the whole frame
+	int scriptPhaseMs = 0;
+	std::vector<std::pair<long long, int>> hitches; ///< lane NETLAG-2: --hitch-at FRAME:MS (repeated)
 	std::string record, hashes, report, replay;
+	std::string fogCheck, gameId; // lane ANTICHEAT-1
+	std::string inputRateCheck, commandCheck; // lane ANTICHEAT-1 (owner 2026-10-21): D5, D6
+	std::string packetCheck; // lane ANTICHEAT-1: D7, with --relay-log
+	std::string viewCheck;   // lane ANTICHEAT-1: D2, with --replay
+	std::string fogDump; int fogView = -1; std::vector<UnsignedInt> fogAt; int fogBefore = 50, fogAfter = 15; // the evidence view's frames
 	std::string loadSave; ///< lane SAVE-2: --load-save FILE (with --replay)
 	bool verifyLog = false; ///< lane SAVE-4e: --verify-log (a snapshot save is caught up from its log and its snapshot compared)
 	std::string snapshotOut; ///< lane SAVE-4e: --snapshot-out FILE (with --replay): the snapshot at the replay's end (T3, the bytes across OSes)
@@ -180,6 +220,7 @@ struct Args
 	bool kick = false;
 	std::string desyncDir;
 	bool fixedRunAhead = false;
+	bool noEarlyOrders = false; ///< lane NETLAG-2: --no-early-orders
 	bool lanJoin = false, lanHost = false;
 	int lanPumpMs = 5;
 	bool lanPumpGiven = false;
@@ -187,6 +228,9 @@ struct Args
 	int lanPortBase = -1;
 	std::string platform; ///< lane PLATFORMICON-1: --platform windows|linux|macos (--lan-join: the PLATFORM_INFO this peer sends; none: it tells nothing, like an older build)
 	bool uber = false;             ///< lane UBER-1: --uber
+	std::vector<std::string> mods; ///< lane MODS-1: --mod PATH (RotWK's -mod; absolute: this tool has no user data folder)
+	std::vector<std::string> modEngines;  ///< lane MODS-3: --mod-engine MD5 (a modified game binary of the mod: Common/ModEngineFeatures.h)
+	std::vector<std::string> installMods; ///< lane MODS-2: --mod-install FOLDER, repeated highest priority first (Common/ModMount.h MountInstallOverlay)
 	int logicThreads = 0;          ///< PERF-2: --logic-threads N, the logic job pool's threads (0: OPENBFME_LOGIC_THREADS or the hardware's)
 	int toggleGates = 0;                ///< lane HUD-5: --toggle-gates N (every N frames the local player toggles each settled gate it controls)
 	long long recruitCreateAHeroAt = -1; ///< lane HERO-2: --recruit-create-a-hero FRAME (the local player recruits its Create-a-Hero from then on until made)
@@ -194,6 +238,7 @@ struct Args
 	std::string onlineStart, relayLog;      ///< lane ONLINE-2: --online-start FILE.json, --relay-log LOG
 	bool bindGiven = false;
 	bool printProfile = false;              ///< lane ONLINE-2: --print-profile (the lobby compares the profile identity's MD5)
+	bool printIds = false;                  ///< lane STATS-1: --print-ids (with --print-profile: the id -> name tables)
 	long long netPauseAt = -1;              ///< lane ONLINE-3: --net-pause-at FRAME
 	long long netResumeMs = -1;             ///< lane ONLINE-3: --net-resume-ms MS
 	long long rejoinWindowMs = -1;          ///< lane ONLINE-3: --rejoin-window-ms N
@@ -227,12 +272,16 @@ bool parseArgs(int argc, char **argv, Args &a, std::string &error)
 		};
 		std::string v;
 		if (k == "--rotwk" && next(a.rotwk)) {}
+		else if (k == "--mod" && next(v)) { a.mods.push_back(v); }
+		else if (k == "--mod-install" && next(v)) { a.installMods.push_back(v); }
+		else if (k == "--mod-engine" && next(v)) { a.modEngines.push_back(v); }
 		else if (k == "--bfme2" && next(a.bfme2)) {}
 		else if (k == "--host" && next(v)) a.hostPort = std::atoi(v.c_str());
 		else if (k == "--bind" && next(a.bind)) a.bindGiven = true;
 		else if (k == "--online-start" && next(a.onlineStart)) {}
 		else if (k == "--relay-log" && next(a.relayLog)) {}
 		else if (k == "--print-profile") a.printProfile = true;
+		else if (k == "--print-ids") a.printProfile = a.printIds = true;
 		else if (k == "--net-pause-at" && next(v)) a.netPauseAt = std::atoll(v.c_str());
 		else if (k == "--net-resume-ms" && next(v)) a.netResumeMs = std::atoll(v.c_str());
 		else if (k == "--rejoin-window-ms" && next(v)) a.rejoinWindowMs = std::atoll(v.c_str());
@@ -240,6 +289,10 @@ bool parseArgs(int argc, char **argv, Args &a, std::string &error)
 		else if (k == "--spectate-forge") a.spectateForge = true;
 		else if (k == "--spectate-observe" && next(v)) a.spectateObserveEvery = std::max(1, std::atoi(v.c_str()));
 		else if (k == "--frame-times") a.frameTimes = true;
+		else if (k == "--no-early-orders") a.noEarlyOrders = true;
+		else if (k == "--hitch-at" && next(v) && v.find(':') != std::string::npos)
+			a.hitches.emplace_back(std::atoll(v.c_str()), std::atoi(v.c_str() + v.find(':') + 1));
+		else if (k == "--script-phase" && next(v)) a.scriptPhaseMs = v == "random" ? -1 : std::max(0, std::atoi(v.c_str()));
 		else if (k == "--join" && next(a.join)) {}
 		else if (k == "--name" && next(a.name)) {}
 		else if (k == "--map" && next(a.map)) {}
@@ -254,6 +307,25 @@ bool parseArgs(int argc, char **argv, Args &a, std::string &error)
 		else if (k == "--hashes" && next(a.hashes)) {}
 		else if (k == "--report" && next(a.report)) {}
 		else if (k == "--replay" && next(a.replay)) {}
+		else if (k == "--fog-check" && next(a.fogCheck)) {} // lane ANTICHEAT-1
+		else if (k == "--game-id" && next(a.gameId)) {}
+		else if (k == "--input-rate-check" && next(a.inputRateCheck)) {}
+		else if (k == "--command-check" && next(a.commandCheck)) {}
+		else if (k == "--packet-check" && next(a.packetCheck)) {}
+		else if (k == "--view-check" && next(a.viewCheck)) {}
+		else if (k == "--fog-check-dump" && next(a.fogDump)) {}
+		else if (k == "--fog-check-view" && next(v)) a.fogView = std::atoi(v.c_str());
+		else if (k == "--fog-check-around" && next(v))
+		{
+			for (size_t p = 0; p < v.size();)
+			{
+				a.fogAt.push_back((UnsignedInt)std::strtoul(v.c_str() + p, nullptr, 10));
+				const size_t c = v.find(',', p);
+				p = c == std::string::npos ? v.size() : c + 1;
+			}
+		}
+		else if (k == "--fog-check-before" && next(v)) a.fogBefore = std::atoi(v.c_str());
+		else if (k == "--fog-check-after" && next(v)) a.fogAfter = std::atoi(v.c_str());
 		else if (k == "--load-save" && next(a.loadSave)) {}
 		else if (k == "--verify-log") { a.verifyLog = true; }
 		else if (k == "--snapshot-out" && next(a.snapshotOut)) {}
@@ -413,6 +485,62 @@ bool loadWorld(const Args &a, World &w, std::string &error)
 		error = "the retail mount failed (a headless peer needs every archive a rendering peer reads, the W3D archives included):\n" + error;
 		return false;
 	}
+	std::vector<std::string> modLines;
+	std::vector<MountedArchive> mountedArchives = mr.mounted;
+	if (!ModEngineFeatures::activate(a.modEngines, &error)) // lane MODS-3, before anything is parsed
+	{
+		return false;
+	}
+	std::vector<std::string> features = a.features;
+	for (const std::string &f : ModEngineFeatures::identityFeatures())
+	{
+		features.push_back(f);
+	}
+	if (!a.installMods.empty())
+	{
+		// lane MODS-2: an install-folder mod: the file system of the merged game folder replaces the retail one
+		auto merged = std::make_unique<Win32BIGFileSystem>();
+		const ModMountReport im = MountInstallOverlay(*merged, mr, a.installMods, ModMountOptions());
+		if (!im.ok)
+		{
+			for (const std::string &e : im.errors)
+			{
+				error += e + "\n";
+			}
+			error = "the install-folder mod failed:\n" + error;
+			return false;
+		}
+		w.fs = std::move(merged);
+		modLines = im.identity;
+		mountedArchives = im.merged;
+	}
+	// lane MODS-1: the -mod operands over the verified retail set (RotWK RW 0x7BAA44, Common/ModMount.h)
+	if (!a.mods.empty())
+	{
+		ModOperand operand;
+		for (const std::string &m : a.mods)
+		{
+			if (!ParseModArgument(m, std::string(), operand, &error))
+			{
+				return false;
+			}
+		}
+		ModMountOptions modOptions;
+		modOptions.rotwkInstallRoot = a.rotwk;
+		const ModMountReport modReport = MountRetailMod(*w.fs, operand, modOptions);
+		if (!modReport.ok)
+		{
+			for (const std::string &e : modReport.errors)
+			{
+				error += e + "\n";
+			}
+			error = "the -mod mount failed:\n" + error;
+			return false;
+		}
+		modLines.insert(modLines.end(), modReport.identity.begin(), modReport.identity.end());
+	}
+	w.profile = ProfileIdentity::compute(mountedArchives, RandomAlgorithm::ZH_CarryChain, features, a.uber ? SimulationProfile::Uber : SimulationProfile::Faithful,
+		modLines);
 	// Local, not retail, as the rendering peer's mount (GodotRetailFileSystem): OPENBFME_EXTRA_ARCHIVES lists .big files (';'-separated) mounted over
 	// the retail archives (a user map and the maps\mapcache.ini that names it); they stay out of the profile identity there too. Unset, nothing changes.
 	if (const char *extra = std::getenv("OPENBFME_EXTRA_ARCHIVES"); extra != nullptr && extra[0] != 0)
@@ -437,7 +565,6 @@ bool loadWorld(const Args &a, World &w, std::string &error)
 			w.fs->mountArchive(std::move(archive), path, true);
 		}
 	}
-	w.profile = ProfileIdentity::compute(mr.mounted, RandomAlgorithm::ZH_CarryChain, a.features, a.uber ? SimulationProfile::Uber : SimulationProfile::Faithful);
 	w.world = std::make_unique<RetailObjectWorld>(*w.fs);
 	if (!w.world->load(&error) || !MapObjectGameData::load(*w.fs, w.options, &error) || !MapObjectGameData::loadPlayerTemplates(*w.fs, w.options, &error)
 		|| !MapCreationHooks::load(*w.fs, w.options.creationScripts, &error) || !GameLogicSettingsLoader::load(*w.fs, w.settings, &error)
@@ -595,6 +722,72 @@ void writeReport(const std::string &path, const std::string &text)
 	o << text;
 }
 
+// lane ANTICHEAT-1: the evidence view's frames (openbfme_peer --fog-check-dump): what the viewed player's shroud showed and where every player object was
+void dumpFogState(const Args &a, GameLogic &logic, UnsignedInt next)
+{
+	const ShroudManager *shroud = logic.shroud();
+	const Player *viewer = logic.players().getNthPlayer(a.fogView);
+	if (!shroud || !viewer)
+	{
+		return;
+	}
+	const int W = shroud->cellCountX(), H = shroud->cellCountY();
+	const std::string terrain = a.fogDump + "/terrain.txt";
+	if (!std::ifstream(terrain))
+	{
+		std::ofstream t(terrain, std::ios::binary | std::ios::trunc);
+		t << "grid " << W << " " << H << " cell " << shroud->cellSize() << " origin " << shroud->originX() << " " << shroud->originY() << "\n";
+		for (int y = 0; y < H; ++y)
+		{
+			for (int x = 0; x < W; ++x)
+			{
+				const float h = logic.getGroundHeight(shroud->originX() + ((float)x + 0.5f) * shroud->cellSize(),
+					shroud->originY() + ((float)y + 0.5f) * shroud->cellSize());
+				t << (x ? " " : "") << (int)std::lround(h);
+			}
+			t << "\n";
+		}
+	}
+	bool wanted = false;
+	for (UnsignedInt f : a.fogAt)
+	{
+		wanted = wanted || (next + (UnsignedInt)a.fogBefore >= f && next <= f + (UnsignedInt)a.fogAfter);
+	}
+	if (!wanted)
+	{
+		return;
+	}
+	char name[64];
+	std::snprintf(name, sizeof(name), "/frame_%06u.txt", next);
+	std::ofstream o(a.fogDump + name, std::ios::binary | std::ios::trunc);
+	o << "frame " << next << " view " << a.fogView << "\n";
+	for (int y = 0; y < H; ++y)
+	{
+		for (int x = 0; x < W; ++x)
+		{
+			const CellShroudStatus c = shroud->getCellStatus(a.fogView, x, y);
+			o << (c == CELLSHROUD_CLEAR ? 'c' : c == CELLSHROUD_FOGGED ? 'f' : 's');
+		}
+		o << "\n";
+	}
+	for (Object *obj = logic.getFirstObject(); obj; obj = obj->getNextObject())
+	{
+		const Player *owner = obj->getControllingPlayer();
+		if (!owner || owner == logic.players().getNeutralPlayer() || obj->isEffectivelyDead())
+		{
+			continue;
+		}
+		const Relationship r = viewer->getRelationship(owner);
+		const char *rel = owner == viewer ? "own" : r == ENEMIES ? "enemy" : r == ALLIES ? "ally" : "neutral";
+		const ObjectShroudStatus st = shroud->clientObjectStatus(*obj, a.fogView);
+		// what the client draws (Sol r2): not hidden by the shroud, not stealthed and undetected for the viewer; a contained object (no record) is
+		// drawn by its container, not here
+		const bool seen = shroud->hasRecord(*obj) && st != OBJECTSHROUD_SHROUDED && !InvisibilityManager::isStealthedAndUndetected(*obj, viewer);
+		o << "o " << obj->getID() << " " << rel << " " << obj->getPosition()->x << " " << obj->getPosition()->y << " " << (seen ? 1 : 0) << " "
+		  << (obj->isKindOfName("STRUCTURE") ? "s" : "u") << "\n";
+	}
+}
+
 int runReplay(const Args &a, World &w)
 {
 	std::string error;
@@ -692,12 +885,134 @@ int runReplay(const Args &a, World &w)
 	}
 	ReplayPlayback playback(replay);
 	RegisterLogicCRCHandler(game.dispatch());
-	game.setFrameDriver(&playback);
+	// lane ANTICHEAT-1: the judged players are the recording's network slots (the human players; the AI's orders are not in the stream); one pass runs
+	// D1 (--fog-check), D5 (--input-rate-check) and D6 (--command-check): the three are always computed together, each written when asked for
+	std::unique_ptr<OrdersIntoFog> fogCheck;
+	std::unique_ptr<InputRateCheck> rateCheck;
+	std::unique_ptr<CommandIntegrityCheck> commandCheck;
+	std::unique_ptr<ViewCheck> viewCheck;
+	std::unique_ptr<FogCheckDriver> fogDriver;
+	const bool checks = !a.fogCheck.empty() || !a.inputRateCheck.empty() || !a.commandCheck.empty() || !a.viewCheck.empty();
+	if (checks)
+	{
+		std::vector<int> humans;
+		for (int p : replay.header.network.slotPlayerIndex)
+		{
+			if (p >= 0)
+			{
+				humans.push_back(p);
+			}
+		}
+		fogCheck = std::make_unique<OrdersIntoFog>(game.logic(), humans);
+		rateCheck = std::make_unique<InputRateCheck>(game.logic(), humans);
+		commandCheck = std::make_unique<CommandIntegrityCheck>(game.logic(), humans);
+		for (size_t slot = 0; slot < replay.header.network.slotPlayerIndex.size(); ++slot)
+		{
+			const int p = replay.header.network.slotPlayerIndex[slot];
+			if (p >= 0)
+			{
+				fogCheck->setSlot(p, (int)slot);
+				rateCheck->setSlot(p, (int)slot);
+				commandCheck->setSlot(p, (int)slot);
+			}
+		}
+		viewCheck = std::make_unique<ViewCheck>(game.logic(), replay.views,
+			std::vector<int>(replay.header.network.slotPlayerIndex.begin(), replay.header.network.slotPlayerIndex.end()), *fogCheck);
+		fogDriver = std::make_unique<FogCheckDriver>(playback, replay, *fogCheck);
+		fogDriver->inputRate = rateCheck.get();
+		fogDriver->commands = commandCheck.get();
+		fogDriver->views = viewCheck.get();
+		if (!a.fogDump.empty())
+		{
+			fogDriver->onState = [&a](GameLogic &logic, UnsignedInt next) { dumpFogState(a, logic, next); };
+		}
+		fogDriver->offer(game.logic());
+		game.setFrameDriver(fogDriver.get());
+	}
+	else
+	{
+		game.setFrameDriver(&playback);
+	}
 	while (!playback.finished())
 	{
 		game.advance(0.2);
 	}
 	game.drainFrames();
+	if (checks)
+	{
+		std::string parity = "none";
+		std::vector<std::string> abstain;
+		if (playback.hasMismatch())
+		{
+			parity = "mismatch";
+			abstain.push_back("the re-simulation does not reproduce the recorded state hashes (first at frame " + std::to_string(playback.firstMismatch().frame) + ")");
+		}
+		else if (playback.hashesCompared() > 0)
+		{
+			parity = "match";
+		}
+		else
+		{
+			abstain.push_back("the replay has no recorded state hashes to compare");
+		}
+		// a replay without an end record (a relay log's, S-3710, or an interrupted recording) plays up to its last recorded hash: every order judged
+		// lies before a state the players' own CRCs confirm, so the missing tail is a coverage limit (frames), not a reason to abstain
+		if (!a.loadSave.empty())
+		{
+			abstain.push_back("the re-simulation started from a save, not from the game's first frame");
+		}
+		if (!replay.lost.empty())
+		{
+			abstain.push_back("the replay lost " + std::to_string(replay.lost.size()) + " command(s)");
+		}
+		if (replay.complete && game.frame() >= replay.finalFrame && game.logic().computeStateHash() != replay.finalHash)
+		{
+			abstain.push_back("the re-simulation's final state hash differs from the replay's end record"); // Sol r2: the end record is a hash too
+		}
+		if (game.frame() < replay.finalFrame)
+		{
+			abstain.push_back("the re-simulation stopped at frame " + std::to_string(game.frame()) + " of " + std::to_string(replay.finalFrame));
+		}
+		for (const std::string &why : abstain)
+		{
+			fogCheck->abstain(why);
+			rateCheck->abstain(why);
+			commandCheck->abstain(why);
+			viewCheck->abstain(why);
+		}
+		const std::pair<const std::string *, std::string> outputs[4] = { { &a.fogCheck, fogCheck->json(a.gameId, parity, game.frame()) },
+			{ &a.inputRateCheck, rateCheck->json(a.gameId, parity, game.frame()) }, { &a.commandCheck, commandCheck->json(a.gameId, parity, game.frame()) },
+			{ &a.viewCheck, viewCheck->json(a.gameId, parity, game.frame()) } };
+		for (const auto &o : outputs)
+		{
+			if (o.first->empty())
+			{
+				continue;
+			}
+			std::ofstream fo(*o.first, std::ios::binary | std::ios::trunc);
+			fo << o.second << "\n";
+			if (!fo)
+			{
+				std::fprintf(stderr, "openbfme_peer: cannot write %s\n", o.first->c_str());
+				return 1;
+			}
+		}
+		r << "fog_check " << (a.fogCheck.empty() ? "-" : a.fogCheck) << " status " << (fogCheck->abstained() ? "abstained" : "ok") << " samples "
+		  << fogCheck->samples() << "\n";
+		for (const OrdersIntoFog::PlayerResult &pr : fogCheck->results())
+		{
+			r << "fog_check_player " << pr.player << " band " << pr.band << " events " << pr.events.size() << " encounters " << pr.encounters << " judged "
+			  << pr.judged << "\n";
+		}
+		for (const InputRateCheck::PlayerResult &pr : rateCheck->results())
+		{
+			r << "input_rate_player " << pr.player << " commands " << pr.commands << " peak_5s " << pr.peak << " episodes " << pr.episodes.size() << "\n";
+		}
+		for (const CommandIntegrityCheck::PlayerResult &pr : commandCheck->results())
+		{
+			r << "command_check_player " << pr.player << " commands " << pr.commands << " events " << pr.events.size() << "\n";
+		}
+	}
 	r << "replay " << a.replay << "\n";
 	r << "frames " << game.frame() << " of " << replay.finalFrame << (replay.complete ? "" : " (no end record)") << "\n";
 	r << "commands " << replay.commandCount() << "\n";
@@ -895,6 +1210,18 @@ int runRelayLog(const Args &a, World &w)
 	{
 		r << "relay_log_problem " << p << "\n";
 	}
+	if (!a.packetCheck.empty())
+	{
+		// lane ANTICHEAT-1: D7, packet integrity (the same report shape as D1 / D5 / D6: tools/integrity/README.md); online batch r4: in the core
+		const std::string j = RelayLog::packetIntegrityReport(log, config, assembled, a.gameId);
+		std::ofstream fo(a.packetCheck, std::ios::binary | std::ios::trunc);
+		fo << j;
+		if (!fo)
+		{
+			std::fprintf(stderr, "openbfme_peer: cannot write %s\n", a.packetCheck.c_str());
+			return 1;
+		}
+	}
 	r << "replay " << a.record << "\n";
 	for (const std::string &st : RelayLog::stopLines())
 	{
@@ -1045,6 +1372,28 @@ int main(int argc, char **argv)
 		for (int i = 0; i < w.world->setupPlayerTemplates().getPlayerTemplateCount(); ++i)
 		{
 			std::printf("faction %d %s\n", i, w.world->setupPlayerTemplates().getNthPlayerTemplate(i)->getName().c_str()); // the START's faction indices
+		}
+		if (a.printIds)
+		{
+			for (const ThingTemplate *t : w.world->things().templates())
+			{
+				std::printf("thing %u %s\n", (unsigned)t->getTemplateID(), t->getName().c_str()); // MSG_QUEUE_UNIT_CREATE / *_CONSTRUCT ids
+			}
+			for (const UpgradeTemplate *u : w.world->upgrades().templates())
+			{
+				std::printf("upgrade %d %s\n", u->getMaskBit(), u->getUpgradeName().c_str()); // MSG_QUEUE_UPGRADE's mask bit
+			}
+			const ScienceStore &sciences = w.world->spellStores().sciences();
+			for (const ScienceInfo *info : sciences.sciences())
+			{
+				std::printf("science %d %s\n", (int)info->m_science, sciences.getInternalNameForScience(info->m_science).c_str()); // MSG_PURCHASE_SCIENCE
+			}
+			const SpecialPowerStore &powers = w.world->spellStores().specialPowers();
+			for (size_t i = 0; i < powers.getNumSpecialPowers(); ++i)
+			{
+				const SpecialPowerTemplate *p = powers.getSpecialPowerByIndex(i);
+				std::printf("power %u %s\n", p->getID(), p->getName().c_str()); // MSG_DO_SPECIAL_POWER*
+			}
 		}
 		return 0;
 	}
@@ -1462,6 +1811,7 @@ int main(int argc, char **argv)
 	so.network = w.network;
 	so.desyncDirectory = a.desyncDir;
 	so.adaptiveRunAhead = !a.fixedRunAhead;
+	so.earlyOrders = !a.noEarlyOrders; // lane NETLAG-2
 	so.exeName = "openbfme_peer";
 	so.playerName = lobby.localSlot >= 0 && lobby.localSlot < MAX_SLOTS ? std::string(lobby.game.game.slots[lobby.localSlot].name.begin(), lobby.game.game.slots[lobby.localSlot].name.end()) : std::string();
 	if (a.disconnectMs >= 0)
@@ -1518,6 +1868,16 @@ int main(int argc, char **argv)
 		const std::uint64_t loadWait = NetMilliseconds();
 		while (!session.pollLoaded())
 		{
+			if (lobby.online && session.transport().relayRefusal() != 0)
+			{
+				// ONLINE16-FIX: a refused binding never loads: say why at once (the transport's error names it, e.g. a relay too old to authenticate)
+				for (const std::string &e : session.transport().errors())
+				{
+					std::fprintf(stderr, "openbfme_peer: %s\n", e.c_str());
+				}
+				std::fprintf(stderr, "openbfme_peer: the relay refused this player: %s\n", RelayProtocol::refuseReasonName(session.transport().relayRefusal()));
+				return 3;
+			}
 			if (NetMilliseconds() - loadWait > 180000)
 			{
 				std::fprintf(stderr, "openbfme_peer: the other peers did not load in 180 s\n");
@@ -1600,14 +1960,35 @@ int main(int argc, char **argv)
 	const int myPlayer = session.config().slotPlayerIndex[(size_t)lobby.localSlot];
 	const int myStart = start.message.game.slots[lobby.localSlot].startPos;
 	unsigned long long scripted = 0;
+	unsigned long long viewsSent = 0; // lane ANTICHEAT-1
 	std::map<std::string, unsigned long long> scriptedTypes; // the scripted commands by type
 	UnsignedInt lastScripted = 0xFFFFFFFFu;
+	UnsignedInt scriptFrame = 0xFFFFFFFFu; // lane NETLAG-2: the frame seen last and when its scripted orders are due (--script-phase)
+	std::uint64_t scriptDueMs = 0;
+	std::uint32_t phaseRng = 0x9E3779B9u ^ (std::uint32_t)(lobby.localSlot * 7919 + 1); // presentation-side only: never the simulation's random
+	std::map<int, unsigned long long> runAheadFrames; // lane NETLAG-2: the run-ahead in effect at each frame this peer ran
 	UnsignedInt lastGateFrame = 0xFFFFFFFFu; // lane HUD-5: --toggle-gates
 	unsigned long long gateMessages = 0;
 	const std::uint64_t runStart = NetMilliseconds();
 	std::uint64_t lastProgress = runStart;
 	int exitCode = 0;
-	session.driver().setStopFrame((UnsignedInt)std::max(0, a.frames)); // SMOOTH-1: no batch beyond --frames (the worker may run ahead of presentation)
+	// SMOOTH-1: no batch beyond --frames (the worker may run ahead of presentation). lane NETLAG-2: --vanish-at stops the process exactly at its frame
+	// (a frame that waited and the next can now run in one advance: LiveGame's owed frame). KNOWN-3: --quit-at and a pending --blackout-at hold the
+	// driver at their frame alike, so the event happens at exactly that protocol frame on a loaded machine too (a catch-up advance ran over it: the
+	// quit at 251); the hold ends once the event is done (the blackout's is lifted in the same loop pass, before the advance)
+	auto holdFrame = [&]() {
+		long long stop = std::max(0, a.frames);
+		for (long long f : { a.vanishAt, a.quitAt })
+		{
+			stop = f >= 0 ? std::min(stop, f) : stop;
+		}
+		for (const auto &bo : a.blackouts)
+		{
+			stop = bo.first >= 0 ? std::min(stop, bo.first) : stop;
+		}
+		session.driver().setStopFrame((UnsignedInt)stop);
+	};
+	holdFrame();
 	// lane MP-2: a frame may wait for the disconnect path (the screen after NetworkDisconnectTime, the drop after NetworkPlayerTimeoutTime)
 	const std::uint64_t noProgressMs = 30000u + (std::uint64_t)so.network.disconnectTime + (std::uint64_t)so.network.playerTimeoutTime;
 	std::string disconnectQuit;
@@ -1706,11 +2087,39 @@ int main(int argc, char **argv)
 				}
 			}
 		}
-		if (a.script && game.frame() != lastScripted)
+		if (game.frame() != scriptFrame)
+		{
+			// every frame run since the last look (a catch-up runs several in one loop: Sol r1)
+			runAheadFrames[session.network().currentRunAhead()] += scriptFrame == 0xFFFFFFFFu ? 1 : (unsigned long long)(game.frame() - scriptFrame);
+			scriptFrame = game.frame();
+			std::uint32_t phase = (std::uint32_t)a.scriptPhaseMs;
+			if (a.scriptPhaseMs < 0)
+			{
+				phaseRng ^= phaseRng << 13, phaseRng ^= phaseRng >> 17, phaseRng ^= phaseRng << 5;
+				phase = phaseRng % 200;
+			}
+			scriptDueMs = NetMilliseconds() + phase;
+		}
+		if (a.script && game.frame() != lastScripted && NetMilliseconds() >= scriptDueMs)
 		{
 			lastScripted = game.frame();
 			const size_t before = game.commands().messages().size();
 			scripted += ScriptedPlayer::issue(game, myPlayer, myStart, game.commands());
+			// lane ANTICHEAT-1: a scripted player reports its view like the game's HUD (Network::submitView: the relay's log only; LAN keeps none):
+			// camera and pointer on its first unit, every third frame
+			if (game.frame() % 3 == 0)
+			{
+				for (const Object *o = game.logic().getFirstObject(); o; o = o->getNextObject())
+				{
+					const Player *owner = o->getControllingPlayer();
+					if (owner && owner->getPlayerIndex() == myPlayer && !o->isEffectivelyDead() && !o->isKindOfName("STRUCTURE"))
+					{
+						viewsSent += session.network().submitView(game.frame(), o->getPosition()->x, o->getPosition()->y, o->getPosition()->x,
+							o->getPosition()->y, true) ? 1 : 0;
+						break;
+					}
+				}
+			}
 			// lane HERO-2: the Create-a-Hero is recruited at the fortress (every 25 frames from the given one until the hero exists)
 			const CreateAHeroHero *own = a.recruitCreateAHeroAt >= 0 && game.frame() >= (UnsignedInt)a.recruitCreateAHeroAt && game.frame() % 25 == 0
 				? game.logic().createAHeroes().heroOf(*game.logic().players().getNthPlayer(myPlayer))
@@ -1750,6 +2159,16 @@ int main(int argc, char **argv)
 				session.transport().impairment().blackout(NetMilliseconds(), (std::uint64_t)bo.second); // lane MP-3: the cable is pulled
 				blackoutLog.push_back("frame " + std::to_string(pf) + " for " + std::to_string(bo.second) + " ms");
 				bo.first = -1;
+				holdFrame(); // KNOWN-3: the next event's frame (or --frames)
+			}
+		}
+		for (auto &h : a.hitches)
+		{
+			if (h.first >= 0 && pf >= (UnsignedInt)h.first)
+			{
+				NetSleepMilliseconds((std::uint32_t)h.second); // lane NETLAG-2: the client stops for a moment (a render hitch): nothing is sent or read
+				h.first = -1;
+				lastProgress = NetMilliseconds();
 			}
 		}
 		if (a.pauseAt >= 0 && pf >= (UnsignedInt)a.pauseAt)
@@ -1864,6 +2283,7 @@ int main(int argc, char **argv)
 	r << "desyncs " << net.desyncs().size() << "\n";
 	r << "commands_relayed " << net.commandsRelayed() << "\n";
 	r << "scripted_commands " << scripted << "\n";
+	r << "views_sent " << viewsSent << "\n"; // lane ANTICHEAT-1
 	r << "gate_messages " << gateMessages << "\n";
 	{
 		// lane HUD-5: every gate's state at the end (id:state, GateOpenAndCloseBehavior's 0 opening, 1 open, 2 closing, 3 closed)
@@ -1942,6 +2362,9 @@ int main(int argc, char **argv)
 		r << "relay " << lobby.relay.text() << " bound " << (session.transport().relayBound() ? 1 : 0) << " refusal " << session.transport().relayRefusal()
 		  << " hellos " << ts.relayHellos << " welcomes " << ts.relayWelcomes << " not_bound " << ts.relayNotBound << " slot_mismatches "
 		  << ts.relaySlotMismatches << " unknown_senders " << ts.unknownSenders << "\n";
+		// ONLINE16-FIX: AUTH-1 (the START's macKey: every datagram sealed) and the previous release's envelope (a version-3-only relay)
+		r << "relay_auth authenticated " << (lobby.macKey.empty() ? 0 : 1) << " dropped " << ts.relayAuthDropped << " legacy_envelope "
+		  << (session.transport().relayLegacyEnvelope() ? 1 : 0) << "\n";
 	}
 	{
 		// lane MP-3: the harness's faults and what they did; the smoothness (wall clock, protocol owner)
@@ -2101,6 +2524,14 @@ int main(int argc, char **argv)
 		r << "packet_router " << net.packetRouterAt(game.frame() > 0 ? game.frame() - 1 : 0) << " at_frame " << (game.frame() > 0 ? game.frame() - 1 : 0) << " now "
 		  << net.packetRouterSlot() << "\n";
 		r << "run_ahead " << net.currentRunAhead() << " changes " << net.runAheadChanges() << " worst_latency_ms " << net.maxRoundTripMs() << "\n";
+		r << "run_ahead_frames"; // lane NETLAG-2: "run-ahead:frames" over the frames this peer ran
+		for (const auto &kv : runAheadFrames)
+		{
+			r << " " << kv.first << ":" << kv.second;
+		}
+		r << (runAheadFrames.empty() ? " none" : "") << "\n";
+		r << "early_orders " << net.earlyOrdersSent() << " lead_ms " << net.earlyLeadMs() << "\n";
+		r << "script_phase " << (a.scriptPhaseMs < 0 ? std::string("random") : std::to_string(a.scriptPhaseMs)) << "\n";
 		const SelfDestruct::Stats &sd = SelfDestruct::stats();
 		for (const std::string &cp : checkpoints)
 		{
@@ -2114,6 +2545,15 @@ int main(int argc, char **argv)
 		}
 		// every game slot's player: its live objects (a leaver's go to its ally or die) and whether it is defeated
 		const LiveGame::Report lr = game.report();
+		// lane MODS-3: which script lists and libraries every side runs, the library teams added, and the player / team setup notes
+		for (const std::string &l : lr.mapScripts)
+		{
+			r << "map_scripts " << l << "\n";
+		}
+		for (const std::string &l : lr.playerNotes)
+		{
+			r << "player_note " << l << "\n";
+		}
 		for (int sl = 0; sl < MAX_SLOTS && (size_t)sl < lr.startSlotPlayers.size(); ++sl)
 		{
 			const Player *p = game.logic().players().findPlayerWithName(lr.startSlotPlayers[(size_t)sl]);

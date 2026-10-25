@@ -71,5 +71,16 @@ Existing setup is unchanged: `python -m pip install libclang==18.1.1`, then
 `python tools/sim/sim_audit.py --build <build-dir>` on the build host. Compiler
 system includes are probed from that build's compiler.
 
-The default is `--ast=require` on both platforms. Explicit `--ast=skip` remains
+## macOS
+
+Install the libclang wheel for its Python bindings (`python -m pip install
+libclang==18.1.1`), but the AST pass does not load the wheel's libclang 18: the
+macOS SDK's libc++ headers use builtins of the SDK's own compiler (libclang 18
+fails on `__builtin_clzg` in `<__bit/countl.h>`). `sim_audit.py` loads the
+`libclang.dylib` of the active developer toolchain instead (`xcrun --find clang`,
+then `../lib/libclang.dylib`: Xcode or the Command Line Tools, the compiler the
+build uses). `OPENBFME_LIBCLANG_LIBRARY` overrides it; a missing library is an
+error. The universal build's compile commands are parsed for the arm64 slice.
+
+The default is `--ast=require` on every platform. Explicit `--ast=skip` remains
 a loud exit 3, never proof that the AST audit passed. Do not use it for acceptance.

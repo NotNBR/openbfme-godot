@@ -19,7 +19,8 @@ extern const char *const kBuildRecord;
 std::string versionLine();
 
 // Lane VERSION-1 (owner, 2026-10-14): a version as players read it. A plain release tag "v0.4.5" is "Alpha 0.4.5", an alpha build
-// "v0.4.0-alpha.3" is "v0.4.0 Alpha 3" (its release title); anything else (a preview, a development build "v0.4.5-3-g0123456789",
+// "v0.4.0-alpha.3" is "v0.4.0 Alpha 3" (its release title), a nightly (lane NIGHTLY-1, 2026-10-21) "v0.4.13-nightly.20261022" is
+// "Nightly 0.4.13 (2026-10-22)" ("Nightly 0.4.13 build <n>" when <n> is not a YYYYMMDD date); anything else (a preview, a development build "v0.4.5-3-g0123456789",
 // "0af8b6b84c-dirty") is returned as it is. Same rules as launcher/scripts/core/semver.gd display() and tools/release/autorelease.py
 // display_name(): numbers are digits without leading zeros, at most 9 of them.
 std::string displayVersion(const std::string &version);

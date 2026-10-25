@@ -111,33 +111,34 @@ void hashList(StateHasher &h, const std::vector<ObjectID> &v)
 }
 } // namespace
 
-void AIStatCollector::registerObject(const Object &obj)
+unsigned AIStatCollector::registerObject(const Object &obj)
 {
-	// RW 0x8E4591
+	// RW 0x8E4591; each add that took the object calls the listeners of its mask (RW 0x8E3D4C): the caller does (lane AI5, SkirmishAIManager::objectAdded)
 	const ObjectID id = obj.getID();
-	bool any = false;
+	unsigned listeners = 0;
 	if (economyFilter(obj))
 	{
-		m_economy.push_back(id); // RW 0x99E84E -> RW 0x65BD58 (listeners mask 2: none ported)
-		any = true;
+		m_economy.push_back(id); // RW 0x99E84E -> RW 0x65BD58
+		listeners |= LISTEN_ECONOMY;
 	}
 	if (structureFilter(obj))
 	{
-		// RW 0x99EA19: EXPANSION_PAD (template + 0x123 bit 0) -> + 0x10, else + 4 (listeners mask 1: none ported)
+		// RW 0x99EA19: EXPANSION_PAD (template + 0x123 bit 0) -> + 0x10, else + 4
 		(is(obj, statKinds().expansionPad) ? m_pads : m_structures).push_back(id);
-		any = true;
+		listeners |= LISTEN_STRUCTURES;
 	}
 	// RW 0x8E45DC .. 0x8E45F0: the position sampler (+ 0x10) is not ported
 	if (armyFilter(obj))
 	{
-		(armyMain(obj) ? m_army : m_dozers).push_back(id); // RW 0x99E6C9 (listeners mask 4: none ported)
-		any = true;
+		(armyMain(obj) ? m_army : m_dozers).push_back(id); // RW 0x99E6C9
+		listeners |= LISTEN_ARMY;
 	}
 	else if (shipFilter(obj))
 	{
 		m_ships.push_back(id); // RW 0x99E493
-		any = true;
+		listeners |= LISTEN_ARMY;
 	}
+	const bool any = listeners != 0;
 	const ThingTemplate *t = obj.getTemplate();
 	if (any)
 	{
@@ -150,26 +151,28 @@ void AIStatCollector::registerObject(const Object &obj)
 	{
 		m_heroes.push_back(id); // RW 0x8E4661 .. 0x8E467A
 	}
+	return listeners;
 }
 
-void AIStatCollector::unRegisterObject(const Object &obj)
+unsigned AIStatCollector::unRegisterObject(const Object &obj)
 {
-	// RW 0x8E480C
+	// RW 0x8E480C; each remove that found the object calls the listeners of its mask (RW 0x8E3D77): the caller does (lane AI5)
 	const ObjectID id = obj.getID();
-	bool any = false;
+	unsigned listeners = 0;
 	if (economyFilter(obj) && eraseFirst(m_economy, id))
 	{
-		any = true; // RW 0x99E871
+		listeners |= LISTEN_ECONOMY; // RW 0x99E871
 	}
 	if (structureFilter(obj) && eraseFirst(is(obj, statKinds().expansionPad) ? m_pads : m_structures, id))
 	{
-		any = true; // RW 0x99E924
+		listeners |= LISTEN_STRUCTURES; // RW 0x99E924
 	}
 	// RW 0x8E4871: a removed structure / economy entry leaves the position sampler (not ported)
 	if (armyFilter(obj) ? eraseFirst(armyMain(obj) ? m_army : m_dozers, id) : (shipFilter(obj) && eraseFirst(m_ships, id)))
 	{
-		any = true; // RW 0x99E523, else RW 0x99E4B2
+		listeners |= LISTEN_ARMY; // RW 0x99E523, else RW 0x99E4B2 (the filters exclude each other: RW tries the ship remove when the army remove fails)
 	}
+	const bool any = listeners != 0;
 	const ThingTemplate *t = obj.getTemplate();
 	if (any)
 	{
@@ -186,6 +189,7 @@ void AIStatCollector::unRegisterObject(const Object &obj)
 	{
 		eraseFirst(m_heroes, id); // RW 0x8E48B3 .. 0x8E48D6
 	}
+	return listeners;
 }
 
 void AIStatCollector::update(GameLogic &logic)
@@ -218,4 +222,6 @@ void AIStatCollector::crc(StateHasher &h) const
 		h.addString(kv.first);
 		h.addI32(kv.second);
 	}
+	h.addU32(m_reserve); // lane AI5 (S-413)
+	h.addU32(m_reserveTarget);
 }

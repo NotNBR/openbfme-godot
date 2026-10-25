@@ -160,6 +160,11 @@ void W3DScriptedModelDraw::setModelConditionFlags(const ModelConditionFlags &fla
 		m_pendingTarget = nullptr;
 		m_pending = false;
 	}
+	// Donor W3DModelDraw::setModelState ends with adjustAnimation after
+	// changing the model state. The split model/animation tables here must
+	// re-resolve #(MODEL) even when their shared IdleAnimationState is unchanged.
+	const bool bindingChanged = modelInfo && m_curModelInfo &&
+		(modelInfo->skeleton != m_curModelInfo->skeleton || modelInfo->modelAnimationPrefix != m_curModelInfo->modelAnimationPrefix);
 	if (modelInfo)
 	{
 		applyModelState(modelInfo);
@@ -170,7 +175,7 @@ void W3DScriptedModelDraw::setModelConditionFlags(const ModelConditionFlags &fla
 	}
 	if (next)
 	{
-		select(next, false);
+		select(next, bindingChanged);
 	}
 }
 

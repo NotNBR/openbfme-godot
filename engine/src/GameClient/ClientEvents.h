@@ -35,7 +35,10 @@
 #include "GameClient/DrawableScriptTarget.h"
 #include "GameClient/ObserverTimeline.h"
 
+#include <array>
 #include <cstdint>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -59,8 +62,11 @@ struct ClientEvent
 		CUSTOM_COLORS,   ///< lane CAH-2 (RW 0x80AF0B -> 0x6727B0): customKind and customColors, the drawable's house colour set
 		HERO_ATTACKED,   ///< RW 0x67B78C: the local hero-select bar's attacked effect
 		HERO_FLASH,      ///< RW 0x7BDD7A: name = exact template name, flashFrames = signed client-frame duration
+		CAH_STATISTICS,   ///< hero unique id and the matching statistic names, client profile data
 		MODEL_CONDITIONS, ///< lane SAVE-4e: flags, the object's whole set stored (Drawable::replaceModelConditionFlags RW 0x679512 takes a whole set)
 	};
+	std::string heroUniqueID;
+	std::vector<std::string> heroStatistics;
 	Kind kind = CREATED;
 	UnsignedInt frame = 0;   ///< the logic frame that made it (0 during the load)
 	std::uint32_t seq = 0;   ///< call order over the whole game
@@ -114,6 +120,7 @@ public:
 	void replaceDrawable(Object &obj, const ThingTemplate *tmpl, bool hasColor, std::uint32_t color) override;
 	void fadeIn(Object &obj, UnsignedInt frames) override;
 	void setCustomColors(Object &obj, int kind, std::uint32_t c0, std::uint32_t c1, std::uint32_t c2) override; // lane CAH-2
+	void createAHeroKill(Object &killer, Object &victim) override;
 	void heroAttacked(Object &obj) override;
 	void flashHeroButton(const std::string &templateName, int frames) override;
 	// MapObjectLoop's afterCreate for a map object (DrawableManager::applyPlacement): the client part of the placement
@@ -135,7 +142,9 @@ public:
 
 private:
 	ClientEvent &push(ClientEvent::Kind kind, const Object &obj);
-	void pushFlush(const Object &obj);
+	void pushFlush(Object &obj);
+	// S-090: last flushed capture-flag conditions, separate from the AI snapshot.
+	std::map<ObjectID, std::array<std::uint32_t, 19>> m_animationConditions;
 
 	// lane ANIM-1: the objects whose MODEL_CONDITION events have not been flushed (RW Drawable + 0x443), in the order of their first change
 	// (a flush or a destroy drops an object by erasing its mark, O(1); its m_dirty entry stays behind, stale, and only entries whose mark is the object's current

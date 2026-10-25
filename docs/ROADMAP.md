@@ -344,8 +344,8 @@ the Ring and Create-a-Hero work.
 
 ### M10 - Mods (designed in from the start)
 
-State: MOD-5 started (user maps in the map builders); the other lanes not
-started; every lane follows PLAN rule 6.
+State: lane MODS-1 (2026-10-20) ported MOD-1 (`-mod`, docs/MODS.md, stop S-5300) and the MOD-2 harness (OPENBFME_MOD_CORPUS, no corpus on
+the hosts yet); MOD-5 started (user maps in the map builders); every lane follows PLAN rule 6.
 
 Gate: Edain runs unmodified with its own assets; then further mods.
 

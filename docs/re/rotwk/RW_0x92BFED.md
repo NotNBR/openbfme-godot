@@ -143,8 +143,9 @@ no fixture-skip messages; doctest's 3,222 filtered-out cases are not skips.
 The Create-a-Hero portrait remains blocked: `0x73D0BA -> 0x619562` looks up a
 record by OBJECT ID and returns the non-null runtime record's `+0x140` image,
 otherwise falling back to the template path at `0x73CFEF`. `CreateAHeroHero`
-currently has no generated image/renderer resource (S-1405), so a subclass icon
-is not a valid replacement.
+currently has no generated image/renderer resource (S-1405). This portrait
+resource remains separate from recruitment button icons: RW 0x7810BC uses the
+selected subclass ButtonImage, falling back to BuildingNoArt when absent.
 
 Idle-builder rollover help is ported by S-2703. Full hero-object help
 (`0x92BF34 -> 0x8EBC61`) still needs its separate model/renderer; neither that

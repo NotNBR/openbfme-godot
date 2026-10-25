@@ -410,7 +410,8 @@ void DynamicPortalBehaviour::onDie(const DieModuleInterface::Event &event)
 
 void DynamicPortalBehaviour::onMapPlacement(const Dict *properties)
 {
-	// RW 0x864341: unless a save is being loaded (TheGameLogic + 0x6E; the port loads no saves)
+	// RW 0x864341: unless a save is being loaded (TheGameLogic + 0x6E). A save here loads into a game started from its START, whose map placement ran this;
+	// the snapshot then replaces the portals with the saved ones (the pathfinder's waypoints, Pathfinder::xferWalls)
 	(void)properties;
 	gate();
 }

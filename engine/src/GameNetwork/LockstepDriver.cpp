@@ -30,7 +30,7 @@ LockstepDriver::LockstepDriver(Network *network, ReplayWriter *writer)
 LiveGameFrameDriver::Capture LockstepDriver::capture() const
 {
 	Capture c;
-	c.hashEveryFrame = m_writer != nullptr; // the replay's hash record of every frame
+	c.hashEveryFrame = m_writer != nullptr || m_hashEveryFrame; // the replay's hash record of every frame (or a test's)
 	c.breakdownInterval = m_network ? m_network->config().crcInterval : 0;
 	c.census = m_census;
 	return c;
@@ -51,6 +51,14 @@ void LockstepDriver::pump(UnsignedInt protocolFrame, CommandList &pending)
 		// ZH Network::update: the local messages get their execution frame here, once (protocol frame + run-ahead); the transport is serviced
 		m_network->update(protocolFrame, m_local);
 		m_notedLocal = std::min(m_notedLocal, m_local.messages().size());
+	}
+}
+
+void LockstepDriver::frameDue(UnsignedInt frame, std::uint32_t msFromNow)
+{
+	if (m_network)
+	{
+		m_network->setFrameDue(frame, msFromNow);
 	}
 }
 

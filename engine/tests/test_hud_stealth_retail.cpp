@@ -14,6 +14,7 @@
 #include "GameClient/Radar.h"
 #include "GameLogic/AI/AIWorld.h"
 #include "GameLogic/Combat/CombatNames.h"
+#include "GameLogic/Combat/CombatState.h"
 #include "GameLogic/Combat/ObjectWeapons.h"
 #include "GameLogic/Economy.h"
 #include "GameLogic/EconomySettings.h"
@@ -22,6 +23,7 @@
 #include "GameLogic/Module/InvisibilityModules.h"
 #include "GameLogic/Module/StancesBehavior.h"
 #include "GameLogic/Object/Object.h"
+#include "GameLogic/Object/PartitionManager.h"
 #include "GameLogic/Object/RetailObjectWorld.h"
 #include "GameLogic/System/ShroudManager.h"
 #include "GameLogic/System/InvisibilityManager.h"
@@ -481,4 +483,49 @@ TEST_CASE("stealth retail (review r1): a detector marks a container's occupant f
 	CHECK(candidate->testStatus((unsigned)detected));
 	CHECK(StealthUpdate::of(*occupant)->detectionExpiresFrame() == now + rate + 2);
 	CHECK(StealthUpdate::of(*candidate)->detectionExpiresFrame() == now + rate + 1);
+}
+
+TEST_CASE("stealthfly1 retail: a reveal wakes an idle enemy AI that sees the revealed object by Object::canSee (RW 0x81A6B5 -> 0x68FA3D: its vision range "
+		  "RW 0x68E43B plus both bounding circles), not by the bare vision range: within range + the circles it is woken, beyond them it sleeps on")
+{
+	if (!haveWorld())
+	{
+		return;
+	}
+	for (int far = 0; far < 2; ++far)
+	{
+		Arena a(shared());
+		a.logic.combat().setAutoAcquireEnabled(false); // the archers stay idle (no target of their own)
+		Object *rangers = a.place("GondorRangerHorde", 0, kRangersX, kRangersY);
+		Object *archers = a.place("MordorArcherHorde", 1, kRangersX + 2000.0f, kRangersY);
+		a.run(5);
+		PartitionManager &pm = a.logic.partition();
+		const float range = AIUpdateInterface::objectVisionRangeOf(*archers);
+		const float circles = pm.geometryOf(*archers).circle + pm.geometryOf(*rangers).circle;
+		REQUIRE(range == 350.0f); // MordorArcherHorde's VisionRange (gamedata.ini MORDOR_ARCHER_HORDE_VISION_RANGE 350; no modifier on the flat arena)
+		// between the bare range and range + both circles (the case the old centre-distance test missed), or past both
+		const float gap = far ? range + circles + 20.0f : range + circles * 0.5f;
+		Coord3D p{ kRangersX + gap, kRangersY, 0.0f };
+		archers->setPosition(&p);
+		AIUpdateInterface *ai = archers->getAIUpdateInterface();
+		REQUIRE(ai != nullptr);
+		int f = 0;
+		for (; f < 40 && !(ai->isIdle() && ai->nextUpdateFrame() > a.logic.getFrame() + 1); ++f) // tolerance: waiting for the idle AI to sleep
+		{
+			a.run(1);
+		}
+		REQUIRE(ai->isIdle());
+		const UnsignedInt before = ai->nextUpdateFrame();
+		a.logic.invisibility().wakeEnemiesThatSee(rangers);
+		MESSAGE(std::string(far ? "past" : "within") << " range + circles: gap " << gap << " (range " << range << ", circles " << circles << "), wake frame " << before << " -> "
+										   << ai->nextUpdateFrame() << " at frame " << a.logic.getFrame());
+		if (far)
+		{
+			CHECK(ai->nextUpdateFrame() == before);
+		}
+		else
+		{
+			CHECK(ai->nextUpdateFrame() == a.logic.getFrame() + (UnsignedInt)UPDATE_SLEEP_NONE);
+		}
+	}
 }

@@ -344,6 +344,7 @@ TEST_CASE("wall1 walls: a destroyed wall piece's cells go back to the ground; th
 	next->id = 51;
 	next->pos = { 300.0f, 100.0f, 0.0f };
 	next->structure = true;
+	next->kinds.insert(PK_WALK_ON_TOP_OF_WALL); // lane BRIDGE-1: RW 0x936B7D classifies the meshes of a WALK_ON_TOP_OF_WALL template only
 	next->geometry.type = PATHFIND_GEOMETRY_BOX;
 	next->geometry.majorRadius = 50.0f;
 	next->geometry.minorRadius = 10.0f;
@@ -360,6 +361,7 @@ TEST_CASE("wall1 walls: a destroyed wall piece's cells go back to the ground; th
 	tall->id = 52;
 	tall->pos = { 200.0f, 100.0f, 0.0f };
 	tall->structure = true;
+	tall->kinds.insert(PK_WALK_ON_TOP_OF_WALL);
 	tall->geometry.type = PATHFIND_GEOMETRY_BOX;
 	tall->geometry.majorRadius = 5.0f;
 	tall->geometry.minorRadius = 5.0f;

@@ -262,7 +262,7 @@ private:
 	void resetPlatforms();
 	static void applySlotRequest(SkirmishGameInfo &info, int slot, int playerTemplate, int color, int team, int startPos, int handicap);
 	// lane MP-2 (review): a field of a slot request is kKeep, -1 or within its range; a GameInfo's every slot field is -1 or within its range
-	bool slotRequestValid(int playerTemplate, int color, int team, int startPos, int handicap, std::string *why) const;
+	bool slotRequestValid(const SkirmishGameInfo &info, int playerTemplate, int color, int team, int startPos, int handicap, std::string *why) const;
 	bool gameInfoValid(const SkirmishGameInfo &info, std::string *why) const;
 	int slotOf(const NetAddress &lobbyAddress) const;
 	void event(Event e) { m_events.push_back(std::move(e)); }

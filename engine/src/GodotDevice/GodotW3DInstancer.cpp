@@ -236,9 +236,10 @@ Dictionary W3DInstancer::setup(const Ref<RetailFileSystem> &fs)
 	else
 	{
 		FsRef = fs;
-		Source.reset(new ArchiveW3DFileSource(*fs->archive_fs()));
+		Source = fs->renderW3DSource(); // lane SDK-0: the asset packs in front (render side only)
 		Assets.reset(new WW3DAssetManager(*Source));
 		Materials.reset(new W3DMaterialFactory(*fs->archive_fs()));
+		Materials->Set_Asset_Packs(fs->assetPacks().empty() ? nullptr : &fs->assetPacks());
 		Materials->Set_Alpha_Override(AlphaOverride); // lane BUILD-5 r3
 		// housecolor.ini: the table only names which textures have a house texture; applying it is stop S-022 (reported per surface).
 		// A missing or malformed file is an error, not an empty table.

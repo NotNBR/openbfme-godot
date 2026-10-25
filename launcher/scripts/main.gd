@@ -14,7 +14,8 @@
 ##   --select=<version>       play that installed version from now on (--select= clears the pick)
 ##   --self-update            stage a newer launcher (replaced on the next start)
 ##   --check-game-files       exit 0 when both configured game folders exist, 1 when either is missing
-##   --channel=stable|preview remember the channel (--channel=alpha is the same as stable, the channel's shown name since VERSION-1)
+##   --channel=stable|nightly remember the channel (lane NIGHTLY-1: nightly is the id "preview", as is the old --channel=preview;
+##                            --channel=alpha is the same as stable, the old shown name of the stable channel since VERSION-1)
 ##   --list                   print the installed versions
 ##   --play                   start the version Play starts
 ##   --version                print the launcher's version
@@ -39,6 +40,15 @@
 ##   --aio-package=bfme1      (community PR #36) with --aio-install: the OPTIONAL Battle for Middle-earth I 1.03 package instead, from BFME Arena
 ##                            (bfmeladder.com, a third party; OpenBFME does not host it) into <folder>/BFME1; refused unless --game=bfme1 is
 ##                            the chosen game (in the window: the Game files screen offers it only then)
+##   --mods-list[=refresh]    (lane MODS-3) list the Rise of the Witch-king mods of the All In One BFME Launcher's service (bfmeladder.com):
+##                            each package, its enhancements, "ready" or "needs engine features" with the files that need them (the list
+##                            is kept for half an hour; =refresh asks again); scripts/core/mod_install.gd, docs/MODS.md
+##   --mod-get=<guid> --mod-consent [--mod-with=<guid>,...]   download that package (and those enhancements) into the launcher's
+##                            mods/<guid> folder; --mod-consent is the player's agreement to the text it logs (in the window: the question
+##                            before the first mod download)
+##   --mod-use=<guid>|none    the mod Play starts (with the enhancements it was installed with); none = the original game
+##   --mod-remove=<guid>      remove that mod's folder (and nothing else)
+##   --mod-args               print the game's arguments Play would pass (the active mod's --mod-install= / --mod=)
 ##   --game-start=<folder>    (lane ONEZIP-1; what the game runs when a player starts it directly from the combined package, see
 ##                            scripts/core/game_start.gd) decide which version that start plays, then look for an update in the background
 ## --screenshot=FILE (with the window): save the window as a PNG once the start-up check has finished, then quit (the layout check).
@@ -48,11 +58,12 @@
 ##   test that no screen shows the home folder or the user name); --screenshot-size=WxH lays the window out at that size and saves
 ##   exactly that (the screenshots at 1280x720 and 1280x800 on any display).
 ## Test options (honoured only by a development run or a test package, BuildInfo.tests_allowed):
-##   --api-base=http://127.0.0.1:<port>   the API origin (a local test server); --trust-key=<64 hex>   the release key of a development run;
+##   --api-base=http://127.0.0.1:<port>   the API origin (a local test server); --trust-key=<64 hex>[,<64 hex>...]   the release key(s) of a development run;
 ##   --repo=<owner>/<name>   the repository; --launcher-dir=<folder>   the launcher's own folder in a development run (the combined
 ##   package's game beside it, the staged launcher update); --launcher-version=<version>   its version there; --aio-base=http://127.0.0.1:<port>   the AIO service's stand-in (both of its hosts);
 ##   --aio-pins=<file>   made-up pinned tables (JSON) for that stand-in; --aio-stop-after=<folder>/<file>:<pause|cancel>   a stop right
-##   after that file was kept (the pause / cancel paths); --ui-demo=<screen>   made-up state for the screenshots of each screen (no
+##   after that file was kept (the pause / cancel paths); --mod-stop-after=<part>/<file>:<pause|cancel>   the same for a mod download (lane
+##   MODS-3); --ui-demo=<screen>   made-up state for the screenshots of each screen (no
 ##   network; tools/release/launcher_screens.py; the screens are listed at _show_demo); --ui-stop=<pause|cancel|play>@<text>   press
 ##   Pause / Cancel / Play once while a download whose progress names <text> runs, --ui-then=resume|cancel   then press Resume / Cancel
 ##   once (with --screenshot)
@@ -73,6 +84,8 @@ const Log := preload("res://scripts/core/launcher_log.gd")
 const GlibcCheck := preload("res://scripts/core/glibc_check.gd")
 const GameOptions := preload("res://scripts/core/game_options.gd")
 const AioInstall := preload("res://scripts/core/aio_install.gd")
+const ModInstall := preload("res://scripts/core/mod_install.gd")  # lane MODS-3
+const ModCatalog := preload("res://scripts/core/mod_catalog.gd")
 const ReleaseNotes := preload("res://scripts/core/release_notes.gd")
 const Style := preload("res://scripts/ui/style.gd")
 const W := preload("res://scripts/ui/widgets.gd")
@@ -92,21 +105,26 @@ const InstanceLock := preload("res://scripts/core/instance_lock.gd")
 const GameStart := preload("res://scripts/core/game_start.gd")
 const OnlineCount := preload("res://scripts/core/online_count.gd")  # lane ONLINECOUNT-1
 const HttpFetch := preload("res://scripts/net/http_fetch.gd")
+const SocialClient := preload("res://scripts/net/social_client.gd")
+const OAuthAccount := preload("res://scripts/core/oauth_account.gd")
+const SocialLaunch := preload("res://scripts/core/social_launch.gd")
+const ReleaseSignature := preload("res://scripts/crypto/release_signature.gd")  # lane SIGNKMS-1: --trust-key lists
 
 const CLI_ACTIONS := ["--update", "--install=", "--select=", "--self-update", "--check-game-files", "--channel=", "--list", "--play", "--version", "--free-camera=",
 	"--game=", "--aio=", "--aio-install=", "--auto-update=", "--online-count=", "--open-url", "--lobby=", "--register-url-handler", "--game-start=",
-	"--install-desktop-entry"]
+	"--install-desktop-entry", "--mods-list", "--mods-list=", "--mod-get=", "--mod-use=", "--mod-remove=", "--mod-args"]
 const UrlHandler := preload("res://scripts/core/url_handler.gd")
 const DesktopEntry := preload("res://scripts/core/desktop_entry.gd") # lane OWNERFIX-3
 # the test options (honoured only by a development run or a test package); ONLINE-2 r2: also the only arguments allowed before --open-url there
 const TEST_OPTIONS := ["--api-base=", "--trust-key=", "--repo=", "--test-kill-at=", "--aio-base=", "--aio-pins=", "--aio-stop-after=", "--ui-demo=",
-	"--ui-stop=", "--ui-then=", "--launcher-dir=", "--launcher-version=", "--test-macos-kill-at=", "--ui-play="]
+	"--ui-stop=", "--ui-then=", "--launcher-dir=", "--launcher-version=", "--test-macos-kill-at=", "--ui-play=", "--mod-stop-after="]
 const RECHECK_SECONDS := 3600.0  # lane UI-5: while the launcher stays open, it looks for updates again every hour
 
 var info: RefCounted
 var updater: Updater
 var _instance: InstanceLock  # lane UI-5 (Sol r2): one launcher at a time
 var aio: AioInstall
+var mods: ModInstall  # lane MODS-3
 var _thread: Thread
 var _count_thread: Thread     # lane ONLINECOUNT-1
 var _count_http: HttpFetch    # its request (MACPLAY-1: cancelled and joined when the window closes)
@@ -135,6 +153,7 @@ var _progress_lock := Mutex.new()
 var _progress_next: Array = []
 var _job_ui_stop := ""
 var _aio_target := ""         # the folder of the AIO download that runs or is paused
+var _mod_job: Array = []      # lane MODS-3: [guid, enhancements] of the mod download that runs or is paused
 var _demo := ""
 var _demo_bfme1 := false     # --ui-demo games-bfme1: the Game files screen offers the BFME1 package without the choice being saved
 var _problem := ""            # why updates are off ("" when they work)
@@ -152,6 +171,9 @@ var _news: NewsScreen
 var _mods: ModsScreen
 var _games_screen: GamesScreen
 var _settings: SettingsScreen
+var _social: SocialClient
+var _multiplayer: MultiplayerScreen
+var _social_handoff := false
 var _banner: PanelContainer
 var _warning: Label
 var _macos_releases_link: LinkButton
@@ -180,6 +202,7 @@ func _ready() -> void:
 	info = BuildInfo.load_info()
 	updater = Updater.new(info)
 	aio = AioInstall.new(updater)
+	mods = ModInstall.new(updater, aio)
 	var args := OS.get_cmdline_user_args()
 	if info.tests_allowed():
 		MacOSUpdate.kill_at = OS.get_environment("OPENBFME_TEST_MACOS_KILL_AT")
@@ -234,6 +257,8 @@ func _ready() -> void:
 				info.version = a.substr(19)
 			elif a.begins_with("--aio-stop-after="):
 				aio.test_stop_after = a.substr(17)
+			elif a.begins_with("--mod-stop-after="):
+				mods.test_stop_after = a.substr(17)
 			elif a.begins_with("--ui-demo="):
 				_demo = a.substr(10)
 			elif a.begins_with("--ui-stop="):
@@ -247,9 +272,14 @@ func _ready() -> void:
 					get_tree().quit(1)
 					return
 				Log.line("LAUNCHER test AIO %s %s" % ["origin" if a.begins_with("--aio-base=") else "pins", a.substr(11)])
-			elif info.release_key.is_empty():
-				info.release_key = a.substr(12).hex_decode()
-	if info.release_key.size() != 32 and problem == "":
+			elif a.begins_with("--trust-key=") and info.release_keys.is_empty():
+				# lane SIGNKMS-1: one key or a comma-separated list (the first plays launcher/release_key.pub)
+				var trusted := ReleaseSignature.parse_hex_list(a.substr(12))
+				if trusted.ok:
+					info.release_keys = trusted.keys
+				else:
+					Log.line("LAUNCHER --trust-key is not used: " + trusted.error)
+	if info.release_keys.is_empty() and problem == "":
 		problem = "this launcher has no release key: it cannot check updates"
 	updater.recover()
 	var start := SelfUpdate.on_start(updater, args, GameStart.request_of(args) == "" or SelfUpdate._arg(args, "--apply-update=") != "")
@@ -307,6 +337,7 @@ func _ready() -> void:
 		return
 	_problem = problem
 	_build_ui()
+	_init_social()
 	if start.message != "":
 		_set_status(start.message)
 	_refresh_installed()
@@ -461,12 +492,13 @@ func _show_demo(screen: String) -> void:
 	if rels.is_empty():
 		var sample := "DEMO TEXT for the launcher screenshots, not real release notes.\n\n## What's new\n\n- Sample note: what changed in this build.\n" + \
 			"- Sample note: another change.\n\n## What's fixed\n\n- Sample note: a fix.\n\n## Known issues\n\n- Sample note: a known issue.\n"
-		rels = [{"tag": "v0.4.0-alpha.1", "prerelease": true, "notes": sample, "published": "", "assets": {}},
-			{"tag": "v0.3.0-preview.4", "prerelease": true, "notes": sample, "published": "", "assets": {}}]
+		# lane NIGHTLY-2: two nightlies of one day, the longest version names the window shows ("Nightly 0.4.12 (2026-10-23, evening)")
+		rels = [{"tag": "v0.4.12-nightly.261023200", "prerelease": true, "notes": sample, "published": "", "assets": {}},
+			{"tag": "v0.4.12-nightly.261023100", "prerelease": true, "notes": sample, "published": "", "assets": {}}]
 	_releases = rels
 	var chan := updater.in_channel(rels, updater.channel())
 	if chan.is_empty():
-		updater.set_channel("preview")  # the screenshots' launcher is a development run (Stable); the demo is a preview player's
+		updater.set_channel("preview")  # the screenshots' launcher is a development run (Stable); the demo is a Nightly player's
 		_show_channel()
 		chan = rels
 	var installed: String = chan[1].tag if screen in ["update", "downloading", "error", "paused", "update-launcher", "long"] and chan.size() > 1 else chan[0].tag
@@ -483,6 +515,8 @@ func _show_demo(screen: String) -> void:
 	_set_status("Up to date.")
 	match screen:
 		"news", "multiplayer", "mods":
+			if screen == "mods":
+				_mods.demo()
 			_show_screen(screen)
 		"settings", "display", "about":
 			_show_screen("settings")
@@ -571,6 +605,67 @@ func _demo_progress(title: String, done: int, total: int) -> void:
 
 # ---- command line ------------------------------------------------------------------------------------------------------------------------
 
+## lane MODS-3: --mods-list, --mod-get, --mod-use, --mod-remove, --mod-args (in that order); `code` is the exit status so far
+func _run_mods_cli(args: PackedStringArray, code: int) -> int:
+	var kinds := {AioInstall.REFUSED: 1, AioInstall.NETWORK: 2, AioInstall.REJECTED: 3, AioInstall.STOPPED: 2}
+	if "--mods-list" in args or "--mods-list=refresh" in args:
+		var c := mods.catalogue("--mods-list=refresh" in args)
+		if not c.ok:
+			Log.line("LAUNCHER MODS no list: " + c.error)
+			return kinds[c.kind]
+		Log.line("LAUNCHER MODS %d packages%s" % [c.view.packages.size(), " (kept from the last half hour)" if c.from_cache else ""])
+		for row in c.view.packages:
+			_print_mod(row, "")
+			for e in row.enhancements:
+				_print_mod(e, "+ ")
+		if not c.view.loose.is_empty():
+			Log.line("LAUNCHER MOD enhancements of the original game or of a package that is not listed:")
+		for row in c.view.loose:
+			_print_mod(row, "")
+	for a in args:
+		if a.begins_with("--mod-get="):
+			var with := PackedStringArray()
+			for b in args:
+				if b.begins_with("--mod-with="):
+					with.append_array(b.substr(11).split(",", false))
+			var r := mods.install(a.substr(10), Array(with), "--mod-consent" in args)
+			if r.ok:
+				Log.line("LAUNCHER MODS done: %s %s (%s), %d files downloaded, %d already there, %d removed" % [r.summary.name, r.summary.version, r.status, r.downloaded, r.kept, r.removed])
+			else:
+				if r.kind == AioInstall.STOPPED and mods.stop_request == "cancel":
+					Log.line("LAUNCHER MODS the download was cancelled")
+				Log.line("LAUNCHER MODS not installed: " + r.error)
+				code = kinds[r.kind]
+	for a in args:
+		if a.begins_with("--mod-use="):
+			var g := a.substr(10)
+			g = "" if g == "none" else g
+			var why := mods.set_active(g, mods.record(g).get("enhancements", []) if g != "" else [])
+			if why != "":
+				Log.line("LAUNCHER MODS cannot pick %s: %s" % [g, why])
+				code = 1
+	for a in args:
+		if a.begins_with("--mod-remove="):
+			var why := mods.uninstall(a.substr(13))
+			if why != "":
+				Log.line("LAUNCHER MODS not removed: " + why)
+				code = 1
+	if "--mod-args" in args:
+		var ga := updater.game_arguments()
+		Log.line("LAUNCHER game arguments: " + (" ".join(ga.args) if ga.ok else "none, the game is not started: " + ga.error))
+		if not ga.ok:
+			code = 1
+	return code
+
+
+func _print_mod(row: Dictionary, indent: String) -> void:
+	var state: String = row.status if row.error == "" else "refused: " + row.error
+	Log.line("LAUNCHER MOD %s%s | %s | %s | %s %s | by %s | %s" % [indent, row.guid, ModCatalog.type_name(row.type), state, row.name, row.version,
+		row.author if row.author != "" else "?", ModInstall.size_text(int(row.get("bytes", row.size)))])
+	for e in row.engine_edits:
+		Log.line("LAUNCHER MOD %s  needs an engine feature: %s" % [indent, e])
+
+
 ## lane ONLINE-2: the isolated link mode: start the version Play starts in that online game (the lobby is the one --lobby set, never the link's)
 func _open_url(url_mode: Dictionary) -> int:
 	var lobby := str(updater.get_state("online", "lobby", ""))
@@ -599,9 +694,11 @@ func _run_cli(args: PackedStringArray, problem: String) -> int:
 		if a.begins_with("--channel="):
 			var ch := a.substr(10)
 			if ch == "alpha":
-				ch = "stable"  # lane VERSION-1: the shown name of the stable channel, where the plain releases ("Alpha 0.4.5") are
+				ch = "stable"  # lane VERSION-1: the old shown name of the stable channel, where the plain releases ("Alpha 0.4.5") are
+			elif ch == "nightly":
+				ch = "preview"  # lane NIGHTLY-1 (owner, 2026-10-21): the shown name of the pre-release channel, whose id stays "preview"
 			if not ch in ["stable", "preview"]:
-				Log.line("LAUNCHER unknown channel '%s' (stable, preview)" % ch)
+				Log.line("LAUNCHER unknown channel '%s' (stable, nightly)" % ch)
 				return 1
 			updater.set_channel(ch)
 			Log.line("LAUNCHER channel %s" % ch)
@@ -673,6 +770,7 @@ func _run_cli(args: PackedStringArray, problem: String) -> int:
 					Log.line("LAUNCHER AIO removed %d partial files of this download" % aio.remove_partials(a.substr(14)))
 				Log.line("LAUNCHER AIO not installed: " + r.error)
 				code = {AioInstall.REFUSED: 1, AioInstall.NETWORK: 2, AioInstall.REJECTED: 3, AioInstall.STOPPED: 2}[r.kind]
+	code = _run_mods_cli(args, code)
 	for a in args:
 		if a.begins_with("--select="):
 			var v := a.substr(9)
@@ -964,8 +1062,15 @@ func _build_ui() -> void:
 	_play_screen.show_news.connect(_show_screen.bind("news"))
 	_news = NewsScreen.new()
 	var mp := MultiplayerScreen.new()
+	_multiplayer = mp
 	mp.build(info.repo)
 	_mods = ModsScreen.new()
+	_mods.refresh.connect(func(force: bool) -> void: _start_job(_job_mods_list.bind(force), "mods-list"))
+	_mods.install.connect(_on_mod_install)
+	_mods.remove.connect(_on_mod_remove)
+	_mods.pick.connect(_on_mod_pick)
+	_mods.pause_pressed.connect(_on_pause)
+	_mods.cancel_pressed.connect(_on_cancel)
 	_games_screen = GamesScreen.new()
 	_games_screen.download.connect(_start_aio)
 	_games_screen.forget_folders.connect(_on_forget_folders)
@@ -1024,6 +1129,7 @@ func _build_ui() -> void:
 	var head := W.hbox(0)
 	_status_head = W.label("")
 	Style.text(_status_head, "Inter", 600, 14, Style.TEXT)
+	_status_head.mouse_filter = Control.MOUSE_FILTER_PASS   # lane NIGHTLY-2: its tooltip is the full version name (_refresh_head)
 	head.add_child(_status_head)
 	_status_tail = W.trim_label("")
 	Style.text(_status_tail, "Inter", 500, 14, Style.TEXT2)
@@ -1090,6 +1196,7 @@ func _build_ui() -> void:
 	_show_progress(false)
 	_set_update_state("idle")
 	_refresh_games()
+	_refresh_mods()
 	_show_screen("play")
 	_play.grab_focus.call_deferred()
 
@@ -1123,7 +1230,9 @@ func _set_update_state(state: String, tag := "") -> void:
 	_update_tag = tag
 	_update.visible = state == "update" and not _progress.visible
 	if state == "update":
-		_update.text = ("Update launcher to " if _launcher_only else "Update to " if _pv != "" else "Install ") + Semver.display(tag)
+		# lane NIGHTLY-2: the bar's short name ("Nightly 0.4.12"); the tooltip has the full one ("Nightly 0.4.12 (2026-10-23, evening)")
+		_update.text = ("Update launcher to " if _launcher_only else "Update to " if _pv != "" else "Install ") + Semver.display_short(tag)
+		_update.tooltip_text = ("Update launcher to " if _launcher_only else "Update to " if _pv != "" else "Install ") + Semver.display(tag)
 	_refresh_head()
 
 
@@ -1136,25 +1245,32 @@ func _set_macos_releases_link(visible: bool) -> void:
 func _refresh_head() -> void:
 	if _status_head == null:
 		return
-	var ch := Semver.channel_name(updater.channel())  # lane VERSION-1: stable is shown as "Alpha", the pre-release channel as "Preview"
+	var ch := Semver.channel_name(updater.channel())  # lane NIGHTLY-1: "Stable" / "Nightly"
 	var pv := Semver.display(_pv)
 	var head: String = {"idle": "Ready", "checking": "Checking for updates", "updating": "Updating", "current": "Up to date",
 		"update": "Update available", "manual": "Mac preview — manual updates", "no_macos_entry": "No signed Mac package",
 		"failed": "Could not check for updates", "none": "No %s release yet" % ch.to_lower()}[_update_state]
 	var colour: Color = {"idle": Style.TEXT2, "checking": Style.TEXT2, "updating": Style.ACCENT, "current": Style.GOOD, "update": Style.ACCENT,
 		"manual": Style.TEXT2, "no_macos_entry": Style.TEXT2, "failed": Style.WARN, "none": Style.TEXT2}[_update_state]
+	# lane NIGHTLY-2: the bottom bar's line names a nightly by its short name ("Nightly 0.4.12 is available"), the Play screen's chip by its
+	# full one ("Nightly 0.4.12 (2026-10-23, evening) is available"); the bar's line has the full one as its tooltip
+	var bar_head := head
 	if _update_state == "update":
 		head = ("Launcher %s is available" if _launcher_only else "%s is available") % Semver.display(_update_tag)
+		bar_head = ("Launcher %s is available" if _launcher_only else "%s is available") % Semver.display_short(_update_tag)
 	if _update_state == "updating" and _update_tag != "":
 		head = "Updating to %s" % Semver.display(_update_tag)
+		bar_head = "Updating to %s" % Semver.display_short(_update_tag)
 	if _quit_when_done:
 		head = "Playing %s" % pv
-	_status_head.text = head
+		bar_head = "Playing %s" % Semver.display_short(_pv)
+	_status_head.text = bar_head
+	_status_head.tooltip_text = head if head != bar_head else ""
 	_status_tail.text = "  ·  %s  ·  %s channel" % [pv if _pv != "" else "nothing installed yet", ch]
 	W.set_chip(_play_screen.state_chip, "●  " + head, colour)
 	W.set_chip(_play_screen.channel_chip, "Channel: " + ch)
 	W.set_chip(_play_screen.version_chip, pv if _pv != "" else "Not installed")
-	_status.visible = _status.text.trim_suffix(".") != head
+	_status.visible = _status.text.trim_suffix(".") not in [head, bar_head]
 
 
 func _on_free_camera(on: bool) -> void:
@@ -1203,6 +1319,10 @@ func _count_tick() -> void:
 
 
 func _refresh_count() -> void:
+	if _social_handoff:
+		return
+	if _social != null and _social.is_signed_in():
+		return
 	if not updater.show_online_count() or _demo != "" or "--offline" in OS.get_cmdline_user_args() or _screen != "play":
 		return
 	var headless := DisplayServer.get_name() == "headless"
@@ -1228,6 +1348,8 @@ func _refresh_count() -> void:
 
 
 func _on_count(r: Dictionary) -> void:
+	if _social != null and _social.is_signed_in():
+		return
 	if not updater.show_online_count():
 		_count_text = ""
 		_play_screen.set_players("")  # it was switched off while the request was out: its answer is not shown
@@ -1295,10 +1417,14 @@ func _on_pause() -> void:
 		_stop = "pause"
 		if _job_kind == "aio":
 			aio.request_stop("pause")
+		elif _job_kind == "mod":
+			mods.request_stop("pause")
 		else:
 			updater.http.cancelled = true
 	elif _paused == "aio":
 		_start_aio(_aio_target, true)
+	elif _paused == "mod":
+		_start_mod(_mod_job[0], _mod_job[1])
 	elif _paused == "game":
 		_start_job(_job_install.bind(_paused_release, _paused_pick), "install", String(_paused_release.get("tag", "")))
 	elif _paused == "launcher":
@@ -1311,12 +1437,17 @@ func _on_cancel() -> void:
 		_stop = "cancel"
 		if _job_kind == "aio":
 			aio.request_stop("cancel")
+		elif _job_kind == "mod":
+			mods.request_stop("cancel")
 		else:
 			updater.http.cancelled = true
 		return
 	if _paused == "aio":
 		var n := aio.remove_partials(_aio_target)
 		_set_status("The download was cancelled (%d partial files removed; the checked files are kept)." % n)
+	elif _paused == "mod":
+		_set_status("The mod download was cancelled. Remove (under Play with) deletes what it downloaded.")
+		_refresh_mods()
 	elif _paused in ["game", "launcher"]:
 		_remove_partials(_paused_assets)
 		_set_status("The launcher update was cancelled." if _paused == "launcher" else "The update was cancelled.")
@@ -1407,7 +1538,6 @@ func _show_games(g: Dictionary, demo := false) -> void:
 	# community PR #36: BFME1 is the player's own install; its download is optional (Game files, from BFME Arena, a third party)
 	_play_screen.missing_games.text = "Battle for Middle-earth I 1.03 was not found: set BFME1_INSTALL to its folder, put it in %s, or download it (optional, from BFME Arena) in Game files." % Paths.short(Paths.default_games_dir().path_join("BFME1")) if use_bfme1 else "The Rise of the Witch-king 2.01 and Battle for Middle-earth II 1.06 were not found."
 	_play_screen.set_games(not bfme1.is_empty() if use_bfme1 else g.found, aio.enabled(), Paths.short(bfme1) if use_bfme1 else where)
-	_mods.set_games(g.found)
 	_games_screen.set_folders(g, demo)
 	_set_buttons()
 
@@ -1420,7 +1550,8 @@ func _busy() -> bool:
 ## newer version does not stop it (that version is used from the next Play on)
 func _play_blocked() -> bool:
 	# MACFIX-1 (issue #46): the running job first; the update lock's state is a process start (the bundle swap helper)
-	if _busy() and (_job_kind == "aio" or (_job_target != "" and _job_target == _pv)):
+	# lane MODS-3: also while a mod downloads (its folder is half old, half new until the download is checked)
+	if _busy() and (_job_kind in ["aio", "mod"] or (_job_target != "" and _job_target == _pv)):
 		return true
 	return updater.macos_updates_enabled() and (updater.macos_transaction or MacOSUpdate.transaction_locked(updater))
 
@@ -1447,6 +1578,8 @@ func _set_buttons() -> void:
 	if _games_screen.offer_bfme1 != (aio.choice == AioInstall.BFME1):
 		_games_screen.set_offer(aio.choice == AioInstall.BFME1, aio.total_size() / 1e9, aio.chosen())
 	_games_screen.set_download_state(aio_running, _paused == "aio", busy and not aio_running, aio.enabled())
+	var mod_running := busy and _job_kind == "mod"
+	_mods.set_state(mod_running, _paused == "mod", busy and not mod_running)
 
 
 func _start_job(job: Callable, kind: String, target := "") -> void:
@@ -1572,8 +1705,10 @@ func _on_progress(text: String, done: int, total: int) -> void:
 		_bar_label.text = _meter.text(done, total)
 		if _job_kind == "aio":
 			_games_screen.set_progress(_bar_title.text + "  ·  " + _bar_label.text, done, total)
+		elif _job_kind == "mod":
+			_mods.set_progress(_bar_title.text + "  ·  " + _bar_label.text, done, total)
 		elif _job_kind in ["check", "install"] and text.begins_with("Downloading") and _update_state != "updating":
-			var m := RegEx.create_from_string("-(v\\d+\\.\\d+\\.\\d+(?:-(?:alpha|preview)\\.\\d+)?)-").search(text)
+			var m := RegEx.create_from_string("-(v\\d+\\.\\d+\\.\\d+(?:-(?:alpha|nightly|preview)\\.\\d+)?)-").search(text)
 			_set_update_state("updating", m.get_string(1) if m != null else _update_tag)
 		if not _progress.visible:
 			_show_progress(true)   # MACFIX-1 (issue #46): not every chunk: it refreshes every button (_set_buttons, _play_blocked)
@@ -1783,6 +1918,110 @@ func _after_aio(r: Dictionary) -> void:
 		_message.show_error("The games were not downloaded", r.error, _about())
 
 
+# ---- mods (lane MODS-3) ------------------------------------------------------------------------------------------------------------------
+
+## the Mods screen's installed mods, the pick, the unfinished downloads, and the cached list (no network)
+func _refresh_mods() -> void:
+	if _demo != "":
+		return
+	_mods.set_installed(mods.installed(), mods.active(), mods.partials())
+	if _mods._view.is_empty():
+		var c := mods.cached()
+		if not c.is_empty():
+			_mods.set_catalogue(ModCatalog.group(c.items, c.fetched, c.get("problems", {})), c.time, true)
+
+
+func _job_mods_list(force: bool) -> void:
+	var r := mods.catalogue(force)
+	_after_mods_list.call_deferred(r)
+
+
+func _after_mods_list(r: Dictionary) -> void:
+	if r.ok:
+		_finish("The mod list has %d packages." % r.view.packages.size())
+		_mods.set_catalogue(r.view, r.time, r.from_cache)
+		_refresh_mods()
+		return
+	_mods.set_note("The list could not be read: " + r.error)
+	_finish("The mod list could not be read: " + r.error)
+	if r.kind != AioInstall.STOPPED:
+		_message.show_error("The mod list could not be read", r.error, _about())
+
+
+## Install / Update / Apply / Continue: the question before the first mod download (the consent), then the download
+func _on_mod_install(guid: String, enhancements: Array) -> void:
+	if mods.consented():
+		_start_mod(guid, enhancements)
+		return
+	var name := guid
+	var bytes := 0
+	for row in _mods._view.get("packages", []) + _mods._view.get("loose", []):
+		if row.guid == guid:
+			name = "%s %s" % [row.name, row.version]
+			bytes = int(row.get("bytes", row.size))
+			for e in row.enhancements:
+				if e.guid in enhancements:
+					bytes += int(e.get("bytes", e.size))
+	_message.ask("Download mods from bfmeladder.com?", mods.consent_text(name, bytes), "Download", _start_mod.bind(guid, enhancements))
+
+
+func _start_mod(guid: String, enhancements: Array) -> void:
+	_mod_job = [guid, enhancements]
+	_start_job(_job_mod.bind(guid, enhancements), "mod")
+
+
+func _job_mod(guid: String, enhancements: Array) -> void:
+	var r := mods.install(guid, enhancements, true)
+	_after_mod.call_deferred(r, guid, enhancements)
+
+
+func _after_mod(r: Dictionary, guid: String, enhancements: Array) -> void:
+	if r.ok:
+		# one click: the mod just installed is the one Play starts (the player picks the original game again under Play with)
+		var why := mods.set_active(guid, enhancements)
+		var text := "%s %s is installed%s." % [r.summary.name, r.summary.version, ". Play starts it" if why == "" else " (not picked: %s)" % why]
+		if r.status == ModCatalog.NEEDS:
+			text += " It needs engine features that are not in OpenBFME yet: the game may differ or fail."
+		_finish(text)
+	elif r.kind == AioInstall.STOPPED and mods.stop_request == "pause":
+		_paused = "mod"
+		_finish("The mod download is " + r.error)
+	elif r.kind == AioInstall.STOPPED:
+		_finish("The mod download was " + r.error + ". Remove (under Play with) deletes what it downloaded.")
+	else:
+		if r.kind == AioInstall.NETWORK:
+			_paused = "mod"   # a broken transfer can be resumed
+		_finish("The mod was not installed: " + r.error)
+		_message.show_error("The mod was not installed", r.error, _about())
+	_refresh_mods()
+
+
+func _on_mod_remove(guid: String) -> void:
+	var name: String = mods.record(guid).get("name", mods.partials().get(guid, guid))
+	_message.ask("Remove %s?" % name, "Its files are deleted from OpenBFME's mods folder. Your game folders are not changed. You can install it again from the list.",
+		"Remove", func() -> void:
+			if _busy():
+				return
+			var why := mods.uninstall(guid)
+			if why != "":
+				_show_error("The mod was not removed", why)
+			else:
+				_set_status("%s was removed." % name)
+				if _paused == "mod" and not _mod_job.is_empty() and _mod_job[0] == guid:
+					_paused = ""
+					_show_progress(false)
+			_refresh_mods())
+
+
+func _on_mod_pick(guid: String) -> void:
+	var why := mods.set_active(guid, mods.record(guid).get("enhancements", []) if guid != "" else [])
+	if why != "":
+		_show_error("The mod was not picked", why)
+	else:
+		_set_status("Play starts %s from now on." % (mods.record(guid).get("name", guid) if guid != "" else "the original game"))
+	_refresh_mods()
+
+
 func _on_channel(ch: String) -> void:
 	updater.set_channel(ch)
 	_show_channel()
@@ -1819,7 +2058,8 @@ func _on_play() -> void:
 		return
 	var p := updater.play(v)
 	if p.ok:
-		if _busy():
+		# The worker may have ended while play() checked the game; its deferred completion still has to show any failure.
+		if _thread != null:
 			_quit_when_done = true
 			_set_status("Playing %s. The update keeps downloading in the background; your next Play starts the new version." % v)
 			if DisplayServer.get_name() != "headless":
@@ -1860,7 +2100,76 @@ func _no_game() -> void:
 	_show_error("No game to start", why)
 
 
+func _init_social() -> void:
+	_social = SocialClient.new()
+	add_child(_social)
+	var local: String = updater.policy.test_origin if info.tests_allowed() else ""
+	var why := _social.configure(updater.lobby_url(), info.version, local)
+	var oauth := OAuthAccount.new()
+	add_child(oauth)
+	var oauth_error := oauth.configure(updater.lobby_url(), local)
+	if why == "":
+		why = oauth_error
+	if "--offline" in OS.get_cmdline_user_args() or _demo != "":
+		why = "Multiplayer sign-in is disabled in offline or demo mode."
+	_multiplayer.bind_client(_social, self, why)
+	_multiplayer.bind_oauth(oauth)
+	_multiplayer.join_invite.connect(_join_social_invite)
+	_social.changed.connect(_social_stats)
+	_social.connection_changed.connect(func(connected: bool) -> void:
+		_count_text = ""
+		_play_screen.set_players("")
+		if not connected:
+			_refresh_count())
+
+
+func _social_stats() -> void:
+	if not _social.is_signed_in() or not updater.show_online_count():
+		return
+	var stats: Dictionary = _social.snapshot.get("stats", {})
+	var parsed := OnlineCount.parse(200, JSON.stringify(stats).to_utf8_buffer())
+	_count_text = parsed.text
+	_count_got_ms = Time.get_ticks_msec()
+	_play_screen.set_players(parsed.text)
+
+
+func _join_social_invite(invite: Dictionary) -> void:
+	if not _social.is_signed_in() or _social.busy or _multiplayer.oauth_in_progress():
+		_multiplayer.show_problem("Finish signing in before joining.")
+		return
+	if _play_blocked():
+		_multiplayer.show_problem("Wait for the current game installation before joining.")
+		return
+	if str(invite.get("to", {}).get("pid", "")) != str(_social.me.get("pid", "")):
+		_multiplayer.show_problem("This invitation is not addressed to you.")
+		return
+	if int(invite.get("expires", 0)) <= int(Time.get_unix_time_from_system()):
+		_multiplayer.show_problem("This invitation expired.")
+		return
+	var version := updater.play_version()
+	if version.is_empty():
+		_multiplayer.show_problem("Install the game before joining an invitation.")
+		return
+	var result := SocialLaunch.play(updater, version, str(invite.get("id", "")), _social.lobby_url, _social.token)
+	if not result.ok:
+		_multiplayer.show_problem(result.error)
+		return
+	# The game owns presence and the accepted slot from here; this launcher must not keep polling it.
+	_social_handoff = true
+	_social.sign_out()
+	if _busy():
+		_quit_when_done = true
+		_set_status("The game is opening your invitation. The update continues in the background.")
+		if DisplayServer.get_name() != "headless":
+			get_window().mode = Window.MODE_MINIMIZED
+	else:
+		get_tree().quit(0)
+
+
 func _exit_tree() -> void:
+	_social_handoff = true
+	if _social != null:
+		_social.sign_out()
 	# MACPLAY-1: the online-count request is cancelled and its thread joined before the window goes. It was never joined: a launcher that
 	# closed while the lobby had not answered (Play started the game at once) freed itself under the running thread, which then called
 	# back into it (the owner's Mac, 2026-10-17 11:13: SIGSEGV at 0x190 on that thread, the "quit unexpectedly" dialog)
@@ -1872,6 +2181,8 @@ func _exit_tree() -> void:
 	if _thread != null:
 		if _job_kind == "aio":
 			aio.request_stop("pause")
+		elif _job_kind == "mod":
+			mods.request_stop("pause")
 		updater.http.cancelled = true
 		_thread.wait_to_finish()
 	if _instance != null:

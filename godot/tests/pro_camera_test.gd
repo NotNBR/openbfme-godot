@@ -60,7 +60,9 @@ func _without_device() -> void:
 		await process_frame
 	_check(effect.problem.contains("RenderingDevice"), "without a RenderingDevice the effect says why it draws nothing")
 	var asked := effect.ask_distance(Vector2i(10, 10))
-	_check(effect.answered == asked and effect.distance < 0.0, "and answers a distance request at once, below 0")
+	_check(effect.answered == asked and effect.distance_of(asked) < 0.0,
+		"and answers a distance request at once, below 0")
+	_check(is_nan(effect.distance_of(asked + 1)), "a request not made has no answer")
 
 
 func _lens_maths() -> void:
@@ -417,17 +419,20 @@ func _render() -> void:
 	print("LENS log output: worst difference from ACEScct %.4f" % worst)
 	# tolerance: two 8-bit steps, the output's rounding and the frame's 16-bit float buffer
 	_check(worst <= 2.0 / 255.0, "log output is the ACEScct encode of the linear light")
-	# the distance probe: the near stripes, the far ones, and a pixel outside the picture
+	# the distance probe: the near stripes, the far ones, and a pixel outside the picture, all asked before the next
+	# frame, so each answer must come from its own request's pixel
 	c.log_output = false
-	var probes := {}
+	var asked := {}
 	for pixel in [Vector2i(320, 90), Vector2i(320, 270), Vector2i(-4, 10)]:
-		var asked: int = c.effect.ask_distance(pixel)
-		for i in 8:
-			c.apply(camera)
-			await process_frame
-			if c.effect.answered >= asked:
-				break
-		probes[pixel] = c.effect.distance if c.effect.answered >= asked else NAN
+		asked[pixel] = c.effect.ask_distance(pixel)
+	for i in 8:
+		c.apply(camera)
+		await process_frame
+		if c.effect.answered >= asked[Vector2i(-4, 10)]:
+			break
+	var probes := {}
+	for pixel in asked:
+		probes[pixel] = c.effect.distance_of(asked[pixel])
 	print("LENS distance probe: near %.2f, far %.1f, outside %.1f"
 		% [probes[Vector2i(320, 90)], probes[Vector2i(320, 270)], probes[Vector2i(-4, 10)]])
 	# tolerance: the depth buffer's precision at 20 and 2,000 units

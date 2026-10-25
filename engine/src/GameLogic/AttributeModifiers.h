@@ -53,7 +53,12 @@ enum AttributeModifierType
 	ATTRIBUTE_AUTO_HEAL = 19,
 	ATTRIBUTE_SHROUD_CLEARING = 20,
 	ATTRIBUTE_INVULNERABLE = 27,
-	ATTRIBUTE_TYPE_COUNT = 28
+	ATTRIBUTE_TYPE_COUNT = 28,
+	// lane MODS-3: edain-unchained.production-split's types (parsed only with the feature)
+	ATTRIBUTE_PRODUCTION_MONEY = 28,
+	ATTRIBUTE_PRODUCTION_UNIT = 29,
+	ATTRIBUTE_PRODUCTION_UPGRADE = 30,
+	ATTRIBUTE_PRODUCTION_CONSTRUCTION = 31
 };
 extern const char *const TheAttributeModifierTypeNames[]; ///< RW 0xDA6D28, 28 names
 extern const char *const TheAntiCategoryNames[]; ///< RW 0xD9FA40, the 15 category names (GameLogic/WeaponNames.cpp)

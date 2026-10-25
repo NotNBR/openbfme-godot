@@ -93,9 +93,11 @@ Already have the launcher from an earlier build? You don't need to download
 anything: it updates itself and the game.
 
 Releases have plain numbers: Alpha 0.4.5, then 0.4.6 and so on; the middle
-number goes up (0.5.0) when a big new feature lands. The launcher's channel
-is **Alpha** (these releases); **Preview** also gets test builds between
-releases. Both get every release, and you can switch in Settings.
+number goes up (0.5.0) when a big new feature lands. The launcher has two
+channels: **Stable** (the tested releases, shown as Alpha 0.4.5) and
+**Nightly** (a build of everything merged, published twice a day; it
+may break). Nightly also gets every stable release, and you can switch in
+Settings.
 
 The menu on the left has **Play** (the installed version, whether it is up to
 date, your games and What's New from the version's release notes), **News**
@@ -438,16 +440,63 @@ the keys are the original game's. In particular:
 | Ctrl held + click | force-attack a unit, building or the ground (also your own) | **OpenBFME only**: 2.01 has no force-attack, see [below](#force-attack) |
 | S | stop | same |
 | D / F / G | stances | same |
-| Space | jump to the last radar event | same key; it jumps to a mission script's radar ping. Other events don't feed it yet, so in a skirmish it does nothing (S-1674) |
+| Space | jump to the last radar event | same key; it jumps to a mission script's radar ping and to your [pings](#ping-wheel). Other events don't feed it yet, so in a skirmish it jumps only to your pings (S-1674) |
 | \` | open the spell book (powers) | same |
 | F12 | screenshot | same |
 | Esc | the game menu (Resume, Options, Restart; LAN: Forfeit, Exit) | same |
+| Enter | LAN / online: chat to everyone (Enter sends, Esc cancels and keeps what you typed) | same |
+| Backspace | LAN / online: chat to your allies | same |
+| Ctrl+B, then click the ground | LAN / online: place a beacon (up to 3) your allies see on the map and minimap | same |
+| Delete | with your beacon selected: remove it | same (Delete is Sell) |
 | Shift+Up / Shift+Down | nothing | same: 2.01 has no action for them |
 | Ctrl+Z | free camera on / off | **OpenBFME only** (no original key uses Ctrl+Z) |
 | F11 | frame rate counter on / off | **OpenBFME only** (no original key uses F11) |
 | Alt+Enter | window / full screen | **OpenBFME only** (no original key uses Alt+Enter) |
+| G held | the [ping wheel](#ping-wheel) | **OpenBFME only**; a quick tap of G is still the original G (Hold Ground, or a button's hotkey); the key can be changed in Options |
 
 On a German keyboard layout, Y and Z swap as in the original.
+
+### Ping wheel
+
+The ping wheel is an OpenBFME addition, a quick way to mark a spot on the map,
+as in many newer strategy and team games. It works in skirmish games for now.
+
+1. Point at a spot on the map (or on the minimap) and hold **G**.
+2. A wheel opens under the pointer. Move the pointer towards a sector:
+   **Attack here** (up), **Reinforcements** (right), **Danger, fall back**
+   (down) or **Need help** (left). The middle is **Look here**.
+3. Let go of G. The ping appears on the ground and on the minimap, with a
+   sound. Space jumps the camera to the last ping, as it does for the
+   game's own radar events.
+
+G is also the original game's key for Hold Ground and for some buttons. A
+quick tap of G still does that; only holding it opens the wheel. The original
+action then happens when you let go of G rather than when you press it.
+
+A left click also places the selected ping; a right click or Esc closes the
+wheel without one. You can place three pings every five seconds. The pings
+use the game's own beacon model, minimap ping and beacon sound, read from
+your install.
+
+In Options, on the Interface tab, you can turn the wheel off or move it to
+Alt+G or J (keys the original game never uses) or one of the mouse's side
+buttons. If a mod binds Alt+G or J itself, the mod keeps it and the wheel
+stays off.
+
+Pings are only shown on your own screen for now. They are not yet sent to the
+other players in a network game, so the wheel is off there.
+
+### Chat and beacons
+
+In a LAN or online game, **Enter** opens the chat to everyone and **Backspace** the chat to your allies, as in the original
+(observers' Enter goes to the other observers). Lines show at the top right as `[Name] <Team> text` in the sender's colour and
+fade after about 20 seconds; while the chat window is open the last lines stay on screen (an OpenBFME addition). Allies-only
+lines are only ever sent to your allies' computers. Type `/mute Name` to hide a player's lines on your screen, `/unmute Name`
+to show them again and `/mute` to list who you muted (OpenBFME: the original has no mute you can reach in a multiplayer
+game). To report a player for what they wrote, use **Report** on the score screen or the online menu.
+
+**Ctrl+B** and a click on the ground place a beacon: your allies and observers get "A Beacon was placed by ..." with a
+minimap ping, your enemies never see it. You can have three; select one and press Delete to remove it.
 
 ### Force-attack
 

@@ -416,10 +416,12 @@ seconds (150 hordes: 4.6 s, 300 single soldiers: 9.6 s, `pathperf1 bench`).
   troops, one thread). The 150 hordes' order is served in 1.6 s, the 300
   soldiers' in 4.6 s (`PATHPERF1_PROFILE=uber`). The burst flag is in the
   Uber state hash; the Uber pin vector was regenerated.
-- **Both profiles:** the pathfinder's cell-info pool grows past its 60,000
-  records up to 1,000,000, as retail's grows, instead of failing searches and
-  reservations in a big battle. Nothing changes until the first 60,000 are in
-  use (the Faithful pins pass unchanged).
+- **Uber rule change:** the pathfinder's cell-info pool grows past its 60,000
+  records up to 1,000,000 (`Pathfinder::setUberLimits`), instead of failing
+  searches and reservations in a big battle. The Faithful pool keeps its
+  60,000 and fails when full, as before: RotWK 2.01's own limit has not been
+  read from the binary (BFME1 keeps 0x200 fixed slots plus an overflow list,
+  Open-BFME-1 `PathfindCellInfoPoolReset.cpp`), so the growth is the profile's.
 
 ### UBER-2A: the "what is near me" queries (done)
 

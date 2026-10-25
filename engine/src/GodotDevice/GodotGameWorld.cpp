@@ -1,12 +1,14 @@
 // OpenBFME. GPL-3.0.
 // See GodotDevice/GodotGameWorld.h.
 
+#include "Common/ModEngineFeatures.h"
 #include "GodotDevice/GodotGammaComposite.h"
 #include <godot_cpp/classes/shader.hpp>
 #include <godot_cpp/classes/dir_access.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include "GodotDevice/GodotGameWorld.h"
+#include "GameClient/InGameChat.h"
 
 #include "GameClient/FrameCensus.h"
 #include "GameEngineDevice/W3DDevice/GameClient/HouseColor.h"
@@ -296,6 +298,7 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("destroy_object", "id"), &GameWorld::destroy_object);
 	ClassDB::bind_method(D_METHOD("find_object_by_template", "template_name"), &GameWorld::find_object_by_template);
 	ClassDB::bind_method(D_METHOD("get_template_model", "template_name"), &GameWorld::get_template_model);
+	ClassDB::bind_method(D_METHOD("get_player_beacon_template", "player_index"), &GameWorld::get_player_beacon_template); // the ping wheel
 	ClassDB::bind_method(D_METHOD("get_placement_ghost", "template_name"), &GameWorld::get_placement_ghost);
 	ClassDB::bind_method(D_METHOD("create_object", "template_name", "player", "x", "y", "angle"), &GameWorld::create_object, DEFVAL(0.0));
 	ClassDB::bind_method(D_METHOD("get_ground_height", "x", "y"), &GameWorld::get_ground_height);
@@ -360,6 +363,14 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("net_disconnect_kick", "row"), &GameWorld::net_disconnect_kick); // lane MP-2
 	ClassDB::bind_method(D_METHOD("net_disconnect_quit"), &GameWorld::net_disconnect_quit);
 	ClassDB::bind_method(D_METHOD("net_pause"), &GameWorld::net_pause); // lane ONLINE-3
+	ClassDB::bind_method(D_METHOD("net_chat_info"), &GameWorld::net_chat_info); // lane CHAT-1
+	ClassDB::bind_method(D_METHOD("net_chat_send", "line", "mask"), &GameWorld::net_chat_send);
+	ClassDB::bind_method(D_METHOD("net_chat_take"), &GameWorld::net_chat_take);
+	ClassDB::bind_method(D_METHOD("net_chat_mask", "mode"), &GameWorld::net_chat_mask);
+	ClassDB::bind_method(D_METHOD("net_chat_set_muted", "slot", "muted"), &GameWorld::net_chat_set_muted);
+	ClassDB::bind_method(D_METHOD("net_chat_stats"), &GameWorld::net_chat_stats);
+	ClassDB::bind_method(D_METHOD("net_disconnect_chat", "text"), &GameWorld::net_disconnect_chat);
+	ClassDB::bind_method(D_METHOD("net_disconnect_chat_take"), &GameWorld::net_disconnect_chat_take);
 	ClassDB::bind_method(D_METHOD("net_resume"), &GameWorld::net_resume);
 	ClassDB::bind_method(D_METHOD("net_observe_next", "forward"), &GameWorld::net_observe_next, DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("net_observed"), &GameWorld::net_observed);
@@ -499,6 +510,7 @@ GameWorld::~GameWorld()
 	m_liveFX.reset();
 	m_spellStore.reset(); // lane SPELL-2 (review r1): the spell book screens hold the game's player and templates: they go before it
 	m_spellBar.reset();
+	m_cahCameraOffsetValid = false;
 	m_game.reset();
 	m_clientRuntime.reset();
 	m_treeTopple.reset(); // lane SPELL-3
@@ -595,6 +607,7 @@ Dictionary GameWorld::setup(const Ref<RetailFileSystem> &fs)
 		m_audio.reset(); // AUDIO-2: the audio side reads the game
 		m_spellStore.reset(); // lane SPELL-2 (review r1): the spell book screens hold the game's player and templates: they go before it
 		m_spellBar.reset();
+		m_cahCameraOffsetValid = false;
 		m_game.reset();
 		m_clientRuntime.reset();
 	m_treeTopple.reset(); // lane SPELL-3
@@ -617,10 +630,25 @@ Dictionary GameWorld::setup(const Ref<RetailFileSystem> &fs)
 		}
 		else
 		{
+			// lane MODS-3 (S-5306): with a mod mounted, a file the mod's data cannot parse is what retail meets too: the rest of that file is skipped
+			// (INI::loadSubsystemFiles) and the game goes on. The errors are reported (mod_data_errors, printed), the game starts. Retail data has none, so
+			// without a mod every error stays fatal (a port bug)
+			const bool modded = !fs->modIdentity().empty();
+			Array modDataErrors;
 			for (const SubsystemLoadReport::FileError &e : m_world->report().errors)
 			{
-				errors.push_back(toGodot(e.file + ": " + e.message));
+				(modded ? modDataErrors : errors).push_back(toGodot(e.file + ": " + e.message));
 			}
+			if (!modDataErrors.is_empty())
+			{
+				UtilityFunctions::print("GameWorld: S-5306: the mod's data has ", modDataErrors.size(),
+					" INI error(s); as retail, the rest of each failing file is skipped and the game goes on:");
+				for (int64_t i = 0; i < modDataErrors.size(); ++i)
+				{
+					UtilityFunctions::print("GameWorld:   ", modDataErrors[i]);
+				}
+			}
+			result["mod_data_errors"] = modDataErrors;
 			result["seconds"] = timing::elapsedSeconds(t0);
 			result["templates"] = (int64_t)m_world->things().templateCount();
 			result["factions"] = (int64_t)m_world->setupPlayerTemplates().playableSideIndices().size();
@@ -635,7 +663,7 @@ Dictionary GameWorld::setup(const Ref<RetailFileSystem> &fs)
 				errors.push_back(toGodot("settings: " + error));
 				m_world.reset();
 			}
-			m_source.reset(new ArchiveW3DFileSource(*fs->archive_fs()));
+			m_source = fs->renderW3DSource(); // lane SDK-0: the drawables' (render) assets, asset packs in front; LiveGame's launch bones read m_fs
 			m_assets.reset(new WW3DAssetManager(*m_source));
 			// lane FX-2: the effect player of the live games (FXParticleSystem.ini / FXList.ini through FX-1's FXPlayer), a child kept across loads
 			m_liveFX.reset();
@@ -681,6 +709,7 @@ void GameWorld::clear_scene()
 	}
 	m_spellStore.reset(); // lane SPELL-2 (review r1): the spell book screens hold the game's player and templates: they go before it
 	m_spellBar.reset();
+	m_cahCameraOffsetValid = false;
 	m_game.reset(); // the objects (and through them the drawables) first
 	m_clientRuntime.reset();
 	m_treeTopple.reset(); // lane SPELL-3
@@ -1067,6 +1096,8 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 	m_textureAnimation = optBool(options, "texture_animation", true);
 
 	LiveGame::Options lo = loIn;
+	lo.heroStatsProfile = m_heroStatsProfile;
+	lo.heroStatsMessage = [](const std::string &message) { UtilityFunctions::print(toGodot(message)); };
 	if (progress.is_valid())
 	{
 		lo.progress = [&progress](int percent) { progress.call(percent); };
@@ -1074,6 +1105,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 	m_netSession.reset(); // MP-1: the session points at the game
 	releaseLocalDrivers(); // lane MP-2: the recording / replay driver too
 	m_audio.reset(); // AUDIO-2: the audio side reads the game
+	m_cahCameraOffsetValid = false;
 	m_game.reset(new LiveGame(*m_world, *m_fs->archive_fs(), *m_assets, *m_options));
 	m_game->setRenderInterpolation(m_renderInterpolation);
 	// lane RENDERWAIT-1: a blocking wait on the logic worker names its script caller (the innermost GDScript frame: the C++ site of a bound query is
@@ -1118,6 +1150,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 		m_audio.reset(); // AUDIO-2: the audio side reads the game
 		m_spellStore.reset(); // lane SPELL-2 (review r1): the spell book screens hold the game's player and templates: they go before it
 		m_spellBar.reset();
+		m_cahCameraOffsetValid = false;
 		m_game.reset();
 		return fail(error);
 	}
@@ -1785,11 +1818,37 @@ void GameWorld::refresh_views(double deltaMs)
 			}
 			else if (!e.staticModel.empty() && !e.moduleHidden)
 			{
-				const auto palette=Render_House_Color_Params(d->getHouseColor(),d->customColorKind(),d->customColors());
-				const bool colored=m_houseColors && palette.kind>0;
-				const std::vector<std::pair<std::string, std::string>> swaps=e.kind==W3D_DRAWKIND_FLOOR ? floorWeatherSwaps(e.data,m_streakWeather) : std::vector<std::pair<std::string, std::string>>();
-				std::string model=AsciiStringUtil::lowered(e.staticModel)+W3DInstancer::Texture_Swap_Suffix(swaps);
-				if(colored) model+="#palette&"+std::to_string(palette.kind)+"&"+std::to_string(palette.colors[0])+"&"+std::to_string(palette.colors[1])+"&"+std::to_string(palette.colors[2]);
+				// lane HCKEY-1: the key and its palette / swaps are made again only when an input changed (not every frame)
+				const std::uint32_t owner = d->getHouseColor();
+				const int customKind = d->customColorKind();
+				const std::uint32_t *custom = d->customColors();
+				if (!ev.staticKeyValid || ev.staticKeySource != e.staticModel || ev.staticKeyData != e.data || ev.staticKeyKind != (int)e.kind ||
+					ev.staticKeyWeather != m_streakWeather || ev.staticKeyHouse != m_houseColors || ev.staticKeyOwner != owner ||
+					ev.staticKeyCustomKind != customKind || std::memcmp(ev.staticKeyCustom, custom, sizeof(ev.staticKeyCustom)) != 0)
+				{
+					ev.staticKeyPalette = Render_House_Color_Params(owner, customKind, custom);
+					ev.staticKeyColored = m_houseColors && ev.staticKeyPalette.kind > 0;
+					ev.staticKeySwaps = e.kind == W3D_DRAWKIND_FLOOR ? floorWeatherSwaps(e.data, m_streakWeather) : std::vector<std::pair<std::string, std::string>>();
+					ev.staticKey = AsciiStringUtil::lowered(e.staticModel) + W3DInstancer::Texture_Swap_Suffix(ev.staticKeySwaps);
+					if (ev.staticKeyColored)
+					{
+						const HouseColorParams &pp = ev.staticKeyPalette;
+						ev.staticKey += "#palette&" + std::to_string(pp.kind) + "&" + std::to_string(pp.colors[0]) + "&" + std::to_string(pp.colors[1]) + "&" + std::to_string(pp.colors[2]);
+					}
+					ev.staticKeySource = e.staticModel;
+					ev.staticKeyData = e.data;
+					ev.staticKeyKind = (int)e.kind;
+					ev.staticKeyWeather = m_streakWeather;
+					ev.staticKeyHouse = m_houseColors;
+					ev.staticKeyOwner = owner;
+					ev.staticKeyCustomKind = customKind;
+					std::memcpy(ev.staticKeyCustom, custom, sizeof(ev.staticKeyCustom));
+					ev.staticKeyValid = true;
+				}
+				const HouseColorParams &palette = ev.staticKeyPalette;
+				const bool colored = ev.staticKeyColored;
+				const std::vector<std::pair<std::string, std::string>> &swaps = ev.staticKeySwaps;
+				const std::string &model = ev.staticKey;
 				if(ev.model!=model && ev.instance>=0) {dyn->remove_instance(ev.instance);ev.instance=-1;ev.posed=false;}
 				if (!ev.posed)
 				{
@@ -2160,7 +2219,7 @@ void GameWorld::updateTreeSway(double dt)
 	}
 	m_vegSway->advanceSeconds(presented->breeze, m_clientRuntime->random(), dt);
 	W3DVegetationSway::Vec3 sway[W3DVegetationSway::MAX_SWAY_TYPES + 1];
-	m_vegSway->swayOffsets(sway);
+	m_vegSway->swayOffsets(sway, true);
 	float offsets[10][3];
 	for (int i = 0; i < 10; ++i)
 	{
@@ -2524,6 +2583,7 @@ void GameWorld::refresh_streaks(bool record)
 	if (!m_streakTextures && m_fs.is_valid() && m_fs->archive_fs())
 	{
 		m_streakTextures.reset(new W3DMaterialFactory(*m_fs->archive_fs()));
+		m_streakTextures->Set_Asset_Packs(m_fs->assetPacks().empty() ? nullptr : &m_fs->assetPacks()); // lane SDK-0
 	}
 	// group the strips by material (lane PROJ-2: the texture of the map's weather, RW 0x4CFA9A: WeatherType NORMAL 0 / SNOWY 1)
 	const int weather = m_streakWeather;
@@ -3037,6 +3097,19 @@ String GameWorld::get_template_model(const String &template_name) const
 		}
 	}
 	return String();
+}
+
+String GameWorld::get_player_beacon_template(int64_t player_index) const
+{
+	// PlayerTemplate BeaconName (PlayerTemplate.cpp's field table; RotWK reads it at RW 0x6D1305 for the beacon it places): the template a player's
+	// beacon is. The ping wheel draws that template's model, so a mod's own beacon shows. The template is fixed once the player is set up
+	if (!m_game || player_index < 0 || player_index >= m_game->players().getPlayerCount())
+	{
+		return String();
+	}
+	const Player *p = m_game->players().getNthPlayer((int)player_index);
+	const PlayerTemplate *pt = p ? p->getPlayerTemplate() : nullptr;
+	return pt ? toGodot(pt->m_beaconName) : String();
 }
 
 int64_t GameWorld::create_object(const String &template_name, int64_t player, double x, double y, double angle)
@@ -3719,7 +3792,7 @@ Dictionary GameWorld::get_tree_sway() const
 	{
 		d["version"] = (int64_t)m_vegSway->version();
 		W3DVegetationSway::Vec3 sway[W3DVegetationSway::MAX_SWAY_TYPES + 1];
-		m_vegSway->swayOffsets(sway);
+		m_vegSway->swayOffsets(sway, true);
 		for (int i = 1; i <= W3DVegetationSway::MAX_SWAY_TYPES; ++i)
 		{
 			offsets.push_back(Vector3(sway[i].x, sway[i].y, sway[i].z));
@@ -4108,6 +4181,7 @@ Dictionary GameWorld::net_begin(const Dictionary &options)
 		so.replayPath = std::string(String(options["record"]).utf8().get_data());
 	}
 	so.census = optBool(options, "census", false); // lane MP-3: the per-frame census (net_write_census)
+	so.earlyOrders = optBool(options, "early_orders", true); // lane NETLAG-2: NetworkConfig::earlyOrders (false: RotWK's frame + 1 for every order)
 	// lane ONLINE-3: a rejoin START (its ticket's generation) rejoins the running game instead of starting it; it records no replay (the game's start
 	// was not this process's: the relay's log is the game's record, /v1/replays/<id>/log)
 	m_netRejoining = m_netStart.online && m_netStart.rejoinGeneration > 0;
@@ -4332,9 +4406,12 @@ Dictionary GameWorld::net_status() const
 		const DisconnectManager &dm = s.network().disconnectManager();
 		Dictionary d;
 		d["visible"] = dm.screen().visible;
+		const int capacity = m_netStart.game.game.mapStartCount;
+		if (capacity > LEGACY_MAX_SLOTS) d["map_start_count"] = capacity;
 		Array rows;
-		for (const DisconnectManager::Screen::Row &row : dm.screen().rows)
+		for (int i = 0; i < capacity - 1; ++i)
 		{
+			const DisconnectManager::Screen::Row &row = dm.screen().rows[(size_t)i];
 			Dictionary x;
 			x["used"] = row.used && !row.removed;
 			x["slot"] = row.slot;
@@ -4391,6 +4468,223 @@ void GameWorld::net_pause()
 	}
 }
 
+namespace
+{
+// UTF-16 to a Godot String: a surrogate pair is one character (an emoji), a lone surrogate U+FFFD
+String chatString(const std::u16string &u)
+{
+	String s;
+	for (std::size_t i = 0; i < u.size(); ++i)
+	{
+		char32_t c = u[i];
+		if (c >= 0xD800 && c <= 0xDBFF && i + 1 < u.size() && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF)
+		{
+			c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+			++i;
+		}
+		else if (c >= 0xD800 && c <= 0xDFFF)
+		{
+			c = 0xFFFD;
+		}
+		s += String::chr(c);
+	}
+	return s;
+}
+} // namespace
+
+Dictionary GameWorld::net_chat_info() const
+{
+	Dictionary d;
+	const bool network = m_netSession && m_game && !m_netSpectating && !m_netRejoining;
+	d["network"] = network;
+	d["local_slot"] = (int64_t)m_netStart.localSlot;
+	Array slots;
+	bool localActive = false;
+	if (network)
+	{
+		GameLogic &logic = m_game->logic();
+		const std::vector<std::string> &names = m_game->startSlotPlayers();
+		const ::Player *local = logic.players().getLocalPlayer();
+		localActive = local && !local->isObserver() && !local->isDefeated(); // Player::isPlayerActive RW 0x6AAC52
+		for (int i = 0; i < MAX_SLOTS; ++i)
+		{
+			Dictionary sl;
+			const ::Player *p = (size_t)i < names.size() && !names[(size_t)i].empty() ? logic.players().findPlayerWithName(names[(size_t)i]) : nullptr;
+			const bool isLocal = p && p == local;
+			sl["player"] = p != nullptr;
+			sl["local"] = isLocal;
+			sl["active"] = p && !p->isObserver() && !p->isDefeated();
+			// RW 0x8ECF3E: the player's relationship to the local player's team and the local player's to the player's, both ALLIES
+			sl["allied"] = p && local && p->getRelationship(local->getDefaultTeam()) == ALLIES && local->getRelationship(p->getDefaultTeam()) == ALLIES;
+			sl["muted"] = m_netSession->network().chatMuted(i);
+			sl["name"] = chatString(m_netSession->network().playerName(i));
+			sl["color"] = p ? (int64_t)(p->getPlayerColor() & 0xFFFFFFu) : (int64_t)-1;
+			slots.push_back(sl);
+		}
+	}
+	d["local_active"] = localActive;
+	d["slots"] = slots;
+	return d;
+}
+
+Dictionary GameWorld::net_chat_send(const String &line, int64_t mask)
+{
+	Dictionary r;
+	r["ok"] = false;
+	if (!m_netSession || m_netSpectating || m_netRejoining)
+	{
+		r["error"] = "not in a network game";
+		return r;
+	}
+	std::u16string u;
+	for (int i = 0; i < line.length(); ++i)
+	{
+		const char32_t c = line[i];
+		if (c > 0xFFFF)
+		{
+			u.push_back((char16_t)(0xD800 + ((c - 0x10000) >> 10)));
+			u.push_back((char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF)));
+		}
+		else
+		{
+			u.push_back((char16_t)c);
+		}
+	}
+	std::string error;
+	if (!m_netSession->network().sendChat(u, (std::uint32_t)mask, &error))
+	{
+		r["error"] = toGodot(error);
+		return r;
+	}
+	r["ok"] = true;
+	return r;
+}
+
+int64_t GameWorld::net_chat_mask(int64_t mode) const
+{
+	const Dictionary info = net_chat_info();
+	if (!(bool)info.get("network", false) || mode < 0 || mode > 4)
+	{
+		return 0;
+	}
+	std::vector<InGameChat::Slot> slots;
+	const Array a = info.get("slots", Array());
+	for (int i = 0; i < a.size(); ++i)
+	{
+		const Dictionary d = a[i];
+		InGameChat::Slot sl;
+		sl.player = (bool)d.get("player", false);
+		sl.local = (bool)d.get("local", false);
+		sl.active = (bool)d.get("active", false);
+		sl.alliedBothWays = (bool)d.get("allied", false);
+		sl.muted = (bool)d.get("muted", false);
+		slots.push_back(sl);
+	}
+	return (int64_t)InGameChat::recipientMask((InGameChatMode)mode, slots);
+}
+
+Array GameWorld::net_chat_take()
+{
+	Array out;
+	if (!m_netSession || m_netSpectating)
+	{
+		return out;
+	}
+	const std::vector<Network::ChatLine> lines = m_netSession->network().takeChat();
+	if (lines.empty())
+	{
+		return out;
+	}
+	const std::vector<std::string> &names = m_game ? m_game->startSlotPlayers() : std::vector<std::string>();
+	for (const Network::ChatLine &l : lines)
+	{
+		Dictionary d;
+		d["slot"] = (int64_t)l.slot;
+		d["name"] = chatString(m_netSession->network().playerName(l.slot));
+		d["text"] = chatString(l.text);
+		// RW 0x8D54D1: the sender's Player (by the slot's name); its colour (Player + 0x2A0); none: the plain message line
+		const ::Player *p = m_game && (size_t)l.slot < names.size() && !names[(size_t)l.slot].empty()
+			? m_game->logic().players().findPlayerWithName(names[(size_t)l.slot]) : nullptr;
+		d["color"] = p ? (int64_t)(p->getPlayerColor() & 0xFFFFFFu) : (int64_t)-1;
+		out.push_back(d);
+	}
+	return out;
+}
+
+void GameWorld::net_chat_set_muted(int64_t slot, bool muted)
+{
+	if (m_netSession)
+	{
+		m_netSession->network().setChatMuted((int)slot, muted);
+	}
+}
+
+Dictionary GameWorld::net_disconnect_chat(const String &text)
+{
+	Dictionary r;
+	r["ok"] = false;
+	if (!m_netSession || m_netSpectating || m_netRejoining)
+	{
+		r["error"] = "not in a network game";
+		return r;
+	}
+	std::u16string u;
+	for (int i = 0; i < text.length(); ++i)
+	{
+		const char32_t c = text[i];
+		if (c > 0xFFFF)
+		{
+			u.push_back((char16_t)(0xD800 + ((c - 0x10000) >> 10)));
+			u.push_back((char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF)));
+		}
+		else
+		{
+			u.push_back((char16_t)c);
+		}
+	}
+	std::string error;
+	r["ok"] = m_netSession->network().sendDisconnectChat(u, &error);
+	if (!error.empty())
+	{
+		r["error"] = toGodot(error);
+	}
+	return r;
+}
+
+Array GameWorld::net_disconnect_chat_take()
+{
+	Array out;
+	if (!m_netSession || m_netSpectating)
+	{
+		return out;
+	}
+	for (const Network::ChatLine &l : m_netSession->network().takeDisconnectChat())
+	{
+		Dictionary d;
+		d["slot"] = (int64_t)l.slot;
+		d["name"] = chatString(m_netSession->network().playerName(l.slot));
+		d["text"] = chatString(l.text);
+		out.push_back(d);
+	}
+	return out;
+}
+
+Dictionary GameWorld::net_chat_stats() const
+{
+	Dictionary d;
+	if (!m_netSession)
+	{
+		return d;
+	}
+	const Network &n = m_netSession->network();
+	d["received"] = (int64_t)n.chatReceived();
+	d["dropped_flood"] = (int64_t)n.chatDroppedFlood();
+	d["dropped_muted"] = (int64_t)n.chatDroppedMuted();
+	d["not_addressed"] = (int64_t)n.chatNotAddressed();
+	d["muted_mask"] = (int64_t)n.chatMutedMask();
+	return d;
+}
+
 void GameWorld::net_resume()
 {
 	if (m_netSession && !m_netRejoining && !m_netSpectating)
@@ -4409,7 +4703,9 @@ void GameWorld::net_disconnect_quit()
 
 ProfileIdentity GameWorld::profileIdentityFor(SimulationProfile profile) const
 {
-	return ProfileIdentity::compute(m_fs.is_valid() ? m_fs->mountedArchives() : std::vector<MountedArchive>(), RandomAlgorithm::ZH_CarryChain, {}, profile);
+	return ProfileIdentity::compute(m_fs.is_valid() ? m_fs->mountedArchives() : std::vector<MountedArchive>(), RandomAlgorithm::ZH_CarryChain,
+		ModEngineFeatures::identityFeatures(), profile, // lane MODS-3: the mod's engine features
+		m_fs.is_valid() ? m_fs->modIdentity() : std::vector<std::string>()); // lane MODS-1
 }
 
 Dictionary GameWorld::net_observe_next(bool forward)
@@ -4552,8 +4848,8 @@ Dictionary GameWorld::caster_status() const
 ProfileIdentity GameWorld::net_profile() const
 {
 	// the profile identity of this peer: the mounted archives in mount order with their verified md5, the build, the RNG prepare_new_game uses
-	return ProfileIdentity::compute(m_fs.is_valid() ? m_fs->mountedArchives() : std::vector<MountedArchive>(), RandomAlgorithm::ZH_CarryChain, {},
-		m_choice.current); // lane UBER-1: "profile uber" in the Uber performance mode
+	return ProfileIdentity::compute(m_fs.is_valid() ? m_fs->mountedArchives() : std::vector<MountedArchive>(), RandomAlgorithm::ZH_CarryChain,
+		ModEngineFeatures::identityFeatures(), m_choice.current, m_fs.is_valid() ? m_fs->modIdentity() : std::vector<std::string>()); // lane UBER-1: "profile uber" in the Uber mode; MODS-1: the mod
 }
 
 Dictionary GameWorld::set_simulation_profile(const String &name)
@@ -5595,6 +5891,11 @@ class GameWorldTribute : public TributeSource
 {
 public:
 	explicit GameWorldTribute(GameWorld &w) : m_w(w) {}
+	int rowLimit() const override
+	{
+		const int capacity = m_w.m_start ? m_w.m_start->message.game.mapStartCount : LEGACY_MAX_SLOTS;
+		return capacity > LEGACY_MAX_SLOTS ? capacity : TributeSource::rowLimit();
+	}
 	bool localActive() const override
 	{
 		if (!m_w.m_game)
@@ -5639,7 +5940,7 @@ public:
 			return r;
 		};
 		out.push_back(row(*local, true));
-		for (int i = 0; i < logic.players().getPlayerCount() && out.size() < 7; ++i)
+		for (int i = 0; i < logic.players().getPlayerCount() && out.size() < (size_t)rowLimit(); ++i)
 		{
 			const ::Player *p = logic.players().getNthPlayer(i);
 			if (!p || p == local || p->isObserver() || p->isDefeated() || local->getRelationship(p) != ALLIES)
@@ -6976,6 +7277,17 @@ Array GameWorld::list_replays(const String &directory) const
 		out.push_back(d);
 	}
 	return out;
+}
+
+
+void GameWorld::net_submit_view(float cameraX, float cameraY, float cursorX, float cursorY, bool cursorOverWorld)
+{
+	// lane ANTICHEAT-1: see GodotGameWorld.h
+	if (!m_netSession || !m_game || m_netSpectating || !m_netLoaded || !m_netStart.online)
+	{
+		return;
+	}
+	m_netSession->network().submitView(m_game->frame(), cameraX, cameraY, cursorX, cursorY, cursorOverWorld);
 }
 
 } // namespace godot

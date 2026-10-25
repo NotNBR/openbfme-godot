@@ -11,8 +11,8 @@ This download holds the launcher and the game together: the game is ready to pla
 one; both keep OpenBFME up to date. The game, started directly, asks the launcher to look for an update in the background
 (it says what it found in the top right corner of its menu) and uses a newer version from your next start.
 Press Play to start the newest installed version. At every start (and every hour while it stays open) the launcher looks
-for a newer version of your channel (Alpha: the numbered releases, Alpha 0.4.5, 0.4.6, ...; Preview: also test builds
-between releases; both get every release), downloads it in the background, checks it and installs it; Play keeps working meanwhile and the new
+for a newer version of your channel (Stable: the tested numbered releases, Alpha 0.4.5, 0.4.6, ...; Nightly: also a new test build twice a day,
+which may break; both get every release), downloads it in the background, checks it and installs it; Play keeps working meanwhile and the new
 version starts from your next Play on (turn off "Update automatically in the background" in Settings to update only when you press Update). Windows
 SmartScreen may warn that the launcher is unrecognised: it is not code-signed yet; choose "More info", then "Run anyway".
 The menu on the left: Play, News (release notes), Multiplayer, Mods, Game files (your game folders, the games download) and
@@ -32,6 +32,9 @@ bfmeladder.com and workshop-files.bfmeladder.com, the servers of the All In One 
 Project and the Patch 2.22 team), for The Rise of the Witch-king 2.01 and The Battle for Middle-earth II 1.06. Every
 file is checked against OpenBFME's own list before it is kept. Untick "Offer to download the games" in Settings to
 hide the button.
+Only when you press "Load the list" or install a mod (Mods): bfmeladder.com and workshop-files.bfmeladder.com again,
+for the list of Rise of the Witch-king mods and their files. Mods are made by their own authors; every file is checked
+against the MD5 the service lists, and they go into the launcher's own mods folder, never into your game folders.
 Offline, or when GitHub refuses (for example its hourly limit), it says so and plays the newest installed version.
 
 How it checks a download

@@ -10,28 +10,18 @@
 ##   ghost  a structure of another player (neutral) that is FOGGED and drawn (RW 0x68EDD0: a neutral IMMOBILE object is not hidden in the fog): the
 ##          camera on it, lit by the fogged light (RW 0x46F48E: visual2-ghost-fogged.png). FAIL: no such structure
 ##   look   the local base and the map's middle at the default camera (visual2-look-base / -middle.png) for the colour comparison
-extends RefCounted
+extends "res://scripts/scenario_player.gd"
 
 var game: Node
 var hud: Node
 var world: Node
-var ok_count := 0
-var fail_count := 0
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("VISUAL2 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("VISUAL2 %s: FAIL %s" % [s, r])
-	print("VISUAL2 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 func _frames(n: int) -> void:

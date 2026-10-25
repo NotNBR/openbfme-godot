@@ -107,6 +107,10 @@ public:
 	int windowCount() const { return (int)m_owned.size(); }
 	// lane WINCRASH-1 (tests): is `window` a window of this manager that is not destroyed or waiting for destruction?
 	bool winIsAlive(const GameWindow *window) const;
+	// lane MENUFIX-2 (the port's structure, not ZH): the windows `owner` owns own themselves again (winSetOwner(nullptr), ZH's self owner) before
+	// `owner` goes. An Apt screen's gadgets are owned by a hidden owner window that is not their parent (AptGadgetLayer::createOwnerWindow), so
+	// destroying it left their owner pointer dangling; the next mouse move over such a list box sent GBM_MOUSE_ENTERING to the freed window.
+	void winReleaseOwned(GameWindow *owner);
 	void linkWindow(GameWindow *window);
 	void unlinkWindow(GameWindow *window);
 	void unlinkChildWindow(GameWindow *window);

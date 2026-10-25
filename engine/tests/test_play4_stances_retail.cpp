@@ -169,7 +169,7 @@ TEST_CASE("play4 stances retail: an idle unit guards its spot in Battle and Hold
 	CHECK(sb->getStance() == STANCE_HOLD_GROUND);
 	CHECK(ai->currentStateId() == (unsigned)AI_GUARD);
 	CHECK(ai->guardMode() == GUARDMODE_GUARD_WITHOUT_PURSUIT);
-	// the control bar: the toggle shows the current stance's image and a press sends the next of its Stances (HoldGround -> Battle)
+	// the control bar: the toggle shows the current stance's image, follows the stance sent (HoldGround -> Battle) and its own press sends nothing (RW 0x96FAC6)
 	RecordingShellServices services;
 	InGameHud::Config cfg{ *r.game, *s.world, *s.mount->fs, services, r.view, s.mouse, s.meta, nullptr };
 	InGameHud hud(cfg);
@@ -193,7 +193,11 @@ TEST_CASE("play4 stances retail: an idle unit guards its spot in Battle and Hold
 	REQUIRE(toggle);
 	CHECK(toggle->state == ButtonState::Enabled);
 	CHECK(toggle->image == "UCCommon_HoldGroundStance");
-	REQUIRE(bar.pressButton(toggle->slot, true));
+	// lane CAMPUI-1: the toggle's press reaching the command processor sends nothing (retail's press opens the Palantir's radial, RW 0x96FAC6; only an
+	// item sends, RW 0x96F53C: test_campui1_stance.cpp); it is counted. The stance is sent as the radial's Battle item sends it
+	CHECK_FALSE(bar.pressButton(toggle->slot, true));
+	CHECK(bar.unportedPresses().at("TOGGLE_STANCE (no sub-menu)") == 1u);
+	REQUIRE(bar.sendChangeStance(STANCE_BATTLE));
 	hud.update(0.2);
 	r.game->advance(0.2);
 	r.frame(1);

@@ -44,8 +44,10 @@ public:
 		std::string exeName = "openbfme";
 		std::string playerName;
 		bool adaptiveRunAhead = true; ///< lane MP-2: the local command delay follows the measured round trip (Network::updateRunAhead)
+		bool earlyOrders = true;      ///< lane NETLAG-2: NetworkConfig::earlyOrders (an order runs a frame sooner where the link allows)
 		std::uint32_t rejoinWindowMs = 300000; ///< lane ONLINE-3: an online game's rejoin window (NetworkConfig::rejoinWindowMs)
 		bool census = false;          ///< lane MP-3: LockstepDriver::setCensus (the per-frame census of the measurements)
+		bool hashEveryFrame = false; ///< ONLINE16-FIX: the driver hashes every frame without a replay (a rejoined incarnation's evidence in tests)
 	};
 	NetGameSession(UDP &socket, const LobbyStart &start, const Options &options);
 	~NetGameSession();

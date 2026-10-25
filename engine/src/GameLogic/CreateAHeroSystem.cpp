@@ -176,10 +176,19 @@ void parseBlingUpgrades(INI *ini, void *, void *store, const void *)
 	}
 }
 
+// RW 0x61A4FF / 0x61A5B5 pass true to the name-key vector parser
+// RW 0x5489D4: repeated awards/stat names keep only their first entry.
+void parseUniqueNames(INI *ini, void *, void *store, const void *)
+{
+	auto &out = *static_cast<std::vector<std::string> *>(store);
+	for (const char *token = ini->getNextTokenOrNull(); token; token = ini->getNextTokenOrNull())
+		if (std::find(out.begin(), out.end(), token) == out.end()) out.emplace_back(token);
+}
+
 const FieldParse kSubClassParse[] = { // RW 0xD9F088
 	{ "BlingUpgrades", parseBlingUpgrades, nullptr, 0 },
-	{ "Awards", INI::parseAsciiStringVectorAppend, nullptr, (int)offsetof(CreateAHeroSubClass, awards) },
-	{ "Stats", INI::parseAsciiStringVectorAppend, nullptr, (int)offsetof(CreateAHeroSubClass, stats) },
+	{ "Awards", parseUniqueNames, nullptr, (int)offsetof(CreateAHeroSubClass, awards) },
+	{ "Stats", parseUniqueNames, nullptr, (int)offsetof(CreateAHeroSubClass, stats) },
 	{ "UpgradeName", INI::parseAsciiString, nullptr, (int)offsetof(CreateAHeroSubClass, upgradeName) },
 	{ "NameTag", INI::parseAsciiString, nullptr, (int)offsetof(CreateAHeroSubClass, nameTag) },
 	{ "DescriptionTag", INI::parseAsciiString, nullptr, (int)offsetof(CreateAHeroSubClass, descriptionTag) },
@@ -352,6 +361,10 @@ const CreateAHeroAttribute *CreateAHeroSubClass::findAttribute(const std::string
 
 void CreateAHeroSystem::registerBlock(INIBlockRegistry &registry)
 {
+	registry.registerBlock("AwardSystem", [](INI *ini) {
+		if (!TheCreateAHeroSystem) throw INIException(8, "AwardSystem: CreateAHeroSystem is not installed");
+		TheCreateAHeroSystem->awardSystem.parse(ini);
+	});
 	registry.registerBlock("CreateAHeroSystem", [](INI *ini) {
 		if (!TheCreateAHeroSystem)
 		{
@@ -370,6 +383,8 @@ void CreateAHeroSystem::parseSystem(INI *ini)
 void CreateAHeroSystem::load(INIEnvironment &env)
 {
 	INI ini(env);
+	awardSystem = {};
+	ini.load("Data\\INI\\AwardSystem.ini", INI_LOAD_OVERWRITE);
 	ini.load("Data\\INI\\CreateAHeroSystem.ini", INI_LOAD_OVERWRITE); // RW 0xBFC114
 }
 

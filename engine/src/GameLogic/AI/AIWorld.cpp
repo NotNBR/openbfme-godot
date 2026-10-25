@@ -20,6 +20,7 @@
 #include "GameLogic/SkirmishAI/SkirmishAIManager.h"
 #include "GameLogic/AI/AIGroup.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/SlavedUpdate.h"
 #include "GameLogic/Object/Contain/HordeContainRuntime.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/ObjectTemplateInfo.h"
@@ -330,6 +331,10 @@ struct KindBits
 			{ PK_SCALEABLE_WALL, "SCALEABLE_WALL" },
 			{ PK_BASE_SITE, "BASE_SITE" },
 			{ PK_WALL_UPGRADE, "WALL_UPGRADE" },
+			{ PK_ATTACK_NEEDS_LINE_OF_SIGHT, "ATTACK_NEEDS_LINE_OF_SIGHT" },
+			{ PK_CAN_SHOOT_OVER_WALLS, "CAN_SHOOT_OVER_WALLS" },
+			{ PK_WALL_SEGMENT, "WALL_SEGMENT" },
+			{ PK_WALL_GATE, "WALL_GATE" },
 		};
 		for (int &b : bit)
 		{
@@ -445,6 +450,29 @@ float ObjectPathfindAdapter::getHeightAboveTerrain() const
 {
 	const Coord3D &p = *m_object->getPosition();
 	return SimMath::subf32(p.z, m_object->logic().getGroundHeight(p.x, p.y));
+}
+
+// lane ATTACKPATH-1: RW 0x6E82C8 walks the behaviour modules (Object + 0x24C) for the first whose behaviour interface slot 0x68 (the SlavedUpdate interface) is
+// not null and answers its slot 0, the slaver's id
+PathfindObjectID ObjectPathfindAdapter::getSlaverID() const
+{
+	const SlavedUpdateInterface *s = SlavedUpdateInterface::of(*m_object);
+	return s ? (PathfindObjectID)s->getSlaverID() : PATHFIND_INVALID_ID;
+}
+
+// lane ATTACKPATH-1: RW 0x70C55D -> RW 0x70C50C(0.0): not for the KindOf CAN_CLIMB_WALLS / SHIP (template + 0x11F & 0x81); else the height above the terrain
+// (RW 0x70B8AE) + 0 over GlobalData Gravity (+ 0xC4) * -9 (RW 0xC1EBC0), x87 (the predicate AerialPathfinder and SlowDeathBehavior port)
+bool ObjectPathfindAdapter::isSignificantlyAboveTerrain() const
+{
+	static const int kClimb = ObjectTemplateInfoBuilder::kindOfIndex("CAN_CLIMB_WALLS");
+	static const int kShip = ObjectTemplateInfoBuilder::kindOfIndex("SHIP");
+	if ((kClimb >= 0 && m_object->isKindOf((unsigned)kClimb)) || (kShip >= 0 && m_object->isKindOf((unsigned)kShip)))
+	{
+		return false;
+	}
+	const Coord3D &p = *m_object->getPosition();
+	const float above = SimMath::pc24Add(SimMath::pc24Sub(p.z, m_object->logic().getGroundHeight(p.x, p.y)), 0.0f);
+	return above > SimMath::pc24Mul(m_object->logic().settings().gravity, -9.0f);
 }
 
 bool ObjectPathfindAdapter::isMobile() const
@@ -676,12 +704,19 @@ bool ObjectPathfindAdapter::isStationary() const
 }
 
 // RW 0x936C57 (the footprint registration RW 0x936B7D, reached through 0x6E85E9): the one status that keeps an object out of the map is 0x58 = PHANTOM_STRUCTURE (the binary's
-// status name table). An ordinary foundation (UNDER_CONSTRUCTION, status 2) is an obstacle from the moment it is placed (lane BUILD-1, review r1). The 0x4D of the earlier note is
-// not read by that function.
+// status name table). An ordinary foundation (UNDER_CONSTRUCTION, status 2) is an obstacle from the moment it is placed (lane BUILD-1, review r1). The 0x4D of the earlier note
+// (CAN_NOT_WALK_ON) is read by that function only for a WALK_ON_TOP_OF_WALL template (RW 0x936C8A: cannotWalkOn below).
 bool ObjectPathfindAdapter::footprintSkippedByStatus() const
 {
 	static const int phantom = statusIndex("PHANTOM_STRUCTURE");
 	return phantom >= 0 && m_object->testStatus((unsigned)phantom);
+}
+
+// RW 0x936C8A .. 0x936C95 (review of #63): RW 0x44DDEC(0x4D) = the object status CAN_NOT_WALK_ON (the binary's status name table)
+bool ObjectPathfindAdapter::cannotWalkOn() const
+{
+	static const int cannot = statusIndex("CAN_NOT_WALK_ON");
+	return cannot >= 0 && m_object->testStatus((unsigned)cannot);
 }
 
 bool ObjectPathfindAdapter::ignoresAsTarget(const PathfindObject &) const

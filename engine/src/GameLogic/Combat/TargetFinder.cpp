@@ -173,6 +173,12 @@ Object *TargetFinder::findClosestEnemyNear(const Object &seeker, const Coord3D &
 		{
 			continue;
 		}
+		// lane CAMPUI-1: the closest-enemy search's first filter (vtable RW 0xC1D688, allow RW 0x6FF7A4; built by RW 0x7006D7 / 0x700509 / 0x700F52) refuses
+		// an OFF_MAP candidate (+ 0x458 bit 3), whatever the seeker's own status (not ZH's same-map test)
+		if (o->isOffMap())
+		{
+			continue;
+		}
 		const bool isMember = o->testStatus((unsigned)st.hordeMember);
 		const bool isHorde = o->isKindOf((unsigned)k.horde);
 		if ((flags & HORDES_ONLY) && isMember)

@@ -55,7 +55,8 @@ public:
 	// RW 0x4E5D2C with `clientFrames` retail client frames elapsed (1 = one retail call)
 	void update(const Breeze &breeze, W3DDrawRandom &random, double clientFrames = 1.0);
 	// RW 0x4E61EE: the 11 SwayOffsets vectors (entry 0 is no sway)
-	void swayOffsets(Vec3 out[MAX_SWAY_TYPES + 1]) const;
+	// Smooth presentation closes the final interval instead of the retail zero-vector gap.
+	void swayOffsets(Vec3 out[MAX_SWAY_TYPES + 1], bool smoothLoop = false) const;
 
 	int version() const { return m_curSwayVersion; }
 	float offset(int type) const { return m_curSwayOffset[type]; }

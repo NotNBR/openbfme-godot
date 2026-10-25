@@ -16,7 +16,7 @@
 //   * fixEndpoints (RW 0x71343E): the first and the last control point are put on the line through their neighbour, at the distance of the next one;
 //   * query (RW 0x777DAE): prepare (1, 4000, 1000, 1000, 0, 0), time = d, evaluate; false for d < 0 or an invalid spline;
 //   * the flight ground height (RW 0x777ED7): max(terrain height, the no-fly-zone height RW 0x777E54), raised to AIData MinFlightHeight (+ 0xB0) unless that
-//     is FLT_MAX;
+//     is FLT_MAX (lane STEALTHFLY1: GameLogicSettings::minFlightHeight, which a map's map.ini AIData block sets: map wor dol guldur 76);
 //   * the probe (RW 0x77824E): five ground samples (the centre at z - h / 2, the four corners of the bounding sphere radius at z - h / 2 * 0.777) give the worst
 //     ground intrusion as a push up, the separation (RW 0x777F9F) adds the overlap of the objects around; 2 without an AI, 1 when anything intrudes, else 0;
 //   * the separation (RW 0x777F9F, BFME2 decomp AerialPathfinder.cpp rva00375C28): the objects within the bounding sphere radius (FROM_BOUNDINGSPHERE_3D)
@@ -27,7 +27,7 @@
 //     goal, see the .cpp), then up to five corrective points where the sampled path hits something.
 //
 // NOT PORTED / INFERENCE (stop S-4041, AerialPathfinder::stopLines): the no-fly zones (the map INI block AerialPathfindNoFlyZone is a recording stub: the list is
-// empty, RW 0x777E54 then answers 0); AIData MinFlightHeight is not read (absent from the retail INI: the retail default FLT_MAX is used); the would-collide
+// empty, RW 0x777E54 then answers 0; no retail map defines one); the would-collide
 // filter of the separation tests the 2D footprints (BuildPlacement::footprintsCollide) because the shape overlap test RW 0xAD2CE0 is not ported (S-1020);
 // the x87 parts (the probe's products, the terminal radius) run through the NumericState PC24 operations (S-081).
 //

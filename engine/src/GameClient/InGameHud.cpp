@@ -3,11 +3,23 @@
 
 #include "Common/BfmeGame.h"
 #include "GameClient/InGameHud.h"
+#include "GameClient/BeaconClientUpdate.h"
+#include "Common/Audio/AudioEntryPoints.h"
+#include "GameLogic/BeaconCommands.h"
+#include "GameLogic/Economy.h"
+#include "GameLogic/EconomySettings.h"
+#include "GameLogic/ScriptEngine/MissionObjectiveTracker.h"
 #include "GameClient/GUI/AptScreens/AptImageMode.h"
 #include "GameClient/GUI/GameTextSource.h"
 
 #include "GameClient/GUI/GameTextSource.h"
 #include "GameClient/GUI/LoadScreenInfo.h"
+#include "GameLogic/Economy.h"
+#include "GameLogic/System/ShroudManager.h"
+#include "GameClient/UnitHelpSource.h"
+#include "Common/Thing/ThingTemplate.h"
+#include "GameLogic/Object/ObjectGeometry.h"
+#include "GameLogic/ActionManager.h"
 
 #include "Common/Audio/AudioEntryPoints.h"
 
@@ -61,6 +73,18 @@ InGameHud::InGameHud(Config config)
 	m_environment.gameText = m_config.gameText;
 	m_input = std::make_unique<HudInput>(m_config.game.logic(), &m_config.game.ai(), m_config.view, m_config.game.commands(), m_config.mouse, m_config.metaMap);
 	m_input->context().commands = &m_config.world.commands();
+	m_input->context().formations = &m_config.world.formations();
+	// lane SPELLRC-1: a right click (not a drag) ends the spell book power waiting for its target, in the GUI command translator as RotWK's does (RW 0x83D7AD);
+	// the right press itself is the world's (the camera's RMB scroll, RW 0x83DB83 is reached only by the click)
+	m_input->guiCommandTranslator().setHudTargetCancel([this]() {
+		// lane OWNERFIX-1: the aim waits while a script has the input off (the right click then cancels nothing; Sol r1 follow-up)
+		if (!m_spellBar.targeting() || !m_input->ui().getInputEnabled())
+		{
+			return false;
+		}
+		m_spellBar.cancel();
+		return true;
+	});
 	// lane OWNERFIX-1 r2: InGameUI's setRadiusCursorNone (the disable edge, RW 0x69B632): the aiming circle goes in that call, the pointer back to the arrow
 	m_input->ui().setRadiusCursorNoneHook([this]() {
 		m_radiusCursor.clear();
@@ -172,6 +196,19 @@ bool InGameHud::boot(std::string *error)
 	{
 		m_errors.push_back("rally marker: " + (settingsError.empty() ? std::string("GameData has no DownwindAngle") : settingsError));
 	}
+	// lane CHAT-1: the message lines' InGameUI rows (data\ini\ingameui.ini + language.ini's MessageFont)
+	{
+		InGameUIMessageSettings ms;
+		std::string msError;
+		if (InGameUIMessageSettings::load(m_config.fs, ms, &msError))
+		{
+			m_messageLines.setSettings(ms);
+		}
+		else
+		{
+			m_errors.push_back("message lines: " + msError);
+		}
+	}
 	if (m_ownedWindows)
 	{
 		m_ownedWindows->init();
@@ -204,6 +241,13 @@ bool InGameHud::boot(std::string *error)
 		whenHeld([this, slot, inPalantir]() {
 			const auto worldContext = enterContext(); // the movie's own update and invoke_at reach this outside the scoped entry points (BuildAssistant reads TheCommandStore)
 			m_bar->pressButton(slot, inPalantir);
+		});
+	});
+	// lane CAMPUI-1: a stance item of the stance toggle's radial (RW 0x96F53C: MSG_CHANGE_STANCE with the item's stance)
+	m_palantirRef->setStanceHandler([this](int stance) {
+		whenHeld([this, stance]() {
+			const auto worldContext = enterContext();
+			m_bar->sendChangeStance(stance);
 		});
 	});
 	m_palantirRef->setRightButtonHandler([this](int slot, bool inPalantir) { // lane AUTOCAST-1
@@ -284,6 +328,19 @@ bool InGameHud::boot(std::string *error)
 			m_errors.push_back("radius cursors: " + cursorError);
 		}
 	}
+	m_playerMessages.settings = m_radiusTemplates.messageUi();
+	if (const GlobalLanguage *language = m_shellRef->environment().language)
+	{
+		if (!language->messageFont.name.empty())
+		{
+			m_playerMessages.settings.font = language->messageFont.name;
+			m_playerMessages.settings.pointSize = language->messageFont.size;
+			m_playerMessages.settings.bold = language->messageFont.bold;
+		}
+	}
+	m_input->ui().setMessageHandler([this](const std::string &label) {
+		m_playerMessages.add(fetchOrMissing(m_config.gameText, label), m_config.game.logic().getFrame());
+	});
 	bootHud6(); // lane HUD-6: the help box's settings and the Palantir's help box movie (InGameHudHud6.cpp)
 	m_radar->setupFromTerrain();
 	{
@@ -391,6 +448,19 @@ void InGameHud::updateRallyPoint()
 	marker->setHouseColor(m_config.game.logic().settings().night ? local->getPlayerNightColor() : local->getPlayerColor());
 }
 
+void InGameHud::flashPalantirButton(int slot, int seconds)
+{
+	if (m_palantirRef)
+	{
+		m_palantirRef->flashButton(slot, seconds);
+	}
+}
+
+bool InGameHud::palantirObjectivesFlashing() const
+{
+	return m_palantirRef && m_palantirRef->objectivesFlashing();
+}
+
 void InGameHud::update(double seconds)
 {
 	// SMOOTH-1 (S-810): the per-frame update reads the live game (selection, control bar, production, the movie's callbacks); while the logic worker runs
@@ -406,6 +476,7 @@ void InGameHud::update(double seconds)
 		for (unsigned i = 0; i < advanced; ++i)
 		{
 			m_bar->tickAttackFlash();
+			m_messageLines.update(m_messageFrame); // lane CHAT-1: InGameUI::update's message expiry, once per client frame (S-5150: 30 a second)
 		}
 		if (m_heroSelect)
 		{
@@ -438,6 +509,36 @@ void InGameHud::update(double seconds)
 		partStart = now;
 	};
 	m_input->update();
+	// lane CHAT-1: the logic frame the message lines stamp and fade by; the GUI labels the translators and the control bar posted (InGameUI::message:
+	// TheGameText's text of the label, the alternating colours)
+	m_messageFrame = m_config.game.logic().getFrame();
+	if (!m_input->ui().networkGame())
+	{
+		(void)m_input->ui().takeChatRequests(); // RW 0x441B7C: outside a LAN / online game the chat keys open nothing
+	}
+	// the labels are read, not taken: InGameUI::messages() stays the record the input tests and the radar's notices read
+	const std::vector<std::string> &labels = m_input->ui().messages();
+	if (m_messageLabelsSeen > labels.size())
+	{
+		m_messageLabelsSeen = 0; // the queue was taken by someone else (a test): start again at its head
+	}
+	for (; m_messageLabelsSeen < labels.size(); ++m_messageLabelsSeen)
+	{
+		const std::string &label = labels[m_messageLabelsSeen];
+		std::u16string text;
+		if (m_config.gameText && m_config.gameText->fetch(label, text))
+		{
+			m_messageLines.addMessageText(text, nullptr, m_messageFrame);
+			++m_guiMessagesShown;
+		}
+		else
+		{
+			m_missingMessageLabels.push_back(label); // reported (the HUD state), never shown as the raw label
+		}
+	}
+	const unsigned messageTicks = m_clientFrames - m_messageClientFrame;
+	m_playerMessages.advanceClientTicks(m_config.game.logic().getFrame(), messageTicks);
+	m_messageClientFrame = m_clientFrames;
 	if (m_config.game.canObserve())
 	{
 		const auto snapshot = m_config.game.presentedSnapshot();
@@ -537,6 +638,18 @@ void InGameHud::update(double seconds)
 	m_palantirRef->setLocalState(local);
 	updateHud6(local.contextObject, local.faction, seconds); // lane HUD-6: the side bar's gate, the radial bubbles, the help box (InGameHudHud6.cpp)
 	m_palantirRef->sync(*m_bar);
+	{
+		// lane CAMPUI-1: the objectives flag (RW 0x6D7647) and the scripts' button flashes (RW 0x6D72DF)
+		std::vector<bool> shown;
+		for (const MissionObjective &o : m_config.game.logic().missionObjectives().objectives())
+		{
+			shown.push_back(o.shown);
+		}
+		const int mode = m_config.game.logic().economy().context().gameMode;
+		m_palantirRef->syncObjectiveFlash(shown, mode != EconomyContext::MODE_SKIRMISH && mode != EconomyContext::MODE_LAN && mode != EconomyContext::MODE_INTERNET,
+			m_objectivesScreenOpen);
+		m_palantirRef->tickFlashTimers(seconds);
+	}
 	syncSpellBook();
 	updateRadiusCursor();
 	updateResourceFeedback(); // lane OWNERFIX-2
@@ -567,7 +680,9 @@ void InGameHud::update(double seconds)
 	const std::shared_ptr<const LogicSnapshot> iconSnap = m_config.game.presentedSnapshot();
 	m_iconSettings.snapshot = iconSnap.get();
 	m_iconSettings.shroudDrawn = iconSnap && iconSnap->shroud && iconSnap->shroud->displayed;
+	presentBeacons(); // lane CHAT-1
 	m_iconUI.build(m_config.game.logic(), m_config.game.drawables(), m_config.view, m_iconSettings, selectedSet, m_input->ui().mouseoverObject(), m_iconOps);
+	updateFloatingText(m_config.view, m_iconSettings.shroudDrawn);
 	m_iconSettings.snapshot = nullptr; // the frame's snapshot goes with this frame
 	part(m_updateParts.icons);
 	// lane UI-4: the selection markers (RW 0x67580E / 0x86F4EE / 0x4B2A9B, GameClient/SelectionDecals.h) on the client clock
@@ -690,6 +805,93 @@ void InGameHud::send(const std::vector<GameMessage> &msgs)
 // be cast at the terrain point under the pointer (InGameSpellBookModel::targetValid, RW 0x6A4260), else invalid (0xAF); then handleRadiusCursor /
 // RadiusDecal::update move it there and throb it on the client clock. Over a window no hint comes (the translators do not see the pointer): the decal
 // keeps its place and colour. The command's end clears the decal and gives the pointer back (setGUICommand RW 0x69B398: Arrow, then setRadiusCursorNone).
+// the money texts (GameClient/FloatingText.h): every income payment logged since the last frame becomes a GUI:AddCash text in its owner's colour (alpha 0xE6),
+// the list steps once per client frame, and its visible records join the icon ops (drawn with the drawables' decorations)
+void InGameHud::updateFloatingText(const TacticalView &view, bool shroudDrawn)
+{
+	GameLogic &logic = m_config.game.logic();
+	const Economy &economy = logic.economy();
+	if (m_incomeLogic != &logic)
+	{
+		// a new game (or a loaded one): what its log already holds is not shown
+		m_incomeLogic = &logic;
+		m_incomeSeen = economy.incomePayments();
+		m_floatingText.clear();
+	}
+	const unsigned long long paid = economy.incomePayments();
+	if (paid > m_incomeSeen)
+	{
+		const auto &log = economy.incomeLog();
+		const size_t fresh = (size_t)std::min<unsigned long long>(paid - m_incomeSeen, log.size());
+		const std::u16string format = fetchOrMissing(m_config.gameText, "GUI:AddCash");
+		for (size_t i = log.size() - fresh; i < log.size(); ++i)
+		{
+			const Economy::IncomeEvent &e = log[i];
+			const Player *owner = m_config.game.players().getNthPlayer(e.playerIndex);
+			if (!owner || e.amount <= 0)
+			{
+				continue;
+			}
+			Coord3D pos = e.textPos;
+			// BFME2 AutoDepositUpdateUpdate.cpp: "add a little z to make it show up above the unit".
+			// Presentation offset: the income log keeps the simulation position unchanged.
+			if (e.textAnchor == Economy::IncomeEvent::TEXT_RAISED_10) pos.z += 10.0f;
+			if (e.textAnchor == Economy::IncomeEvent::TEXT_GEOMETRY_TOP)
+			{
+				// TerrainResourceBehavior: the text sits on the geometry's top (getMaxHeightAbovePosition); a template whose geometry does not parse
+				// shows no text and is reported (no default height)
+				auto it = m_floatingTextHeights.find(e.templateName);
+				if (it == m_floatingTextHeights.end())
+				{
+					const ThingTemplate *tt = logic.things().findTemplate(e.templateName);
+					try
+					{
+						if (!tt)
+						{
+							throw std::logic_error("the template is not loaded");
+						}
+						it = m_floatingTextHeights.emplace(e.templateName, ObjectGeometry::maxHeightAbovePosition(ObjectGeometry::shapesOf(*tt))).first;
+					}
+					catch (const std::exception &ex)
+					{
+						const std::string error = e.templateName + " geometry: " + ex.what();
+						if (std::find(m_floatingTextErrors.begin(), m_floatingTextErrors.end(), error) == m_floatingTextErrors.end())
+						{
+							m_floatingTextErrors.push_back(error);
+						}
+						continue;
+					}
+				}
+				pos.z += it->second;
+			}
+			const std::string n = std::to_string(e.amount);
+			const std::string text = loadScreenU16ToUtf8(UnitHelpSource::format(format, { std::u16string(n.begin(), n.end()) }));
+			m_floatingText.add(text, pos, (owner->getPlayerColor() & 0xFFFFFFu) | 0xE6000000u, m_clientFrames);
+		}
+		m_incomeSeen = paid;
+	}
+	m_floatingText.update(m_clientFrames);
+	const int observed = m_config.game.observedPlayer();
+	const Player *viewer = observed >= 0 ? m_config.game.players().getNthPlayer(observed) : m_config.game.players().getLocalPlayer();
+	const ShroudManager *shroud = logic.shroud();
+	m_floatingText.ops(
+		[&view](const Coord3D &p, float &x, float &y) {
+			ICoord2D s;
+			if (!view.worldToScreen(p, s))
+			{
+				return false;
+			}
+			x = (float)s.x;
+			y = (float)s.y;
+			return true;
+		},
+		[&](const Coord3D &p) {
+			// drawn only on a cell CLEAR for the viewing player (InGameUI_drawFloatingText.cpp), while the shroud is drawn
+			return !shroudDrawn || !shroud || !viewer || shroud->getStatusAt(viewer->getPlayerIndex(), p.x, p.y) == CELLSHROUD_CLEAR;
+		},
+		m_iconOps);
+}
+
 void InGameHud::updateResourceFeedback()
 {
 	// lane OWNERFIX-2 (GameClient/TerrainResourceFeedback.h): the placement feedback while a building waits for its site (InGameUI::handleBuildPlacements),
@@ -712,11 +914,23 @@ void InGameHud::updateResourceFeedback()
 
 void InGameHud::updateRadiusCursor()
 {
-	const InGameSpellBookModel::Button *b = m_spellBar.targeting() ? m_spellBar.targetButton() : nullptr;
+	GameLogic &logic = m_config.game.logic();
+	const InGameSpellBookModel::Button *spell = m_spellBar.targeting() ? m_spellBar.targetButton() : nullptr;
+	const CommandButton *command = spell ? spell->button : m_input->ui().getGUICommand();
+	// RW 0x6A3B77 handles the pending command's RadiusCursorType for both
+	// spell-book and selected-object powers. Hero powers enter GUI command
+	// mode through ControlBar::processCommandUI, rather than m_spellBar.
+	if (!spell && command && (command->m_command != GUI_COMMAND_SPECIAL_POWER || !command->hasOption(COMMAND_OPTION_NEED_TARGET_POS)))
+	{
+		command = nullptr;
+	}
+	const SpecialPowerTemplate *power = spell ? spell->power :
+		(command && TheSpecialPowerStore ? TheSpecialPowerStore->findSpecialPowerTemplate(command->m_specialPowerName) : nullptr);
+	Object *source = logic.findObjectByID(spell ? m_spellBar.book() : m_input->ui().firstSelected());
 	Player *local = m_config.game.players().getLocalPlayer();
-	// lane OWNERFIX-1: setRadiusCursorNone on the input's disable edge (RW 0x69B5ED), and no hint creates one while it is off (the translators that make the
-	// hints never see the pointer); the aim itself stays pending and shows again with the input
-	if (!b || !b->power || !local || !m_input->ui().getInputEnabled())
+	// OWNERFIX-1: disabling input clears the decal immediately; a pending
+	// command can show it again when input is enabled.
+	if (!command || !power || !source || !local || !m_input->ui().getInputEnabled())
 	{
 		if (m_radiusCursor.active() || m_targetingCursor)
 		{
@@ -726,27 +940,34 @@ void InGameHud::updateRadiusCursor()
 		}
 		return;
 	}
-	GameLogic &logic = m_config.game.logic();
+	auto verdictAt = [&](const Coord3D &where) {
+		if (spell) return m_spellBar.targetVerdict(logic, where);
+		bool unported = false;
+		if (ActionManager::canDoSpecialPowerAtLocation(*source, where, power, command->m_options, &unported))
+		{
+			return InGameSpellBookModel::Target::VALID;
+		}
+		return unported ? InGameSpellBookModel::Target::UNPORTED : InGameSpellBookModel::Target::INVALID;
+	};
 	m_targetingCursor = true;
-	if (b->radiusCursor.empty())
+	if (command->m_radiusCursor.empty())
 	{
-		// RW 0x6A3D2A .. 0x6A3D60: no RadiusCursorType: setRadiusCursorNone and the button's CursorName (valid) / InvalidCursorName (invalid) as the pointer,
-		// cursor 4 (Target) when TheMouse has no cursor of that name (RW 0x5EE9CA answers -1). INFERENCE (S-4640): an empty name stands for -1; a name
-		// Mouse.ini lacks is handed on (the device draws no pointer for it)
+		// RW 0x6A3D2A .. 0x6A3D60: no radius template, use the command's
+		// valid/invalid pointer. The existing empty-name inference is S-4640.
 		m_radiusCursor.clear();
 		if (m_pointerSeen && !isOverGui(m_pointerX, m_pointerY))
 		{
 			Coord3D w;
 			if (m_config.view.screenToTerrain(ICoord2D{ m_pointerX, m_pointerY }, logic, w))
 			{
-				const std::string &name = m_spellBar.targetValid(logic, w) ? b->button->m_cursorName : b->button->m_invalidCursorName;
+				const std::string &name = verdictAt(w) != InGameSpellBookModel::Target::INVALID ? command->m_cursorName : command->m_invalidCursorName;
 				m_input->ui().hintCursor(name.empty() ? std::string(MouseCursorName::Target) : name);
 			}
 		}
 		return;
 	}
 	Coord3D at = m_radiusCursor.decal().position;
-	bool valid = m_radiusCursor.active() ? m_radiusCursor.decal().valid : true; // setGUICommand's first call (RW 0x69B3B3) passes valid
+	bool valid = m_radiusCursor.active() ? m_radiusCursor.decal().valid : true;
 	bool hinted = false;
 	if (m_pointerSeen && !isOverGui(m_pointerX, m_pointerY))
 	{
@@ -754,24 +975,24 @@ void InGameHud::updateRadiusCursor()
 		if (m_config.view.screenToTerrain(ICoord2D{ m_pointerX, m_pointerY }, logic, w))
 		{
 			at = w;
-			const InGameSpellBookModel::Target verdict = m_spellBar.targetVerdict(logic, w);
+			const auto verdict = verdictAt(w);
 			valid = verdict != InGameSpellBookModel::Target::INVALID;
 			hinted = true;
-			if (verdict == InGameSpellBookModel::Target::UNPORTED && m_cursorStopPowers.insert(b->power->getName()).second)
+			if (verdict == InGameSpellBookModel::Target::UNPORTED && m_cursorStopPowers.insert(power->getName()).second)
 			{
-				m_cursorStops.push_back("[S-4641] the location test of " + b->power->getName()
+				m_cursorStops.push_back("[S-4641] the location test of " + power->getName()
 					+ " is not ported (S-1874): its radius cursor shows valid where the generic tests pass and the click casts there");
 			}
 		}
 	}
-	// RW 0x6A077A: the radius's object is the local player's spell book (command type 0x20, RW 0x6AD0D9), the player its controller (RW 0x68B678)
-	Object *book = logic.findObjectByID(m_spellBar.book());
-	Player *controller = book ? book->getControllingPlayer() : nullptr;
-	m_radiusCursor.set(b->radiusCursor, m_radiusTemplates.find(b->radiusCursor), b->power->getFinalOverride()->getRadiusCursorRadius(), controller != nullptr,
+	// RW 0x6A077A: the radius belongs to the command's source object: the
+	// spell book or the selected unit, and uses that object's controller.
+	Player *controller = source->getControllingPlayer();
+	m_radiusCursor.set(command->m_radiusCursor, m_radiusTemplates.find(command->m_radiusCursor), power->getFinalOverride()->getRadiusCursorRadius(), controller != nullptr,
 		controller == local, controller ? controller->getPlayerColor() : 0u, valid);
 	if (hinted)
 	{
-		m_input->ui().hintCursor(MouseCursorName::None); // RW 0x6A3D65: cursor 0 through RW 0x69BD53
+		m_input->ui().hintCursor(MouseCursorName::None);
 	}
 	m_radiusCursor.update(at, m_clientFrames, m_decalSettings.drawIconUI);
 }
@@ -1054,6 +1275,24 @@ bool InGameHud::radarClick(HudInput::Button button, int x, int y, int timeMs)
 	return true;
 }
 
+bool InGameHud::radarPoint(int x, int y, bool &hasPoint, float &wx, float &wy)
+{
+	hasPoint = false;
+	float sq[4];
+	if (!radarSquare(sq) || (float)x < sq[0] || (float)x > sq[2] || (float)y < sq[1] || (float)y > sq[3])
+	{
+		return false;
+	}
+	if (!m_radar->ready() || !m_radar->drawn(false)) // radarClick's gates: a radar that shows nothing maps no point
+	{
+		return true;
+	}
+	const int size = 128;
+	const float kx = (float)size / (sq[2] - sq[0]), ky = (float)size / (sq[3] - sq[1]);
+	hasPoint = m_radar->click(((float)x - sq[0]) * kx, ((float)y - sq[1]) * ky, size, wx, wy);
+	return true;
+}
+
 bool InGameHud::commandContentAt(int x, int y)
 {
 	AptStageMapping m;
@@ -1153,7 +1392,10 @@ void InGameHud::mouseButton(HudInput::Button button, bool down, int x, int y, in
 		m_input->mouseButton(button, down, x, y, keyState, timeMs, doubleClick, true);
 		return;
 	}
-	// lane SPELL-2: a spell book power waiting for its target takes the next click on the ground (left: cast there, right: cancel)
+	// lane SPELL-2: a spell book power waiting for its target takes the next left click on the ground (cast there). lane SPELLRC-1: the right button is not
+	// taken here: its press goes to the world like any other (a right drag scrolls the camera with the power still waiting, RotWK's LookAt translator), and a
+	// right click (not dragged) cancels the power in the GUI command translator (RW 0x83D7AD, InGameHud's hook) without ordering a move. Before, the right
+	// press cancelled the power and was swallowed: no RMB scroll while a spell book power was aimed (the owner, 2026-10-22)
 	if (m_spellBar.targeting() && down && !over && !m_store && m_input->ui().getInputEnabled()) // lane OWNERFIX-1: the aim waits while a script has the input off
 	{
 		if (button == HudInput::Button::Left)
@@ -1172,11 +1414,6 @@ void InGameHud::mouseButton(HudInput::Button button, bool down, int x, int y, in
 				m_spellBar.clickWorld(world, local->getPlayerIndex(), out);
 				send(out);
 			}
-			return;
-		}
-		if (button == HudInput::Button::Right)
-		{
-			m_spellBar.cancel();
 			return;
 		}
 	}
@@ -1225,6 +1462,7 @@ void InGameHud::key(int keyCode, int keyState, char32_t character)
 std::vector<std::string> InGameHud::stops() const
 {
 	std::vector<std::string> out = m_input->stops();
+	out.push_back("[S-6101] player message log: BFME2 recovered six-entry message, positioning and fade routines ported; independent RotWK display-routine verification remains outstanding");
 	out.push_back(DrawablePick::stopLine()); // lane QA-1: the HUD's pick is the drawn-model ray test, not S-284's geometry volumes
 	out.push_back("[S-1201] context commands (lane QA-1): a click with a builder on our rising structure is MSG_RESUME_CONSTRUCTION, on our damaged finished structure "
 				  "MSG_DO_REPAIR (CommandTranslator::evaluateContextCommand), by ZH ActionManager::canResumeConstructionOf / canRepairObject (a DOZER of the same player); "
@@ -1233,9 +1471,9 @@ std::vector<std::string> InGameHud::stops() const
 				  "screen, then map; the donor ZH selectUnitsMatchingCurrentSelection supplies the bodies); H (VIEW_HOME_BASE) looks at the local player's best structure by RW 0x81FD5B -> "
 				  "0x6AC722 (a command centre, the lowest id, else the costliest); not identified: the status bits 0 and 3 of + 0x458 the walk skips (bit 0 taken as destroyed) and "
 				  "the look-at argument");
-	out.push_back("[S-4640] radius cursor (lane SPELL-4): InGameUI's RadiusCursorTemplate decal of a targeted spell book power (RW 0x6A077A / 0x732DE7 / "
+	out.push_back("[S-4640] radius cursor (lane SPELL-4): InGameUI's RadiusCursorTemplate decal of a targeted spell-book or selected-unit ground power (RW 0x6A077A / 0x732DE7 / "
 				  "0x732926 / 0x73232B); handleRadiusCursor's radar pixel and shroud second pass are not ported (the view's terrain point), the spiral branch and "
-				  "the radius > 110 flag are not used, the decal is a Godot Decal on the terrain layer (S-2522)");
+				  "the radius > 110 flag are not used, the cursor texture is composited by the terrain shader alongside selection decals (S-2522)");
 	out.push_back(TerrainResourceFeedback::stopLine()); // lane OWNERFIX-2
 	out.push_back("[S-5032] placement ghost decal shadows (lane OWNERFIX-2): the ghost draws its model state's SHADOW_ALPHA_DECAL / SHADOW_ADDITIVE_DECAL "
 				  "(a well's / statue's area of effect) as a terrain decal at the texture's alpha; the shadow opacity fade and every other drawable's decal "
@@ -1281,4 +1519,154 @@ std::vector<std::string> InGameHud::stops() const
 	}
 	hud6Stops(out); // lane HUD-6
 	return out;
+}
+
+// ---- lane CHAT-1: the multiplayer beacon's presentation ----------------------------------------------------------------------------------------------
+
+void InGameHud::showMessageLabel(const std::string &label, const std::u16string *argument)
+{
+	std::u16string text;
+	if (!m_config.gameText || !m_config.gameText->fetch(label, text))
+	{
+		m_missingMessageLabels.push_back(label);
+		return;
+	}
+	m_messageLines.addMessageText(argument ? InGameChat::formatLine(text, *argument) : text, nullptr, m_messageFrame);
+	++m_guiMessagesShown;
+}
+
+void InGameHud::presentBeacons()
+{
+	// RW 0x77C634's client half, per notice, by the local player's relationship to the placer (the object itself is the logic's, the same on every peer):
+	//   * FAILED (no beacon template, or the placer is defeated): "GUI:BeaconPlacementFailed" and MiscAudio BeaconPlacementFailed on every client;
+	//   * TOO_MANY: the same text "GUI:TooManyBeacons" and sound for the placer only;
+	//   * PLACED, the local player allied to the placer (getRelationship of the local player's team, ALLIES) or an observer: InGameUI vslot 0x4C of
+	//     "GUI:BeaconPlaced" formatted with the placer's display name (+ 0x38), MiscAudio BeaconPlacedSound (a "ui player" event: the placer's own client
+	//     plays it, INFERENCE from ZH's shouldPlayLocally), a radar event of type 0 for 4 s at the beacon, the EVA BeaconDetected (RW 0x5DD9EE) when the
+	//     local player is an ally and not the placer; otherwise the beacon is hidden on this screen (BeaconClientUpdate::hideBeacon RW 0x8CDC11).
+	GameLogic &logic = m_config.game.logic();
+	const Player *local = m_config.game.players().getLocalPlayer();
+	for (const GameLogic::BeaconNotice &n : logic.beaconNotices())
+	{
+		if (n.seq <= m_beaconNoticeSeen)
+		{
+			continue;
+		}
+		m_beaconNoticeSeen = n.seq;
+		const Player *placer = m_config.game.players().getNthPlayer(n.playerIndex);
+		if (!placer || !local)
+		{
+			continue;
+		}
+		switch (n.kind)
+		{
+		case GameLogic::BeaconNotice::FAILED:
+			++m_beaconStats.failed;
+			showMessageLabel("GUI:BeaconPlacementFailed", nullptr);
+			m_input->ui().requestMiscSound("BeaconPlacementFailed");
+			break;
+		case GameLogic::BeaconNotice::TOO_MANY:
+			if (placer == local)
+			{
+				++m_beaconStats.tooMany;
+				showMessageLabel("GUI:TooManyBeacons", nullptr);
+				m_input->ui().requestMiscSound("BeaconPlacementFailed");
+			}
+			break;
+		case GameLogic::BeaconNotice::PLACED:
+		{
+			++m_beaconStats.placed;
+			m_beaconObjects.insert(n.object);
+			if (placer->getRelationship(local->getDefaultTeam()) == ALLIES || local->isObserver())
+			{
+				const std::string &utf8 = placer->getPlayerDisplayName();
+				std::u16string name;
+				for (std::size_t i = 0; i < utf8.size();)
+				{
+					unsigned char c = (unsigned char)utf8[i];
+					char32_t cp = c;
+					int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+					cp = extra == 3 ? (c & 0x07) : extra == 2 ? (c & 0x0F) : extra == 1 ? (c & 0x1F) : c;
+					for (int k = 1; k <= extra && i + (size_t)k < utf8.size(); ++k)
+					{
+						cp = (cp << 6) | ((unsigned char)utf8[i + (size_t)k] & 0x3F);
+					}
+					i += (size_t)extra + 1;
+					if (cp > 0xFFFF)
+					{
+						name.push_back((char16_t)(0xD800 + ((cp - 0x10000) >> 10)));
+						name.push_back((char16_t)(0xDC00 + ((cp - 0x10000) & 0x3FF)));
+					}
+					else
+					{
+						name.push_back((char16_t)cp);
+					}
+				}
+				showMessageLabel("GUI:BeaconPlaced", &name);
+				if (placer == local)
+				{
+					m_input->ui().requestMiscSound("BeaconPlacedSound");
+				}
+				if (m_radar)
+				{
+					m_radar->createEvent(n.position, 0, 4.0f); // RW 0x6D98FA: type 0, 4 s
+				}
+				if (placer != local && local->getRelationship(placer->getDefaultTeam()) == ALLIES)
+				{
+					AudioApi::reportEva("BeaconDetected", &n.position); // RW 0x5DD9EE (index 1)
+				}
+			}
+			else
+			{
+				m_input->ui().setClientHidden(n.object, true);
+				++m_beaconStats.hidden;
+			}
+			break;
+		}
+		}
+	}
+	// BeaconClientUpdate (RW 0x8CDCE9) once per logic frame: a shown beacon's minimap pulse, a hidden one stays hidden (the drawable may come later)
+	const std::uint32_t frame = logic.getFrame();
+	if (frame == m_beaconPulseFrame || m_beaconObjects.empty())
+	{
+		return;
+	}
+	m_beaconPulseFrame = frame;
+	for (auto it = m_beaconObjects.begin(); it != m_beaconObjects.end();)
+	{
+		const ObjectID id = *it;
+		if (!logic.findObjectByID(id))
+		{
+			m_input->ui().setClientHidden(id, false);
+			it = m_beaconObjects.erase(it);
+			continue;
+		}
+		++it;
+		Drawable *d = m_config.game.drawables().findByObject(id);
+		if (!d)
+		{
+			continue;
+		}
+		for (const std::unique_ptr<DrawableModule> &m : d->clientModules())
+		{
+			BeaconClientUpdate *b = dynamic_cast<BeaconClientUpdate *>(m.get());
+			if (!b)
+			{
+				continue;
+			}
+			if (m_input->ui().isClientHidden(id))
+			{
+				if (!b->hidden())
+				{
+					b->hideBeacon();
+					d->setClientHidden(true);
+				}
+			}
+			else if (b->pulseDue(frame) && m_radar)
+			{
+				m_radar->createEvent(*d->getPosition(), 6, b->pulseSeconds()); // type 6: PingBeacon
+				++m_beaconStats.pulses;
+			}
+		}
+	}
 }

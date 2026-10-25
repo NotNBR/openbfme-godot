@@ -177,6 +177,10 @@ enum PathfindKind
 	PK_SCALEABLE_WALL,            // SCALEABLE_WALL (201)
 	PK_BASE_SITE,                 // BASE_SITE (120)
 	PK_WALL_UPGRADE,              // WALL_UPGRADE (150), lane PHYS-1: RW 0x6F37B3's wall branch
+	PK_ATTACK_NEEDS_LINE_OF_SIGHT, // ATTACK_NEEDS_LINE_OF_SIGHT (59), lane ATTACKPATH-1: the attack view test RW 0x6F4557
+	PK_CAN_SHOOT_OVER_WALLS,       // CAN_SHOOT_OVER_WALLS (214), lane ATTACKPATH-1
+	PK_WALL_SEGMENT,               // WALL_SEGMENT (189), lane ATTACKPATH-1: the view test's wall obstacles (RW 0x6F2D31)
+	PK_WALL_GATE,                  // WALL_GATE (203), lane ATTACKPATH-1
 	PK_COUNT
 };
 
@@ -242,6 +246,9 @@ public:
 	virtual bool isStationary() const { return true; }
 	// object status bits the footprint code reads (RW status index 0x58 and 0x4D; names INFERRED: S-164)
 	virtual bool footprintSkippedByStatus() const { return false; }
+	// the object status CAN_NOT_WALK_ON (RW index 0x4D, the binary's status name table): RW 0x936C8A .. 0x936C95 clears a WALK_ON_TOP_OF_WALL template's
+	// wall flag with it (review of #63)
+	virtual bool cannotWalkOn() const { return false; }
 	// RW checkForMovement (0x6EBAA0), enemy branch: `other` (or its container) is the unit's current attack / approach target, so a
 	// parked enemy of that kind does not block it (the AI state machine's target RW 0x8DBACE and 0x668303; S-164)
 	virtual bool ignoresAsTarget(const PathfindObject &other) const { (void)other; return false; }
@@ -257,6 +264,11 @@ public:
 	virtual bool hordeFill(int &count, int &slots) const { (void)count; (void)slots; return false; }
 	// lane MOVE-3: Object + 0x458 bit 0 (effectively dead): RW 0x8E24D3 leaves such an object's goal alone
 	virtual bool isEffectivelyDead() const { return false; }
+	// lane ATTACKPATH-1: RW 0x6E82C8 (BFME2 decomp Rva002E6E9F.cpp): the first behaviour module's SlavedUpdate interface (behaviour interface slot 0x68), its
+	// slot 0 = the slaver's id; invalid without one
+	virtual PathfindObjectID getSlaverID() const { return PATHFIND_INVALID_ID; }
+	// lane ATTACKPATH-1: RW 0x70C55D -> 0x70C50C(0) Thing::isSignificantlyAboveTerrain (BFME2 decomp ThingIsSignificantlyAboveTerrain.cpp, tier A)
+	virtual bool isSignificantlyAboveTerrain() const { return false; }
 	// lane WALL-1: the wall top and ramp surfaces of a wall piece (the draw module's WallBoundsMesh / RampMesh1 / RampMesh2 at the object's transform), null
 	// for every other object (RW 0x936B7D -> Pathfinder::ClassifyWall, BFME2 0x92F63F, asks the object's drawable)
 	virtual const PathfindWallGeometry *getWallGeometry() const { return nullptr; }

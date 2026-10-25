@@ -246,6 +246,7 @@ void AptGadgetLayer::destroyOwnerWindow(GameWindow *window)
 				++o;
 			}
 		}
+		m_gwm.winReleaseOwned(window); // lane MENUFIX-2: gadgets that outlive their screen no longer point at the freed owner
 		m_gwm.winDestroy(window);
 		m_gwm.processDestroyList();
 	}
@@ -304,6 +305,11 @@ void AptGadgetLayer::update(int elapsedMs)
 	}
 	m_timeMs += (std::uint32_t)elapsedMs;
 	m_gwm.setTimeMs(m_timeMs);
+	syncPlacements();
+}
+
+void AptGadgetLayer::syncPlacements()
+{
 	for (const WindowManager::ComponentRecord &rec : m_windows.components())
 	{
 		GameWindow *window = rec.window.get();

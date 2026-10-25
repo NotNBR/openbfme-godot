@@ -95,6 +95,20 @@ struct AIBuildRequest
 	int siteIndex = 0;             ///< farm + 0x70 the pool index
 	bool requeueOnProducerDeath = true; ///< + 0x20 (1 from the base ctor RW 0x961BA4): a dozer's death sends the unfinished request back to the queue (RW 0x8F0C03)
 	bool reserveMoney = false;     ///< + 0x21 set by the rebuild after a loss (RW 0x90D16A); the money reserve that reads it is not ported (S-413)
+	// lane AI5 (AIUpgrade.h): an upgrade request (AIUpgrade, base vtable RW 0xC88128; the unit upgrader's RW 0xC8EC18, ctor RW 0x9EDD1C; the upgrade builder's
+	// RW 0xC880E0, ctor RW 0x99F4D6) or an expansion request (AIExpansionScience, RW 0xC8EAF8, ctor RW 0x9ED687). Both keep their object in `producer` (+ 8),
+	// the upgrade's or the template's name in `templateName` (+ 0xC); an expansion keeps the plot's position in `offset` (+ 0x30) and angle in `angle` (+ 0x3C)
+	bool upgrade = false;          ///< an AIUpgrade
+	bool expansion = false;        ///< an AIExpansionScience
+	std::string buttonName;        ///< upgrade + 0x30 / expansion + 0x40: the command button (by name: TheCommandStore's final override, as the set holds it)
+	int cost = 0;                  ///< upgrade + 0x2C: the upgrade's calcCostToBuild(owner, object) at the registration
+	bool upgrading = false;        ///< upgrade + 0x34: handed to the queue by its builder
+	bool expansionDone = false;    ///< expansion + 0x2C: started by RW 0x99FAEF (cleared when its structure leaves, RW 0x99FCAE)
+	int heuristicType = -1;        ///< upgrade + 0x3C: the upgrade's SkirmishAIHeuristic (RW 0x9EDDAE / 0x99F52F; -1 none)
+	int heuristicResult = 0;       ///< upgrade + 0x40: the last evaluation (RW 0x9EDD3D)
+	std::uint32_t heuristicNextFrame = 0xFFFFFFFFu; ///< the FORTRESS heuristic's + 8 (RW 0x9ED351: -1)
+	int heuristicFortressResult = 3;                ///< the FORTRESS heuristic's + 0xC (RW 0x9ED351: 3)
+	std::vector<std::string> heuristicUnlocks;      ///< the FACTORY_UNITUNLOCK heuristic's templates (+ 8, RW 0x9ED4D2), by name
 
 	bool finished() const { return state == 2 || state == 3; } // RW 0x8EDA5E
 	float bestPriority() const;                                 // RW 0x961BB9: max(effective, base)
@@ -163,6 +177,28 @@ struct AIDozerManagerState
 	unsigned long long queued = 0, refused = 0; ///< dozers queued at a factory by RW 0x9A19E0; queue calls the factory refused (report)
 };
 
+// lane AI5: AIUnitUpgrader (the listener at AIPlayer + 0xFC with its sub system at + 0x108, ctor RW 0x9A13DD; AIUpgrade.h)
+struct AIUnitUpgraderState
+{
+	bool listening = false;  ///< added to the player info record's listeners by AIPlayer::init (RW 0x9A1340)
+	bool disabled = false;   ///< + 0x10C (DisableUnitUpgrading)
+	std::vector<std::shared_ptr<AIBuildRequest>> waiting;   ///< sub system + 0x8 (listener + 0x14)
+	std::vector<std::shared_ptr<AIBuildRequest>> upgrading; ///< sub system + 0x14 (listener + 0x20)
+	unsigned long long registered = 0, submitted = 0, declined = 0; ///< records made, handed to the queue, refused by ChanceForUnitsToUpgrade (report)
+};
+
+// lane AI5: AIUpgradeScienceBuilder (AIPlayer + 0x12C, ctor RW 0x99FB84: the listener with the sub system at + 0xC; AIUpgrade.h)
+struct AIUpgradeScienceBuilderState
+{
+	bool listening = false;  ///< added to the player info record's listeners by AIPlayer::init (RW 0x8EE74A)
+	bool disabled = false;   ///< + 0x10 (DisableScienceUpgrading)
+	std::vector<ObjectID> pendingStructures;                ///< + 0x18: structures under construction at their registration
+	std::vector<std::shared_ptr<AIBuildRequest>> upgrades;  ///< + 0x24
+	std::vector<std::shared_ptr<AIBuildRequest>> expansions; ///< + 0x30
+	std::uint32_t lastExpansionFrame = 0;                   ///< + 0x3C (0 from the ctor)
+	unsigned long long registered = 0, upgradesSubmitted = 0, expansionsSubmitted = 0; ///< report
+};
+
 // the base builder (+ 0x4), the requests (+ 0x130 / + 0x13C) and the dozer manager's free list (+ 0x140) of one AI
 struct AIBuildState
 {
@@ -176,6 +212,8 @@ struct AIBuildState
 	AIDozerManagerState dozerManager;   ///< lane AI-2: the rest of the dozer manager (+ 0x140)
 	AIUnitBuilderState units;           ///< step 3: the unit builder (+ 0x38)
 	AIEconomyState economy;             ///< step 5: the economy builder (+ 0xC0)
+	AIUnitUpgraderState unitUpgrader;   ///< lane AI5: + 0xFC / + 0x108
+	AIUpgradeScienceBuilderState scienceBuilder; ///< lane AI5: + 0x12C
 	int phase = 0;                      ///< AISkirmishPlayer + 0x16C
 	float phaseFraction = 0.0f;         ///< + 0x170
 	bool ringHero = false;              ///< AIPlayer + 0x154: the player had Upgrade_RingHero at the last check (0 from the ctor, RW 0x8F084E; lane DECOMP-3)
@@ -210,4 +248,9 @@ void onStructureBuilt(GameLogic &logic, AISkirmishPlayer &ai, const Object &buil
 void retailSortDozerFactories(std::vector<std::pair<float, Object *>> &entries);
 // the complete state of one request (the farm site pool is hashed by the manager)
 void crcRequest(const AIBuildRequest &r, StateHasher &h);
+// lane AI5 (S-413): the money reserve of the player info record (record + 0xC -> + 0x14): RW 0x99E766 (money + reserve) and RW 0x99E79A (an amount back to the money)
+int moneyPlusReserve(GameLogic &logic, const Player &player);
+// RW 0x8F0502: the money saver (the AIPlayer update's last call; exposed for tests)
+void saveMoney(GameLogic &logic, AISkirmishPlayer &ai, Player &player);
+void withdrawFromReserve(GameLogic &logic, Player &player, std::uint32_t amount);
 } // namespace AIBaseBuilder

@@ -5,6 +5,7 @@
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
 
+#include "Common/Upgrade.h"
 #include "GameLogic/Module/InvisibilityModules.h"
 #include "GameLogic/SnapshotXfer.h"
 #include "GameLogic/Module/SpecialAbilityModules.h"
@@ -29,6 +30,7 @@
 #include "GameLogic/Locomotor.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/ActiveBody.h"
+#include "GameLogic/Module/EmotionModules.h"
 #include "GameLogic/Module/StealthAbilityModules.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/Object/PartitionManager.h"
@@ -190,18 +192,6 @@ bool upgradesAllow(const UpgradeMaskType &have, const UpgradeMaskType &required,
 		}
 	}
 	return true;
-}
-
-float templateVisionRange(const Object &o)
-{
-	if (const FieldValue *v = o.getTemplate()->getFinalOverride()->findField("VisionRange"))
-	{
-		if (const float *f = std::get_if<float>(v))
-		{
-			return *f;
-		}
-	}
-	return 0.0f;
 }
 
 bool kindOfMaskAny(const KindOfMaskType &m)
@@ -394,7 +384,9 @@ UpdateSleepTime StealthDetectorUpdate::update()
 			return UPDATE_SLEEP_NONE;
 		}
 	}
-	float range = templateVisionRange(*obj); // RW 0x68E43B
+	// RW 0x8A64E4: the detector's vision range (Object RW 0x68E43B: + 0x1B0 with its VISION modifiers and height bonus; lane STEALTHFLY1, was the template's
+	// VisionRange alone)
+	float range = AIUpdateInterface::objectVisionRangeOf(*obj);
 	if (m_data->m_detectionRange > 0.0f)     // RW 0x8A64F2: comiss with 0.0
 	{
 		range = m_data->m_detectionRange;
@@ -404,9 +396,10 @@ UpdateSleepTime StealthDetectorUpdate::update()
 	const bool required = kindOfMaskAny(m_data->m_extraRequiredKindOf);
 	// RW 0x8A6500 .. 0x8A659B: ThePartitionManager->iterateObjectsInRange(position, range, distance type 0, ITER_FASTEST; a contain's rider out of the world, RW
 	// 0x68C18F, is not in the partition: a garrison's occupants are reached through detectOccupants only) through the chain in RW's order: "the
-	// detector sees it" (RW 0xC1D66C -> 0x68FA3D(o, range); INFERENCE S-1041: within the range, which the query's centre distance already enforces), the same
+	// detector sees it" (RW 0xC1D66C -> RW 0x6612AC: the detector's Object::canSee(o, range) RW 0x68FA3D is true; lane STEALTHFLY1), the same
 	// map status (RW 0xC0F374: always), the KindOf masks (RW 0x445139: every required bit when any, no forbidden bit) and the detector's relationship to it ENEMIES
 	// or NEUTRAL (RW 0xC11DC0, mask 3, flag 0)
+	PartitionFilterFn sees([&](Object &o) { return EmotionModules::canSeeObject(*obj, o, range); });
 	PartitionFilterFn kinds([&](Object &o) {
 		const KindOfMaskType &k = o.getKindOf();
 		for (size_t i = 0; i < k.size(); ++i)
@@ -423,7 +416,7 @@ UpdateSleepTime StealthDetectorUpdate::update()
 		return rel == ENEMIES || rel == NEUTRAL;
 	});
 	std::vector<Object *> hits;
-	for (const PartitionHit &hit : logic.partition().iterateObjectsInRange(*obj->getPosition(), range, FROM_CENTER_2D, { &kinds, &relationship }, ITER_FASTEST))
+	for (const PartitionHit &hit : logic.partition().iterateObjectsInRange(*obj->getPosition(), range, FROM_CENTER_2D, { &sees, &kinds, &relationship }, ITER_FASTEST))
 	{
 		hits.push_back(hit.object);
 	}
@@ -1114,12 +1107,14 @@ void StealthUpdate::crc(StateHasher &h) const
 	h.addBool(m_halfway);
 	h.addBool(m_disguising);
 	h.addBool(m_disguised);
-	for (std::uint32_t w : m_requiredUpgrades.words)
+	for (unsigned i = 0; i < UpgradeMaskType::activeWords(); ++i) // lane MODS-3: retail's 0x24 words unless the data has more upgrades
 	{
+		const std::uint32_t w = m_requiredUpgrades.words[i];
 		h.addU32(w);
 	}
-	for (std::uint32_t w : m_forbiddenUpgrades.words)
+	for (unsigned i = 0; i < UpgradeMaskType::activeWords(); ++i) // lane MODS-3: retail's 0x24 words unless the data has more upgrades
 	{
+		const std::uint32_t w = m_forbiddenUpgrades.words[i];
 		h.addU32(w);
 	}
 	h.addBool(m_active);
@@ -1164,8 +1159,7 @@ std::vector<std::string> InvisibilityModules::stopLines()
 {
 	std::vector<std::string> out = { "[S-1041] invisibility modules (lane STEALTH-1): InvisibilityUpdate (RW 0x8A7099) and StealthDetectorUpdate (RW 0x8A641A) run; the detector's (RW "
 		"0x8A659B), the broadcast (RW 0x8A711F) and DetectedByAnyoneRange (RW 0x77753F) queries run on ThePartitionManager (lanes MODULES-2 / STEALTH-2); not ported: "
-		"the detector's vision filter (RW 0xC1D66C -> 0x68FA3D) is the query's 2D centre distance, the detector's SpecialDisguiseUpdate reveal and client "
-		"pings; StealthUpdate (RW 0x7779E3 / 0x777310) runs with its One Ring mode (RW 0x776B50, MSG_ONE_RING RW 0x7729A6, CancelOneRingEffect) and disguise "
+		"the client pings; StealthUpdate (RW 0x7779E3 / 0x777310) runs with its One Ring mode (RW 0x776B50, MSG_ONE_RING RW 0x7729A6, CancelOneRingEffect) and disguise "
 		"(RW 0x776117 / 0x776F03, the transition RW 0x777587; lane STEALTH-2), the drawable taken as present for both, the disguise's drawable swap a client event; not "
 		"ported: the disguise's transition opacity and EVA events, the client opacity / notifications and garrison notice, a second StealthUpdate's reveal (RW 0x777A44); "
 		"TAKING_DAMAGE reads the last damaging hit, RevealDistanceFromTarget uses the AI's current victim; particle / audio / Eva names of these tables are kept "
@@ -1214,8 +1208,8 @@ void StealthUpdate::xfer(Xfer &x)
 	x.xferBool(&m_halfway);
 	x.xferBool(&m_disguising);
 	x.xferBool(&m_disguised);
-	SnapshotXfer::words(x, m_requiredUpgrades.words);
-	SnapshotXfer::words(x, m_forbiddenUpgrades.words);
+	xferUpgradeMask(x, m_requiredUpgrades, "an invisibility module's required upgrades"); // lane MODS-3: activeWords (retail's 0x24)
+	xferUpgradeMask(x, m_forbiddenUpgrades, "an invisibility module's forbidden upgrades");
 	if (x.isLoading()) // lane SAVE-4e (closed sets): only this game's upgrades
 	{
 		checkLoadedUpgradeMask(m_requiredUpgrades, "a stealth update's required upgrades");

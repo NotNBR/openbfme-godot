@@ -1,6 +1,7 @@
 // OpenBFME. GPL-3.0.
 // See GameLogic/Module/AreaScanModules.h for the target facts and the stop S-1023.
 
+#include "Common/ModEngineFeatures.h"
 #include "GameLogic/Module/AreaScanModules.h"
 #include "GameLogic/SnapshotXfer.h"
 
@@ -78,6 +79,20 @@ const FieldParse kLargeGroupParse[] = {
 	{ "AlliesOnly", INI::parseBool, nullptr, LG_OFF(m_alliesOnly) },
 	{ "FlagSubObjectNames", INI::parseAsciiStringVector, nullptr, LG_OFF(m_flagSubObjectNames) },
 	{ "AttributeModifier", INI::parseAsciiString, nullptr, LG_OFF(m_attributeModifier) },
+	{ nullptr, nullptr, nullptr, 0 }
+};
+
+// lane MODS-3: the rows Edain Unchained's game.dat adds to the table (0xEE706C; parseUpgradeMask RW 0x66F603, parseBool), only with its feature
+void parseLargeGroupUpgradeMask(INI *ini, void *, void *store, const void *)
+{
+	UpgradeCenter::parseUpgradeMask(ini, *static_cast<UpgradeMaskType *>(store), nullptr);
+}
+const FieldParse kLargeGroupEdainUnchainedParse[] = {
+	{ "CountLooseObjects", INI::parseBool, nullptr, LG_OFF(m_countLooseObjects) },
+	{ "TriggeredBy", parseLargeGroupUpgradeMask, nullptr, LG_OFF(m_triggeredBy) },
+	{ "ConflictsWith", parseLargeGroupUpgradeMask, nullptr, LG_OFF(m_conflictsWith) },
+	{ "RequiresAllTriggers", INI::parseBool, nullptr, LG_OFF(m_requiresAllTriggers) },
+	{ "RequiresAllConflictingTriggers", INI::parseBool, nullptr, LG_OFF(m_requiresAllConflictingTriggers) },
 	{ nullptr, nullptr, nullptr, 0 }
 };
 
@@ -167,6 +182,10 @@ void emitFX(GameLogic &logic, const char *site, const std::string &fx, Object &p
 void LargeGroupBonusUpdateModuleData::buildFieldParse(MultiIniFieldParse &p)
 {
 	p.add(kLargeGroupParse);
+	if (ModEngineFeatures::has(ModEngineFeature::EdainUnchainedLargeGroupBonus))
+	{
+		p.add(kLargeGroupEdainUnchainedParse);
+	}
 }
 
 LargeGroupBonusUpdate::LargeGroupBonusUpdate(Thing *thing, const LargeGroupBonusUpdateModuleData *data)
@@ -190,6 +209,35 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
 	const bool unit = (kInfantry >= 0 && obj->isKindOf((unsigned)kInfantry)) || (kCavalry >= 0 && obj->isKindOf((unsigned)kCavalry));
 	const bool wasActive = m_active;
 	const UnsignedInt now = logic.getFrame();
+	// lane MODS-3, edain-unchained.large-group-bonus: the upgrade gate (0xEE7175, before the rate check). A mask matches (0xEE71FB) when the object's
+	// upgrades (+0x28C) or else its controlling player's completed upgrades (+0x14C) pass testForAll (RequiresAll*) / testForAny. A failed gate clears
+	// active / reached, takes the bonus off (RW 0x68F259) and tests again next frame. Empty masks: retail.
+	if (ModEngineFeatures::has(ModEngineFeature::EdainUnchainedLargeGroupBonus) && (m_data->m_triggeredBy.any() || m_data->m_conflictsWith.any()))
+	{
+		const Player *controller = obj->getControllingPlayer();
+		auto matches = [&](const UpgradeMaskType &mask, bool all) {
+			if (all ? obj->getUpgradeMask().testForAll(mask) : obj->getUpgradeMask().testForAny(mask))
+			{
+				return true;
+			}
+			return controller && (all ? controller->getCompletedUpgradeMask().testForAll(mask) : controller->getCompletedUpgradeMask().testForAny(mask));
+		};
+		bool pass = !m_data->m_triggeredBy.any() || matches(m_data->m_triggeredBy, m_data->m_requiresAllTriggers);
+		if (pass && m_data->m_conflictsWith.any() && matches(m_data->m_conflictsWith, m_data->m_requiresAllConflictingTriggers))
+		{
+			pass = false;
+		}
+		if (!pass)
+		{
+			if (m_active)
+			{
+				m_active = false;
+				m_reached = false;
+				obj->removeAttributeModifier(m_data->m_attributeModifier);
+			}
+			return UPDATE_SLEEP(1);
+		}
+	}
 	if (unit || m_data->m_updateRate + m_lastScan < now)
 	{
 		m_lastScan = now;
@@ -203,7 +251,15 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
 			{
 				return false;
 			}
-			const unsigned n = hordeMembersAllowed(logic, o, m_data->m_hordeMemberFilter);
+			unsigned n = hordeMembersAllowed(logic, o, m_data->m_hordeMemberFilter);
+			// lane MODS-3, edain-unchained.large-group-bonus CountLooseObjects (0xEE7240 / 0xEE7275 / 0xEE72F5): with a valid HordeMemberFilter
+			// an object with no contain counts 1 when ObjectFilter::testTemplate (RW 0x763543) accepts its template for its player and the scanner's
+			if (n == 0 && m_data->m_countLooseObjects && ModEngineFeatures::has(ModEngineFeature::EdainUnchainedLargeGroupBonus) &&
+				ObjectFilterMatch::isValid(&m_data->m_hordeMemberFilter) && !o.getContain() &&
+				ObjectFilterMatch::allows(logic, m_data->m_hordeMemberFilter, o.getTemplate(), o.getControllingPlayer(), owner))
+			{
+				n = 1;
+			}
 			if (n > 0)
 			{
 				m_scanCounts.push_back(std::make_pair(&o, n));
@@ -226,6 +282,7 @@ UpdateSleepTime LargeGroupBonusUpdate::update()
 		{
 			const Object *hit = hits[i].object;
 			// RW 0x8939D8: horde slot 0x180
+			// (the filter recorded every accepted object's count in acceptance order, the loose objects' 1 included)
 			count += (i < m_scanCounts.size() && m_scanCounts[i].first == hit) ? m_scanCounts[i].second : hordeMembersAllowed(logic, *hits[i].object, m_data->m_hordeMemberFilter);
 		}
 		m_lastCount = count;

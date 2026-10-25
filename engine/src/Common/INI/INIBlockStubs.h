@@ -72,4 +72,7 @@ enum class StubExtent
 	Strict,
 	Lenient
 };
-void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &recorder, const std::vector<std::string> &skip, StubExtent mode = StubExtent::Strict);
+// `realParsers` false (lane STEALTHFLY1: a second pass over a file that only wants one block, the map.ini's AIData): Locomotor, FXList, FXParticleSystem,
+// Weapon, Armor and DamageFX are recorded like every other keyword instead of being parsed into their global stores
+void RegisterRecordingBlockStubs(INIBlockRegistry &registry, INIBlockRecorder &recorder, const std::vector<std::string> &skip, StubExtent mode = StubExtent::Strict,
+	bool realParsers = true);

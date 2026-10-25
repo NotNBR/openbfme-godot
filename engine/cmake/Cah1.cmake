@@ -4,6 +4,7 @@
 
 # client-only sources (excluded from the simulation audit in tools/sim/sim_policy.json: menus and files, never simulation state)
 set(OPENBFME_CAH1_SOURCES
+    src/GameClient/CreateAHeroStats.cpp
     src/GameClient/CreateAHeroHeroList.cpp
     src/GameClient/GUI/CreateAHero/AptMyHero.cpp
     src/GameClient/GUI/AptScreens/AptCreateAHero.cpp
@@ -15,6 +16,7 @@ set(OPENBFME_CAH1_GODOT_SOURCES
     src/GodotDevice/GodotGameWorldCah.cpp
 )
 set(OPENBFME_CAH1_TESTS
+    tests/test_cah_stats.cpp
     tests/test_cah1.cpp
     tests/test_cah2.cpp
 )

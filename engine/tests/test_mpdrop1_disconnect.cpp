@@ -599,17 +599,17 @@ TEST_CASE("mpdrop1 hostile: a forged vote or drop is refused by name and changes
 		CHECK(g.peers[0].hashes.at(common) == g.peers[1].hashes.at(common));
 		CHECK(g.peers[0].hashes.at(common) == g.peers[2].hashes.at(common));
 	}
-	// a vote out of range never decodes (NetPacket: "about slot 9")
+	// a vote out of range never decodes (NetPacket: "about slot 16")
 	NetCommandMsg v;
 	v.type = NETCOMMANDTYPE_DISCONNECTVOTE;
 	v.slot = 1;
 	v.targetSlot = 2;
 	std::vector<std::uint8_t> b = encode(v);
-	b[6] = 9;
+	b[6] = MAX_SLOTS;
 	NetCommandMsg out;
 	std::string error;
 	CHECK_FALSE(NetPacket::decodeCommand(b, out, &error));
-	CHECK(error.find("about slot 9") != std::string::npos);
+	CHECK(error.find("about slot " + std::to_string(MAX_SLOTS)) != std::string::npos);
 }
 
 

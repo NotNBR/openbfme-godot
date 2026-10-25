@@ -12,7 +12,9 @@
 #include "GameClient/GUI/WindowManager.h"
 #include "GameLogic/CreateAHeroSystem.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 namespace
 {
@@ -87,6 +89,7 @@ std::u16string AptMyHero::label(const std::string &tag) const
 void AptMyHero::edit(const CreateAHeroHero &hero, bool fresh)
 {
 	m_hero = hero;
+	statistics.counters.clear();
 	m_new = fresh;
 	rebuild();
 	if (fresh) // RW 0x9C0E89: + 0x150 (the class page's new hero)
@@ -484,7 +487,20 @@ bool AptMyHero::provide(const std::string &name, std::string &value) const
 	}
 	if (name == "MyHero::MaxAwards")
 	{
-		value = dec(0); // TheCreateAHeroSystem + 0x1E4: the award count (S-1403: the awards are not ported)
+		size_t maximum = 0;
+		for (const auto &c : m_system.classes()) for (const auto &sub : c.subClasses) maximum = std::max(maximum, sub.awards.size());
+		value = std::to_string(maximum);
+		return true;
+	}
+	if (name.rfind("MyHero::AwardState_", 0) == 0)
+	{
+		const std::string suffix = name.substr(19);
+		if (suffix.empty() || suffix.find_first_not_of("0123456789") != std::string::npos) return false;
+		const auto *sub = m_system.subClass(m_hero.classIndex, m_hero.subClassIndex);
+		const auto i = std::strtoul(suffix.c_str(), nullptr, 10);
+		value.clear(); // RW 0x9BF127: no award at this index answers empty
+		if (sub && i < sub->awards.size())
+			if (const auto *award = m_system.awardSystem.award(sub->awards[i])) value = award->earned(statistics.counters) ? "1" : "0";
 		return true;
 	}
 	if (name == "MyHero::IsSystemHero")

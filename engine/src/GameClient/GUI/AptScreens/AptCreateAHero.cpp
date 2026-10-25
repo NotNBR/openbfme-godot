@@ -15,6 +15,8 @@
 #include "GameClient/GUI/Shell/Shell.h"
 #include "GameClient/GUI/ShellServices.h"
 #include "GameLogic/CreateAHeroSystem.h"
+#include "Libraries/Source/Apt/Apt.h"
+#include "Libraries/Source/Apt/AptCharacterInst.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -492,14 +494,15 @@ const std::vector<std::string> &AptCreateAHero::stopLines()
 		"summarised; AppearanceRandom draws from the device's client random",
 		"[S-1402] Create-a-Hero message boxes (lane CAH-2: NamePrompt's Ok box RW 0x81A375 and the delete question RW 0x81A452(2) are ported): the box's "
 		"timeout and its state callbacks are not used",
-		"[S-1403] Create-a-Hero awards and statistics: Manager::OnSelectAward, the SavedHeroStats rows, MyHero::AwardState_<i> and MaxAwards (0) are "
-		"not ported (the award bling RW 0x8096B0 and the statistics file RW 0x80B339 are HERO-2's S-1226)",
+		"[S-1403] Create-a-Hero awards: statistics files, kill counters, award triggers and Manager presentation are implemented; "
+		"reward UpgradeAwards drawable bling and in-game award popup are not ported; match-result timing is inferred from EndGameView, "
+		"not yet verified against retail (RW 0x80B2AB); WotR result counters and PrimaryKey/SecondaryKey statistics remain unverified",
 		"[S-1404] Create-a-Hero powers page: the matrix's row order (RW 0x9C38EB's comparator not read: the command store's name order), the cell states "
 		"(RW 0x9C2xxx not read in full: selected, book full, level too low, prerequisite, palantir full), the icons (CreateAHeroUIIconImageName, else the "
 		"first ButtonImage), the row names, the labels without their hot-key marks, the wizard line and the matrix's first scroll position are inferred",
-		"[S-1405] Create-a-Hero screen: the hero portrait (OnTakePicture), OnPlayGame's test map, which page \"CreateAHero\" forwards to, the "
+		"[S-1405] Create-a-Hero screen: OnPlayGame's test map, the picture's date and time in US English (TAKE PICTURE, lane CAHPIC-1: RotWK uses the system locale), which page \"CreateAHero\" forwards to, the "
 		"SuppressCahPromo preference (kept for the session), the color picker's \"?<picker>Color\" externs (undefined), the 3D view's camera (ViewInfo, "
-		"RW 0x9BFE74: the ground point, angle, blend and field of view as retail; the eye height Floor * Zoom and the pitch's use inferred, lane CAH-2) and the name prompt (ShowNamePrompt: \"1\" while the entry is empty; the movie reads it when the page opens, so its text "
+		"RW 0x9BFE74: the ground point, angle, blend and field of view as retail; the mode-1 eye transform follows BFME2; RotWK named-camera mode and remaining device flags unverified, lane CAH-2) and the name prompt (ShowNamePrompt: \"1\" while the entry is empty; the movie reads it when the page opens, so its text "
 		"stays over a name typed later) are inferred or not ported",
 		"[S-1408] Create-a-Hero appearance (lane CAH-2 r2: ported): the record's three colours reach the drawable as kind 3 (RW 0x80AF0B -> 0x80959A -> "
 		"0x6727B0) and its model's house colour textures are recoloured texel by texel before filtering as RW 0x531C77 (mipmaps from the recoloured level); INFERENCE: the recoloured texel replaces the base where the house texture's alpha "
@@ -527,6 +530,7 @@ AptCreateAHero::AptCreateAHero(WindowManager &windows, Shell &shell, ShellEnviro
 		m_myHero->onChanged = [this]() {
 			bumpDisplay();
 			refreshTexts();
+			invoke("UpdateHeroBaseAttributes", {});
 		};
 		// RW 0x9C4951: the class page's hero of every (class, subclass)
 		const std::vector<CreateAHeroClass> &classes = m_env.createAHero->system->classes();
@@ -702,27 +706,100 @@ void AptCreateAHero::refreshTexts()
 	}
 	const int cost = m_myHero->buildCost();
 	windows().setAptText("APT:MyHeroCost", cost >= 0 ? std::to_string(cost) : std::string(" "));
-	setImage("Cah::Portrait", h.classIndex < classes.size() ? classes[h.classIndex].iconImage : std::string()); // INFERENCE (S-1405): the portrait file is not ported
+	// DONOR AptMyHero::rva005B0725: use the preview drawable's portrait;
+	// HPGandalf is the explicit default until that drawable supplies an image.
+	// The device returns the applied model-state portrait after each revision.
+	if (!windows().aptImage("Cah::Portrait"))
+	{
+		setImage("Cah::Portrait", "HPGandalf");
+	}
+}
+
+namespace
+{
+std::u16string asciiU16(const std::string &s)
+{
+	return std::u16string(s.begin(), s.end());
+}
+
+// ZH UnicodeString::format with one %s (the two picture texts carry one each)
+std::u16string formatOne(const std::u16string &format, const std::u16string &value)
+{
+	const std::size_t at = format.find(u"%s");
+	return at == std::u16string::npos ? format : format.substr(0, at) + value + format.substr(at + 2);
+}
+} // namespace
+
+std::u16string AptCreateAHero::pictureFileName(const std::u16string &heroName, const PictureTime &t)
+{
+	// see AptCreateAHero.h (RW 0x91A20A)
+	char date[32];
+	std::snprintf(date, sizeof(date), "%d/%d/%04d", t.month, t.day, t.year);
+	const int hour12 = t.hour % 12 == 0 ? 12 : t.hour % 12;
+	char clock[32];
+	std::snprintf(clock, sizeof(clock), "%d:%02d:%02d %s", hour12, t.minute, t.second, t.hour < 12 ? "AM" : "PM");
+	std::u16string name = heroName + u" " + asciiU16(date) + u" " + asciiU16(clock);
+	for (char16_t &c : name)
+	{
+		if (!GadgetTextEntryValidateCharacter(c, 8))
+		{
+			c = u'-';
+		}
+	}
+	return name;
+}
+
+std::u16string AptCreateAHero::beginPicture(const PictureTime &time)
+{
+	m_takePicture = false; // RW 0x91A46A
+	m_pictureInProgress = true;
+	m_pictureHero = m_myHero ? m_myHero->hero().name : std::u16string();
+	return pictureFileName(m_pictureHero, time);
+}
+
+void AptCreateAHero::pictureTaken(const std::u16string &shownPath, const std::string &error)
+{
+	m_pictureInProgress = false;
+	m_takePicture = false; // Sol r1: nothing armed while the device saved stays armed for a second picture
+	invoke("OnGameTookPicture", {}); // RW 0x91A4C8: the movie reopens its panels
+	if (!error.empty())
+	{
+		windows().note("create-a-hero-picture", "the picture was not saved: " + error);
+		notAvailable(u"The picture could not be saved: " + asciiU16(error));
+		return;
+	}
+	// RW 0x91A525 .. 0x91A595: an OK box (RW 0x84ED5D) titled for the hero, naming where the picture went
+	if (!m_box)
+	{
+		m_box = std::make_unique<AptMessageBox>(windows(), shell());
+	}
+	const std::u16string title = formatOne(fetchOrMissing(m_env.gameText, "GUI:OnPictureTakenTitle"), m_pictureHero);
+	const std::u16string text = formatOne(fetchOrMissing(m_env.gameText, "GUI:OnPictureTaken"), shownPath);
+	m_lastMessage = "GUI:OnPictureTakenTitle: GUI:OnPictureTaken";
+	m_box->show(AptMessageBox::TYPE_OK, title, text);
 }
 
 void AptCreateAHero::registerAll()
 {
 	// ---- the screen (RW 0x91A6BF) ----
 	registerCommand("AptCreateAHero::OnShowScreen", [this](const std::string &arg) { showPage(arg.empty() ? 0 : arg[0]); });
-	registerCommand("AptCreateAHero::PrepareToTakePicture", [this](const std::string &) { m_pictureFrames = 0; });
+	registerCommand("AptCreateAHero::PrepareToTakePicture", [this](const std::string &) { m_pictureFrames = 0; }); // RW 0x919D85
 	registerCommand("AptCreateAHero::OnTakePicture", [this](const std::string &) {
-		windows().note("unported-command", "AptCreateAHero::OnTakePicture: the hero portrait is not taken [S-1405]");
-		notAvailable(u"Taking a hero portrait is not available yet: the hero keeps its class's picture."); // lane MENUWORK-1 (S-4755)
-		invoke("OnGameTookPicture", {});
+		// RW 0x919D8F (lane CAHPIC-1): armed once the guard clip has been drawn twice; before that the press does nothing and the movie's
+		// _takePictureLoop asks again
+		// lane CAHPIC-1: RotWK saves the picture and tells the movie OnGameTookPicture inside the one draw that took it (RW 0x91A3A9); the device saves it
+		// on the next frame, so a retry of the movie's loop in between must not arm a second picture
+		if (m_pictureFrames >= 2 && !m_pictureInProgress)
+		{
+			m_takePicture = true;
+		}
 	});
 	registerCommand("AptCreateAHero::RotateLeft", [this](const std::string &a) { m_rotateLeft = !a.empty() && a[0] == 't'; });
 	registerCommand("AptCreateAHero::RotateRight", [this](const std::string &a) { m_rotateRight = !a.empty() && a[0] == 't'; });
 	registerCommand("AptCreateAHero::ZoomIn", [this](const std::string &a) { m_zoomIn = !a.empty() && a[0] == 't'; });
 	registerCommand("AptCreateAHero::ZoomOut", [this](const std::string &a) { m_zoomOut = !a.empty() && a[0] == 't'; });
-	registerComponent("CreateAHero::RenderPictureGuard", [this](AptComponentRequest &) -> std::shared_ptr<GameWindow> {
-		++m_pictureFrames;
-		return nullptr;
-	});
+	// RW 0x919DA2: a render callback (++ + 0x43C per draw of the clip): the device counts the clip's draws (pictureGuardDrawn); no window is kept
+	registerComponent("CreateAHero::RenderPictureGuard", [](AptComponentRequest &) -> std::shared_ptr<GameWindow> { return nullptr; });
 	// RW 0x91A3A9: the 3D view is drawn by the device into the clip's rectangle (GodotDevice: the preview); no window is kept
 	registerComponent("CreateAHero::DrawMapComponent", [](AptComponentRequest &) -> std::shared_ptr<GameWindow> { return nullptr; });
 	registerProvider("CreateAHeroDemo", [](const std::string &, std::string &value, bool setting) {
@@ -776,6 +853,16 @@ void AptCreateAHero::registerAll()
 			windows().markNumericProvider(name);
 		}
 	}
+	if (m_env.createAHero && m_env.createAHero->system)
+	{
+		size_t maximum = 0;
+		for (const auto &c : m_env.createAHero->system->classes()) for (const auto &sub : c.subClasses) maximum = std::max(maximum, sub.awards.size());
+		for (size_t i = 0; i < maximum; ++i)
+		{
+			const std::string name = "MyHero::AwardState_" + std::to_string(i);
+			registerProvider(name, [this](const std::string &n, std::string &value, bool setting) { return !setting && m_myHero && m_myHero->provide(n, value); });
+		}
+	}
 	windows().markNumericProvider("MyHero::IsSystemHero"); // the movie tests it with Not: "0" must be false (as AptTimeLine's flags, S-1063)
 
 	// ---- Manager (RW 0x9C5EA4) ----
@@ -785,10 +872,8 @@ void AptCreateAHero::registerAll()
 		windows().note("unported-command", "AptCreateAHero::Manager::OnPlayGame: the test map is not started [S-1405]");
 		notAvailable(u"Trying a hero on a test map is not available yet: play a skirmish with the hero instead.");
 	});
-	registerCommand("AptCreateAHero::Manager::OnSelectAward", [this](const std::string &a) {
-		windows().note("unported-command", "AptCreateAHero::Manager::OnSelectAward(" + a + "): the awards are not ported [S-1403]");
-		notAvailable(u"Hero awards are not available yet: OpenBFME does not record them.");
-	});
+	registerCommand("AptCreateAHero::Manager::OnSelectAward", [this](const std::string &a) { selectAward(atoiArg(a)); });
+
 	// lane MENUWORK-1: the hero list's headers (the Manager's constructor RW 0x9C5EA4 binds them to RW 0x9C5D42 / 0x9C5D51 / 0x9C5D60: the key
 	// 0 icon / 2 name / 4 type through RW 0x9C4EBD, then the list again, RW 0x9C5A66); they used to be noted only
 	registerCommand("Mission::OnSortIcon", [this](const std::string &) { selectHeroSort(0); });
@@ -829,6 +914,7 @@ void AptCreateAHero::registerAll()
 			const int widths[2] = { 80, 20 };
 			GadgetListBoxSetColumnWidths(w, 2, widths);
 			m_heroStats = w;
+			refreshStatistics();
 		}
 	});
 
@@ -1253,6 +1339,27 @@ void AptCreateAHero::selectHero(int index)
 	}
 	m_selectedHero = index;
 	m_myHero->edit(e->hero, false);
+	m_myHero->statistics.counters.clear();
+	std::string statsError;
+	if (!list->profileDir().empty() && !m_myHero->statistics.load(list->profileDir(), e->hero.uniqueID, &statsError))
+	{
+		windows().note("create-a-hero-statistics-error", statsError);
+		m_lastMessage = statsError;
+	}
+	refreshStatistics();
+	// DONOR AptMyHero RVA 0x5B0446 refreshes all ten level entries through
+	// RVA 0x5B0416 (MyPowerLevel text and MyPowerIcon image). This is also
+	// needed on the manager, which does not run refreshPowersPage.
+	for (int i = 0; i < CahPowers::MAX_POWERS; ++i)
+	{
+		const CommandButton *button = TheCommandStore ? TheCommandStore->findCommandButton(e->hero.powers[(size_t)i].commandButton) : nullptr;
+		const std::string suffix = std::to_string(i + 1);
+		setImage("MyPowerIcon_" + suffix, powerIcon(button));
+		std::u16string name = button && !button->m_textLabel.empty() ? fetchOrMissing(m_env.gameText, button->m_textLabel.front()) : u" ";
+		name.erase(std::remove(name.begin(), name.end(), u'&'), name.end());
+		windows().setAptText("APT:MyPowerLevel_" + suffix, loadScreenU16ToUtf8(name));
+	}
+	windows().setAptText("APT:HeroPowersDescription", " ");
 	m_showClassHero = false;
 	invoke("EnableCustomizeButtons", { e->system ? "false" : "true" });
 	bumpDisplay();
@@ -1341,11 +1448,12 @@ void AptCreateAHero::fillHeroList()
 	}
 }
 
-WindowMsgHandledType AptCreateAHero::gadgetMessage(GameWindow *from, std::uint32_t msg, WindowMsgData data1, WindowMsgData)
+WindowMsgHandledType AptCreateAHero::gadgetMessage(GameWindow *, std::uint32_t msg, WindowMsgData data1, WindowMsgData data2)
 {
-	if (msg == GLM_SELECTED && from == m_heroList) // RW 0x9C5114: 0x4014 from the hero list
+	GameWindow *gadget = reinterpret_cast<GameWindow *>(data1);
+	if (msg == GLM_SELECTED && gadget == m_heroList) // RW 0x9C5114: 0x4014 from the hero list
 	{
-		const int row = (int)data1;
+		const int row = (int)(std::intptr_t)data2;
 		selectHero(row >= 0 && (size_t)row < m_rowEntries.size() ? m_rowEntries[(size_t)row] : row); // lane MENUWORK-1: the sorted row's hero
 		return MSG_HANDLED;
 	}
@@ -1647,6 +1755,7 @@ void AptCreateAHero::refreshPowersPage()
 
 void AptCreateAHero::update()
 {
+	refreshAwardBindings();
 	if (m_box)
 	{
 		m_box->update();
@@ -1701,6 +1810,79 @@ void AptCreateAHero::update()
 			--m_powersScrollUpdates;
 			std::string error;
 			windows().invokeASAt(level(), "Main.mcPowersScreen.Screen.mcPowersMenu", "OnScrollTo", { "0" }, nullptr, &error);
+		}
+	}
+}
+
+// RW 0x9C523F: the subclass's statistics, localized label and numeric value.
+void AptCreateAHero::refreshStatistics()
+{
+	if (m_heroStats) GadgetListBoxReset(m_heroStats);
+	windows().setAptText("Cah:SelectedAwardDesc", " ");
+	if (!m_myHero || !m_env.createAHero || !m_env.createAHero->system) return;
+	const auto &system = *m_env.createAHero->system;
+	const auto &hero = m_myHero->hero();
+	const auto *sub = system.subClass(hero.classIndex, hero.subClassIndex);
+	if (!sub) return;
+	if (m_heroStats) for (const auto &name : sub->stats)
+	{
+		const auto *stat = system.awardSystem.stat(name);
+		if (!stat) { windows().note("create-a-hero-statistics-error", "Unknown statistic " + name); continue; }
+		const int row = GadgetListBoxAddEntryText(m_heroStats, fetchOrMissing(m_env.gameText, stat->nameTag), 0xFFFFFFFFu, -1, 0);
+		const std::string digits = std::to_string(m_myHero->statistics.get(name));
+		GadgetListBoxAddEntryText(m_heroStats, std::u16string(digits.begin(), digits.end()), 0xFFFFFFFFu, row, 1);
+	}
+	for (size_t i = 0; i < sub->awards.size(); ++i)
+	{
+		const auto *award = system.awardSystem.award(sub->awards[i]);
+		if (!award) { windows().note("create-a-hero-statistics-error", "Unknown award " + sub->awards[i]); continue; }
+		setImage("CahAward:Image_" + std::to_string(i), award->image);
+		windows().setAptText("CahAward:Name_" + std::to_string(i), loadScreenU16ToUtf8(fetchOrMissing(m_env.gameText, award->nameTag)));
+	}
+	invoke("UpdateAwards", {});
+}
+void AptCreateAHero::selectAward(int index)
+{
+	std::string description = " ";
+	if (m_myHero && m_env.createAHero && m_env.createAHero->system)
+	{
+		const auto &system = *m_env.createAHero->system;
+		const auto &hero = m_myHero->hero();
+		const auto *sub = system.subClass(hero.classIndex, hero.subClassIndex);
+		if (sub && index >= 0 && (size_t)index < sub->awards.size())
+			if (const auto *award = system.awardSystem.award(sub->awards[(size_t)index])) description = loadScreenU16ToUtf8(fetchOrMissing(m_env.gameText, award->descriptionTag));
+	}
+	windows().setAptText("Cah:SelectedAwardDesc", description);
+}
+
+void AptCreateAHero::refreshAwardBindings()
+{
+	if (!m_myHero || !m_env.createAHero || !m_env.createAHero->system) return;
+	const auto &system = *m_env.createAHero->system;
+	const auto &hero = m_myHero->hero();
+	const auto *sub = system.subClass(hero.classIndex, hero.subClassIndex);
+	if (!sub) return;
+	auto &apt = windows().apt();
+	auto *root = apt.level(level());
+	const std::string path = "Main.mcManagerScreen.Screen.TabNav.ScreenAwards.AwardList.mcAwards";
+	auto *list = apt.resolvePath(root, path);
+	if (!list || !list->asSprite()) return;
+	// The retail award template's first-frame script (CreateAHero.apt 0x1CC7C)
+	// binds Image._imageMap and AwardName.text using its instance name. The port's
+	// deferred child first frame clears _imageMap afterwards (S-104). Integration
+	// inference: restore those same bindings after initialization, without changing
+	// the movie's grid, scrolling, visibility or locked/earned animation.
+	for (size_t i = 0; i < sub->awards.size(); ++i)
+	{
+		auto *slot = list->asSprite()->childByName(std::to_string(i));
+		auto *image = slot && slot->asSprite() ? slot->asSprite()->childByName("Image") : nullptr;
+		AptValue type, binding;
+		if (!image || !image->getOwn("_type", type)) continue; // child's first frame has not run yet
+		const std::string key = "CahAward:Image_" + std::to_string(i);
+		if (!image->getOwn("_imageMap", binding) || binding.toString() != key)
+		{
+			image->setMember("_imageMap", AptValue::string(key));
+			windows().setAptFieldText(level(), path + "." + std::to_string(i) + ".AwardName", "$CahAward:Name_" + std::to_string(i));
 		}
 	}
 }

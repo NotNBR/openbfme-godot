@@ -1246,16 +1246,9 @@ public:
 		}
 		if (subIdle())
 		{
-			// no crates in RotWK (RW 0x66810B answers none: S-4040); the mood scan (RW 0x66844A(!force, 0)) at the MoodAttackCheckRate interval unless forced
-			// (RW 0x662E01's clock, INFERENCE)
-			const unsigned now = o.logic().getFrame();
-			Object *target = nullptr;
-			if (force || now >= m_nextMoodCheck)
-			{
-				const unsigned interval = ai.moodCheckInterval();
-				m_nextMoodCheck = now + (interval ? interval : 1u);
-				target = ai.nextMoodTarget();
-			}
+			// no crates in RotWK (RW 0x66810B answers none: S-4040); the mood scan RW 0x66844A(!force, 0): its own cadence (AI + 0x21C) when called by the AI
+			// (lane TARGET-1; m_nextMoodCheck, the earlier stand-in clock, is kept in the snapshot but no longer read)
+			Object *target = ai.getNextMoodTarget(!force, false);
 			if (target)
 			{
 				ai.mover().endingMove(); // RW 0x6627CB
@@ -1344,6 +1337,239 @@ public:
 		}
 		m_sub = std::move(loaded);
 	}
+};
+
+// ---- lane STEALTHFLY1: the follow states ---------------------------------------------------------------------------------------------------------------
+// The next point of a follow state (RW 0x76A320 GiantBirdFollowPathState / RW 0x76A496 GiantBirdFollowWaypointPathState, the same body with the index at
+// + 0x58 / + 0x20; BFME2 decomp GiantBirdFollowPathStates.cpp followToNextPointNow): the machine's goal path point `index` (RW 0x74898B), the index advanced;
+// past the end the path restarts at its first point when the bird loops (+ 0x614), else false. The point after it is the look-ahead (AI flags bit 7 set, else
+// cleared); both are put at the terrain height (TheTerrainLogic vslot 0x18, not the flight ground height) + the path height (+ 0x604), the x87 sum stored as
+// a float, and the path is built to the point (RW 0x769EA5 with mask RW 0xDE7908 = MASK_A, the look-ahead, "no look-ahead")
+bool followToNextPoint(AIState &s, int &index)
+{
+	Object &o = s.owner();
+	GiantBirdAIUpdate &ai = bird(s);
+	if (!ai.curLocomotor())
+	{
+		return false;
+	}
+	const Coord3D *point = s.machine().goalPathPosition(index++);
+	if (!point)
+	{
+		if (!ai.loopPath())
+		{
+			return false;
+		}
+		index = 0;
+		point = s.machine().goalPathPosition(index++);
+		if (!point)
+		{
+			return false;
+		}
+	}
+	const float h = ai.pathHeight();
+	const Coord3D *nextPoint = s.machine().goalPathPosition(index);
+	Coord3D lookAhead{ 0.0f, 0.0f, 0.0f };
+	if (nextPoint)
+	{
+		ai.flight().flags |= 0x80u;
+		lookAhead = *nextPoint;
+		lookAhead.z = SimMath::fstpDword(SimMath::pc24AddW((double)o.logic().getGroundHeight(lookAhead.x, lookAhead.y), (double)h));
+	}
+	else
+	{
+		ai.flight().flags &= ~0x80u;
+	}
+	Coord3D pos = *point;
+	pos.z = SimMath::fstpDword(SimMath::pc24AddW((double)o.logic().getGroundHeight(pos.x, pos.y), (double)h));
+	ai.buildPath(pos, AerialPathfinder::MASK_A, nextPoint ? &lookAhead : nullptr, nextPoint == nullptr);
+	return true;
+}
+
+// the update of both follow states (RW 0x76ABC1 / RW 0x76B14A): dead, failure; the path steered (RW 0x76A933 with the path height, the anchor, no snap);
+// reached, or within one speed of the anchor (the object put on it, RW 0x70C201): the next point, success when none, failure when its path is not valid.
+// With a look-ahead the anchor is the look-ahead point (RW 0x778413 ends the spline there), so a steering rebuild flies straight at it: a leg's own point
+// can be cut short (a climbing take-off does). That is RotWK's rule (RW 0x76ABC1 passes AI + 0x608, the anchor), not a port gap
+StateReturnType followUpdate(AIState &s, int &index)
+{
+	Object &o = s.owner();
+	if (o.isEffectivelyDead())
+	{
+		return STATE_FAILURE;
+	}
+	GiantBirdAIUpdate &ai = bird(s);
+	const Coord3D anchor = ai.flight().anchor;
+	ai.steer(ai.pathHeight(), &anchor, false);
+	if (GiantBirdNormalFlightState::arrived(ai))
+	{
+		if (!followToNextPoint(s, index))
+		{
+			return STATE_SUCCESS;
+		}
+		if (!ai.spline().valid())
+		{
+			return STATE_FAILURE;
+		}
+	}
+	return STATE_CONTINUE;
+}
+
+// the common tail of both exits (RW 0x76AC9F / RW 0x76B228 after their base exit): the look-ahead bit cleared, MOVING, CLIMBING and FREEFALL (conditions 61,
+// 103, 72) cleared, the goal reservation at the object's position (RW 0x68B3BD(position, 1))
+void followExitTail(AIState &s)
+{
+	Object &o = s.owner();
+	bird(s).flight().flags &= ~0x80u;
+	clearCondition(o, names().moving);
+	clearCondition(o, names().climbing);
+	clearCondition(o, names().freefall);
+	GiantBirdNormalFlightState::reserveGoal(o);
+}
+
+// GiantBirdFollowPathState (state 0x3F6; ctor RW 0x7691AB, an AIFollowPathState: vtable RW 0xC2D940)
+class GiantBirdFollowPathState : public AIState
+{
+public:
+	explicit GiantBirdFollowPathState(AIStateMachine &m)
+		: AIState(m, "GiantBirdFollowPathState")
+	{
+	}
+	StateReturnType onEnter() override
+	{
+		// RW 0x76A2B8: the index 0; no AI, dead or without a locomotor: failure; the path height is the locomotor's PreferredHeight (+ 0x48); no first point:
+		// success; the path not valid: failure; else the look-ahead bit set (RW 0x76A312 -> RW 0x76913B(7, 1))
+		m_index = 0;
+		Object &o = owner();
+		GiantBirdAIUpdate &ai = bird(*this);
+		Locomotor *loco = ai.curLocomotor();
+		if (o.isEffectivelyDead() || !loco)
+		{
+			return STATE_FAILURE;
+		}
+		ai.setPathHeight(loco->preferredHeight());
+		if (!followToNextPoint(*this, m_index))
+		{
+			return STATE_SUCCESS;
+		}
+		if (!ai.spline().valid())
+		{
+			return STATE_FAILURE;
+		}
+		ai.flight().flags |= 0x80u;
+		return STATE_CONTINUE;
+	}
+	StateReturnType update() override { return followUpdate(*this, m_index); }
+	void onExit(StateExitType status) override
+	{
+		(void)status;
+		if (ai().isDestroying())
+		{
+			return;
+		}
+		// RW 0x74B77D (AIFollowPathState::onExit) first: its internal move's exit RW 0x748D8A (MOVING, BACKING_UP, CLIMBING, RAPPELLING cleared, the move
+		// loop stopped, RW 0x6627CB), then the AI's path-through-units flag (+ 0x3BA), its ignored obstacle (+ 0x164, RW 0x662D98(0)), its goal path index
+		// (+ 0x194 = -1), IS_LEAVING_FACTORY (status 0x5A) unless the object is a HORDE, the locomotor's speed cap (+ 0x2C = -1). Not ported: the
+		// locomotor flag + 0x44 bit 3 (its reader is not identified; the bird's locomotor is the GIANT_BIRD mover)
+		Object &o = owner();
+		GiantBirdAIUpdate &ai = bird(*this);
+		AIMover &m = ai.mover();
+		m.setMoveCondition("MOVING", false);
+		m.setMoveCondition("BACKING_UP", false);
+		m.setMoveCondition("CLIMBING", false);
+		m.setMoveCondition("RAPPELLING", false);
+		m.host().stopMoveSound();
+		m.endingMove();
+		ai.setCanPathThroughUnits(false);
+		m.ignoreObstacle(PATHFIND_INVALID_ID);
+		ai.setCurrentGoalPathIndex(-1);
+		if (!isKind(o, names().horde))
+		{
+			o.setStatus((unsigned)names().leavingFactory, false);
+		}
+		if (Locomotor *loco = ai.curLocomotor())
+		{
+			loco->setTemporarySpeedCap(-1.0f);
+		}
+		followExitTail(*this); // RW 0x76ACB1 ..
+	}
+	void crc(StateHasher &h) const override { h.addI32(m_index); }
+	void xfer(Xfer &x) override // OpenBFME layout (S-4220): the point index
+	{
+		XferVersion v{ 1, 1 };
+		x.xferVersion(v);
+		x.xferInt(&m_index);
+		if (x.isLoading() && m_index < 0)
+		{
+			throw XferException("giant bird: a follow path state's point index " + std::to_string(m_index));
+		}
+	}
+
+private:
+	int m_index = 0; // + 0x58
+};
+
+// GiantBirdFollowWaypointPathState (states 0x3F7 / 0x3F8; ctor RW 0x7692DA (machine, + 0x24), vtable RW 0xC2DB00; retail xfer RW 0x769308: the index and
+// the flag)
+class GiantBirdFollowWaypointPathState : public AIState
+{
+public:
+	GiantBirdFollowWaypointPathState(AIStateMachine &m, bool asTeam)
+		: AIState(m, "GiantBirdFollowWaypointPathState")
+		, m_asTeam(asTeam)
+	{
+	}
+	StateReturnType onEnter() override
+	{
+		// RW 0x76A451: the index 0; no AI or dead: failure; no first point: success; the path not valid: failure; else the look-ahead bit set (no locomotor
+		// test, no path height here: the command set it)
+		m_index = 0;
+		if (owner().isEffectivelyDead())
+		{
+			return STATE_FAILURE;
+		}
+		if (!followToNextPoint(*this, m_index))
+		{
+			return STATE_SUCCESS;
+		}
+		GiantBirdAIUpdate &ai = bird(*this);
+		if (!ai.spline().valid())
+		{
+			return STATE_FAILURE;
+		}
+		ai.flight().flags |= 0x80u;
+		return STATE_CONTINUE;
+	}
+	StateReturnType update() override { return followUpdate(*this, m_index); }
+	void onExit(StateExitType status) override
+	{
+		(void)status; // RW 0x76B228: State::onExit (RW 0x9F3A3C) first
+		if (ai().isDestroying())
+		{
+			return;
+		}
+		followExitTail(*this);
+	}
+	void crc(StateHasher &h) const override
+	{
+		h.addI32(m_index);
+		h.addBool(m_asTeam);
+	}
+	void xfer(Xfer &x) override // OpenBFME layout (S-4220): the point index, the constructor's flag checked
+	{
+		XferVersion v{ 1, 1 };
+		x.xferVersion(v);
+		x.xferInt(&m_index);
+		bool asTeam = m_asTeam;
+		x.xferBool(&asTeam);
+		if (x.isLoading() && (m_index < 0 || asTeam != m_asTeam))
+		{
+			throw XferException("giant bird: a waypoint path state saved with another index or flag");
+		}
+	}
+
+private:
+	int m_index = 0; // + 0x20
+	bool m_asTeam;   // + 0x24 (read by nothing ported)
 };
 } // namespace
 
@@ -1463,6 +1689,9 @@ std::unique_ptr<AIStateMachine> GiantBirdAIUpdate::makeStateMachine()
 	m->defineState(STATE_SWOOP_POSITION_LEVEL, std::make_unique<AIGiantBirdSwoopState>(*m, false, true), STATE_ATTACK, AI_IDLE);
 	m->defineState(STATE_ATTACK_POSITION, std::make_unique<AIGiantBirdAttackState>(*m, false), STATE_FOLLOW_THRU_POSITION, STATE_FOLLOW_THRU_POSITION);
 	m->defineState(STATE_FOLLOW_THRU_POSITION, std::make_unique<AIGiantBirdFollowThruState>(*m, false), STATE_GOING_IDLE, STATE_GOING_IDLE);
+	m->defineState(STATE_FOLLOW_PATH, std::make_unique<GiantBirdFollowPathState>(*m), STATE_GOING_IDLE, STATE_GOING_IDLE); // lane STEALTHFLY1
+	m->defineState(STATE_FOLLOW_WAYPOINTS, std::make_unique<GiantBirdFollowWaypointPathState>(*m, false), STATE_GOING_IDLE, STATE_GOING_IDLE);
+	m->defineState(STATE_FOLLOW_WAYPOINTS_TEAM, std::make_unique<GiantBirdFollowWaypointPathState>(*m, true), STATE_GOING_IDLE, STATE_GOING_IDLE);
 	m->defineState(STATE_ATTACK_MOVE, std::make_unique<GiantBirdAttackMoveToState>(*m), STATE_GOING_IDLE, STATE_GOING_IDLE);
 	return m;
 }
@@ -1489,10 +1718,16 @@ void GiantBirdAIUpdate::startCommand(unsigned state, CommandSourceType source)
 bool GiantBirdAIUpdate::routeCommand(const RoutedCommand &c)
 {
 	Object &o = *getObject();
-	const bool routed = c.type == 0 || c.type == kCommandUnidentifiedMove || c.type == 0xB || c.type == 0xC || c.type == 0xE || c.type == 0xF || c.type == 6 ||
-						c.type == 7 || c.type == 0x32 || c.type == 0x33 || c.type == 0x47;
+	const bool routed = c.type == 0 || c.type == kCommandUnidentifiedMove || c.type == 0xB || c.type == 0xC || c.type == 0x39 || c.type == 0xE || c.type == 0xF ||
+						c.type == 6 || c.type == 7 || c.type == 0x32 || c.type == 0x33 || c.type == 0x47;
 	if (!routed)
 	{
+		// RW 0x76DACD: the bird's flag 0 cleared, then the base aiDoCommand (RW 0x66A7EC). (The deferral of such a command while attacking is ported for the
+		// follow paths only, deferWhileAttacking)
+		if (!m_attacking)
+		{
+			m_flight.flags &= ~1u;
+		}
 		return false;
 	}
 	if (m_attacking)
@@ -1520,6 +1755,7 @@ bool GiantBirdAIUpdate::routeCommand(const RoutedCommand &c)
 		return true;
 	case 0xB:
 	case 0xC:
+	case 0x39: // lane STEALTHFLY1: RW 0x76DA1A, as 0xB
 		// RW 0x76A139 (victim, source, 0): the source, the machine cleared, the goal object (vslot 0x38), state 0x3F2, goal type 1
 		if (c.target && mobile)
 		{
@@ -1553,10 +1789,165 @@ bool GiantBirdAIUpdate::routeCommand(const RoutedCommand &c)
 		}
 		return true;
 	default:
-		// RW 0x76D84B: GiantBirdFollowWaypointPathState 0x3F7 / 0x3F8 is not ported (S-4040): the order is reported and not executed
-		aiUnported("GiantBirdAIUpdate waypoint path (RW 0x76D84B, states 0x3F7 / 0x3F8)", c.source);
+		// 6 / 0x32 -> RW 0x76D84B(waypoint, 0, source); 7 / 0x33 -> (waypoint, 1, source) (lane STEALTHFLY1)
+		followWaypointPath(c.waypointId, c.type == 7 || c.type == 0x33, c.source);
 		return true;
 	}
+}
+
+// RW 0x76D84B (BFME2 decomp Rva00368344Rva0036BB2F.cpp, tier B same-shape): not dead and mobile; the path height is the locomotor's PreferredHeight; the loop
+// flag cleared; the chain from the waypoint: each location appended (RW 0x66E1D3), stopping at a waypoint without links (+ 0x4C), else following its first
+// link (+ 0x20) until it comes back to the first waypoint (the loop flag set). With a waypoint: the machine cleared, the goal position the last point (RW
+// 0x8DB810: unless the machine is locked; its + 0x30 = FLT_MAX), the goal path, the source (RW 0x6E8498), state 0x3F7 + asTeam. (No goal type here.)
+void GiantBirdAIUpdate::followWaypointPath(int first, bool asTeam, CommandSourceType source)
+{
+	Object &o = *getObject();
+	if (o.isEffectivelyDead() || isKind(o, names().immobile)) // RW 0x76D86A (+ 0x458 bit 0), RW 0x690E97 (its IMMOBILE test, S-1920)
+	{
+		return;
+	}
+	if (Locomotor *loco = curLocomotor())
+	{
+		m_pathHeight = loco->preferredHeight();
+	}
+	m_loopPath = false;
+	const TerrainLogic *terrain = o.logic().terrain();
+	const Waypoint *start = terrain ? terrain->findWaypointById(first) : nullptr;
+	if (!start)
+	{
+		return;
+	}
+	std::vector<Coord3D> path;
+	const Waypoint *w = start;
+	// a chain that runs into a cycle that does not pass the first waypoint never ends in RotWK (the walk only stops at a waypoint without links or at the
+	// first one): it is cut after as many steps as the map has waypoints and reported
+	const size_t limit = terrain->waypoints().size() + 1;
+	for (;;)
+	{
+		path.push_back(w->location);
+		if (w->linksTo.empty())
+		{
+			break;
+		}
+		w = terrain->findWaypointById(w->linksTo.front());
+		if (!w)
+		{
+			break;
+		}
+		if (w == start)
+		{
+			m_loopPath = true;
+			break;
+		}
+		if (path.size() > limit)
+		{
+			world().noteStop("[S-4040] GiantBirdAIUpdate: a waypoint chain that cycles without returning to its first waypoint (RotWK RW 0x76D84B walks it "
+							 "forever): cut after every waypoint of the map");
+			break;
+		}
+	}
+	stateMachine().clear();
+	if (!stateMachine().isLocked())
+	{
+		stateMachine().setGoalPosition(path.back());
+		stateMachine().clearGoalAngle(); // INFERENCE: RW 0x8DB778's + 0x30 = FLT_MAX is the machine's goal angle "none"
+	}
+	stateMachine().setGoalPath(path);
+	setLastCommandSource(source);
+	stateMachine().setState(asTeam ? STATE_FOLLOW_WAYPOINTS_TEAM : STATE_FOLLOW_WAYPOINTS);
+	wakeUpNow();
+}
+
+bool GiantBirdAIUpdate::deferrable(int type)
+{
+	static const int kRouted[] = { 0, kCommandUnidentifiedMove, 0xB, 0xC, 0x39, 0xE, 0xF, 6, 7, 0x32, 0x33, 0x47, kDeferredFollowPath, kDeferredFollowPathAppend };
+	return std::find(std::begin(kRouted), std::end(kRouted), type) != std::end(kRouted);
+}
+
+bool GiantBirdAIUpdate::deferWhileAttacking(const RoutedCommand &c)
+{
+	if (!m_attacking)
+	{
+		m_deferredValid = false;  // RW 0x76D9CF
+		m_flight.flags &= ~1u;    // RW 0x76DACD (the base aiDoCommand's commands)
+		return false;
+	}
+	m_deferred = c;
+	m_deferredTarget = c.target ? c.target->getID() : INVALID_ID;
+	m_deferredValid = true;
+	return true;
+}
+
+// AI vslot 0x78 (RW 0x76B491; BFME2 decomp Rva003697F9.cpp, tier B edited): mobile, else nothing; the machine cleared; the goal position the path's last point
+// (RW 0x8DB810 as above); the goal path; the source; the ignored obstacle (RW 0x66831A); state 0x3F6; goal type 1. The production exit flag is not read
+void GiantBirdAIUpdate::privateFollowPath(const std::vector<Coord3D> &path, Object *ignoreObject, CommandSourceType source, bool exitProduction)
+{
+	(void)exitProduction;
+	RoutedCommand c;
+	c.type = kDeferredFollowPath;
+	c.path = path;
+	c.target = ignoreObject;
+	c.source = source;
+	if (deferWhileAttacking(c))
+	{
+		return;
+	}
+	if (isKind(*getObject(), names().immobile)) // RW 0x690E97 (S-1920)
+	{
+		return;
+	}
+	stateMachine().clear();
+	if (!path.empty() && !stateMachine().isLocked())
+	{
+		stateMachine().setGoalPosition(path.back());
+		stateMachine().clearGoalAngle();
+	}
+	stateMachine().setGoalPath(path);
+	mover().ignoreObstacle(ignoreObject ? ignoreObject->getID() : PATHFIND_INVALID_ID);
+	startCommand(STATE_FOLLOW_PATH, source);
+}
+
+// AI vslot 0x84 (RW 0x76D659; BFME2 decomp GiantBirdAIUpdatePrivateFollowPathAppend.cpp, tier B edited): the loop flag cleared; following a path (0x3F6) with
+// points left: the point is appended (RW 0x75536B); else a new path: in a flight state (0x3E9 .. 0x400 but the attack states 0x3ED / 0x3F4) from the machine's
+// goal position through the point, otherwise the point alone, through vslot 0x78 with no ignored obstacle
+void GiantBirdAIUpdate::privateFollowPathAppend(const Coord3D &pos, CommandSourceType source)
+{
+	RoutedCommand c;
+	c.type = kDeferredFollowPathAppend;
+	c.position = pos;
+	c.source = source;
+	if (deferWhileAttacking(c))
+	{
+		return;
+	}
+	m_loopPath = false;
+	const unsigned st = currentStateId();
+	if (st == STATE_FOLLOW_PATH && !stateMachine().goalPath().empty())
+	{
+		stateMachine().addToGoalPath(pos);
+		return;
+	}
+	std::vector<Coord3D> path;
+	if (!(st < 0x3E9 || st > 0x400 || st == STATE_ATTACK_POSITION || st == STATE_ATTACK))
+	{
+		path.push_back(stateMachine().goalPosition());
+	}
+	path.push_back(pos);
+	privateFollowPath(path, nullptr, source, false);
+}
+
+bool GiantBirdAIUpdate::aiSwoopAttackObject(Object *victim, CommandSourceType source)
+{
+	// RW 0x77131B: AICommandParms(0x39, source) with the victim -> aiDoCommand (the gate RW 0x667174, then RW 0x76D995)
+	if (!acceptCommand(source, 0x39, victim))
+	{
+		return false;
+	}
+	RoutedCommand c;
+	c.type = 0x39;
+	c.target = victim;
+	c.source = source;
+	return routeCommand(c);
 }
 
 bool GiantBirdAIUpdate::aiAbilityMoveTo(const Coord3D &pos, CommandSourceType source)
@@ -1905,7 +2296,15 @@ UpdateSleepTime GiantBirdAIUpdate::update()
 		RoutedCommand c = m_deferred;
 		c.target = m_deferredTarget != INVALID_ID ? o.logic().findObjectByID(m_deferredTarget) : nullptr;
 		m_deferredValid = false;
-		if ((c.type != 0xB && c.type != 0xC) || c.target)
+		if (c.type == kDeferredFollowPath)
+		{
+			privateFollowPath(c.path, c.target, c.source, false); // lane STEALTHFLY1: the follow paths go to their vslot again
+		}
+		else if (c.type == kDeferredFollowPathAppend)
+		{
+			privateFollowPathAppend(c.position, c.source);
+		}
+		else if ((c.type != 0xB && c.type != 0xC && c.type != 0x39) || c.target)
 		{
 			routeCommand(c);
 		}
@@ -2012,7 +2411,7 @@ UpdateSleepTime GiantBirdAIUpdate::update()
 void GiantBirdAIUpdate::xferAIStateBody(Xfer &x)
 {
 	AIUpdateInterface::xferAIStateBody(x);
-	XferVersion v{ 1, 1 };
+	XferVersion v{ 1, 2 }; // 2 (lane STEALTHFLY1): the loop flag and a deferred follow path's points
 	x.xferVersion(v);
 	const bool loading = x.isLoading();
 	AerialSpline spline;
@@ -2042,6 +2441,26 @@ void GiantBirdAIUpdate::xferAIStateBody(Xfer &x)
 	AIXfer::enumIn(x, m_deferred.source, CMD_FROM_PLAYER, CMD_FROM_AI, "giant bird: the deferred command's source");
 	x.xferInt(&m_deferred.waypointId);
 	AIXfer::objectId(x, m_deferredTarget, "giant bird: the object id deferredTarget");
+	if (v.current >= 2)
+	{
+		x.xferBool(&m_loopPath);
+		unsigned count = (unsigned)m_deferred.path.size();
+		x.xferUnsignedInt(&count);
+		if (loading)
+		{
+			AIXfer::inRange((long long)count, 0, 100000, "giant bird: the deferred path's points");
+			m_deferred.path.assign(count, Coord3D{ 0.0f, 0.0f, 0.0f });
+		}
+		for (Coord3D &p : m_deferred.path)
+		{
+			AIXfer::coord(x, p);
+		}
+	}
+	else if (loading)
+	{
+		m_loopPath = false;
+		m_deferred.path.clear();
+	}
 	AIXfer::u64(x, m_swoopsStarted);
 	AIXfer::u64(x, m_strikes);
 	if (!loading)
@@ -2051,8 +2470,7 @@ void GiantBirdAIUpdate::xferAIStateBody(Xfer &x)
 	AIXfer::inRange(m_goalType, 0, 3, "giant bird: the goal type");
 	AIXfer::inRange(m_duelMode, 0, 2, "giant bird: the duel mode");
 	AIXfer::inRange(m_deferred.source, CMD_FROM_PLAYER, CMD_FROM_AI, "giant bird: the deferred command's source");
-	static const int kRouted[] = { 0, kCommandUnidentifiedMove, 0xB, 0xC, 0xE, 0xF, 6, 7, 0x32, 0x33, 0x47 };
-	if (m_deferredValid && std::find(std::begin(kRouted), std::end(kRouted), m_deferred.type) == std::end(kRouted))
+	if (m_deferredValid && !deferrable(m_deferred.type))
 	{
 		throw XferException("giant bird: the deferred command " + std::to_string(m_deferred.type) + " is not one the bird routes");
 	}
@@ -2085,6 +2503,10 @@ void GiantBirdAIUpdate::crc(StateHasher &h) const
 	h.addFloat(m_lastPosition.y);
 	h.addFloat(m_lastPosition.z);
 	h.addBool(m_collisionPushed);
+	if (m_loopPath)
+	{
+		h.addBool(m_loopPath); // lane STEALTHFLY1: only a looping waypoint path (the hash of every other bird is unchanged)
+	}
 	h.addBool(m_deferredValid);
 	if (m_deferredValid)
 	{
@@ -2094,13 +2516,20 @@ void GiantBirdAIUpdate::crc(StateHasher &h) const
 		h.addFloat(m_deferred.position.y);
 		h.addFloat(m_deferred.position.z);
 		h.addI32((int)m_deferred.source);
+		for (const Coord3D &p : m_deferred.path)
+		{
+			h.addFloat(p.x);
+			h.addFloat(p.y);
+			h.addFloat(p.z);
+		}
 	}
 }
 
 std::vector<std::string> GiantBirdAIUpdate::stopLines()
 {
-	return { "S-4040: GiantBirdAIUpdate (lane FLY-1) is ported without the follow-path / waypoint / face / death-flight states (0x3F6 .. 0x3F8, 0x3FC .. 0x3FF), "
-		     "the guard machine and command, the MACHINE victim's CreateObjectDie carry, the collision push of onCollide, the weapon's PreferredTargetBone aim (the "
+	return { "S-4040: GiantBirdAIUpdate (lanes FLY-1, STEALTHFLY1) is ported without the states 0x3FC .. 0x3FF and their commands 0x23 / 0x41 (no ported caller), "
+		     "vtable slot 0x68 (RW 0x76D778), the guard machine and command, the MACHINE victim's CreateObjectDie carry, the collision push of onCollide, a "
+		     "deferred command other than the routed ones and the follow paths, the weapon's PreferredTargetBone aim (the "
 		     "contact point is used) and Object::adjustVictim's member choice (the nearest living member, INFERENCE); the attack-move's mood re-check clock (RW 0x662E01) "
-		     "is the MoodAttackCheckRate interval (INFERENCE); a command during an attack is deferred for the routed commands only" };
+		     "is the MoodAttackCheckRate interval (INFERENCE)" };
 }

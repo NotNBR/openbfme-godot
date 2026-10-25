@@ -245,9 +245,11 @@ plain camera it is the only effect.
 every blur circle at that share of the picture's width, and with it how far each pixel looks around: a larger cap lets a
 strong blur grow larger and is slower, a smaller one is faster and clips the largest circles. Both are on the camera
 too, which hands them to the effect. Without an aperture, an exposure or log output the effect does no work. It also
-reads the distance along the view at one pixel, to focus on whatever is drawn there: `ask_distance(pixel)` (a pixel of
-the viewport) returns a request number, and once `answered` reaches it, `distance` holds the answer, along the view like
-`focus` (below 0 where nothing is drawn: the sky, or a pixel outside the picture).
+reads the distance along the view at a pixel, to focus on whatever is drawn there: `ask_distance(pixel)` (a pixel of
+the viewport) returns a request number, and once `answered` reaches it, `distance_of(number)` is the answer, along the
+view like `focus` (below 0 where nothing is drawn: the sky, or a pixel outside the picture; NAN before it is answered).
+Requests may overlap: each is answered with its own pixel, in the order asked, up to 16 a frame, and the latest 256
+answers are kept.
 
 It needs the Forward+ renderer: a RenderingDevice, and a 3D colour buffer in RGBA16F, which its shader writes. Without
 them (headless, the Compatibility renderer) it draws nothing and says why, once, as a warning and in `problem`; a
@@ -296,7 +298,8 @@ godot --path godot --script res://tests/pro_camera_test.gd
 - **Phase 2, with a GPU and a window:** grey stripes 20 units away over the upper half of the picture and 2,000 away
   over the lower half, through an 85 mm lens. Focused near at f/1.4, the near stripes keep their contrast and the far
   ones lose most of it; +1 EV brightens the picture; with log output each pixel is the ACEScct value of the same pixel's
-  linear light without it; `ask_distance` reads 20 and 2,000 at the stripes and below 0 outside the picture; and the
+  linear light without it; `ask_distance`, asked for three pixels before the next frame, reads 20 and 2,000 at the
+  stripes and below 0 outside the picture, each request with its own pixel; and the
   effect on its own, attached to a plain `Camera3D` without the camera layer, blurs the far stripes as well. When
   headless, phase 2 is reported as skipped.
 

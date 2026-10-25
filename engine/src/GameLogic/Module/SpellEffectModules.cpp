@@ -195,7 +195,16 @@ UpdateSleepTime FireWeaponUpdate::update()
 		++m_unfired;
 		gate = false;
 	}
-	if (gate)
+	if (gate && m_weapon)
+	{
+		// RW 0x88F5B6 .. 0x88F5CF: the single weapon alone, at the object's position
+		if (weaponHost().extraWeaponStatus(*m_weapon) == WEAPON_READY_TO_FIRE)
+		{
+			weaponHost().fireExtraWeaponAt(*m_weapon, *obj->getPosition()); // RW 0x6CF3D2
+			++m_shots;
+		}
+	}
+	else if (gate)
 	{
 		const std::uint32_t now = obj->logic().getFrame();
 		for (Record &r : m_records)
@@ -227,6 +236,18 @@ UpdateSleepTime FireWeaponUpdate::update()
 	return nextSleep();
 }
 
+void FireWeaponUpdate::setWeapon(const WeaponTemplate *tmpl)
+{
+	if (!tmpl)
+	{
+		return;
+	}
+	Object *obj = getObject();
+	m_weapon = std::make_unique<Weapon>(tmpl, PRIMARY_WEAPON, obj->logic().getFrame()); // RW 0x68B150(tmpl, 0); the old one deleted (slot 0)
+	m_weapon->setOwnerID(obj->getID());
+	weaponHost().loadExtraWeapon(*m_weapon); // RW 0x6CEE0F
+}
+
 UpdateSleepTime FireWeaponUpdate::nextSleep() const
 {
 	std::uint32_t next = 0xFFFFFFFFu;
@@ -255,6 +276,11 @@ void FireWeaponUpdate::crc(StateHasher &h) const
 		r.weapon->crc(h);
 	}
 	h.addU64(m_shots);
+	if (m_weapon) // lane NUGGET-1: only when set, so an object without one hashes as before
+	{
+		h.addU32(0x4E554731u);
+		m_weapon->crc(h);
+	}
 }
 
 // ---- FloodUpdate (lane SPELL-3) ------------------------------------------------------------------------------------------------------------
@@ -417,7 +443,9 @@ std::string SpellEffectModules::stopLine()
 // timer. The weapon host of an object without a WeaponSet (S-924) is saved whole.
 void FireWeaponUpdate::xfer(Xfer &x)
 {
-	SnapshotXfer::version(x, 1, 1);
+	// version 2 (lane NUGGET-1): the single weapon of RW 0x88F041 after the counters
+	XferVersion v{ 1, 2 };
+	x.xferVersion(v);
 	xferUpdateModule(x);
 	std::uint32_t n = x.isLoading() ? 0 : (std::uint32_t)m_records.size();
 	x.xferUnsignedInt(&n);
@@ -448,6 +476,29 @@ void FireWeaponUpdate::xfer(Xfer &x)
 	}
 	SnapshotXfer::u64(x, m_shots);
 	SnapshotXfer::u64(x, m_unfired);
+	if (v.current >= 2)
+	{
+		std::string name = !x.isLoading() && m_weapon ? m_weapon->getTemplate()->getName() : std::string();
+		x.xferAsciiString(&name);
+		if (x.isLoading())
+		{
+			m_weapon.reset();
+			if (!name.empty())
+			{
+				const WeaponTemplate *tmpl = TheWeaponStore ? TheWeaponStore->findWeaponTemplate(name) : nullptr;
+				if (!tmpl)
+				{
+					throw XferException("the snapshot's FireWeaponUpdate weapon '" + name + "' is not in the WeaponStore");
+				}
+				m_weapon = std::make_unique<Weapon>(tmpl, PRIMARY_WEAPON, getObject()->logic().getFrame());
+				m_weapon->setOwnerID(getObject()->getID());
+			}
+		}
+		if (m_weapon)
+		{
+			m_weapon->xfer(x);
+		}
+	}
 }
 
 // the flood's members (their ids, paths and cursors)

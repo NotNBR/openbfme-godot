@@ -56,12 +56,15 @@
 //     DiscountPerLevel and cost - cost * d / 100 (unsigned) when d is not 0.
 // The slot's record comes with the game setup (GameNetwork/GameInfo.h SkirmishGameSlot::createAHero, the whole record on the wire) and LiveGame::load installs
 // it on every peer at the game start (RW 0x6315F5, after the computer players' AI), checked by validateHero; nothing reads a .cah file during play.
-// NOT PORTED (stop S-1226, counted): the Create-a-Hero builder screen (createahero.apt, AptCreateAHero), the lobby screen's hero choice, the award bling, the statistics
-// file, the colours and model swaps of the drawable, the Create-a-Hero map mode.
+// Remaining awards/statistics gaps are S-1403: reward bling and popups, WotR
+// results and computed statistics. Statistics files and Manager presentation
+// are client-only: GameClient/CreateAHeroStats.h; see docs/CREATE_A_HERO_STATS.md.
+// Other HERO-2 limitations remain registered under S-1226.
 
 #pragma once
 
 #include "Common/CreateAHeroRecord.h"
+#include "Common/AwardSystemManager.h"
 #include "Common/INI.h"
 
 #include <array>
@@ -151,6 +154,7 @@ class CreateAHeroSystem
 public:
 	// the global names (RW 0xBFCC08 ..)
 	std::string mapModeUpgradeName, gameModeUpgradeName, canBuildUpgradeName, commandSetTemplate; ///< +0x190 / +0x194 / +0x198 / +0x1EC
+	AwardSystemManager awardSystem;
 	std::array<std::string, 11> statNames;    ///< +0x19C .. +0x1C0
 	std::string weaponGroupName;              ///< +0x1C4
 	float specialAnimPercentChance = 0.0f;    ///< +0x1C8

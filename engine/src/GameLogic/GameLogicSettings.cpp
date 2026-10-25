@@ -148,6 +148,49 @@ void noteUnapplied(INI *ini, void *instance, void *, const void *userData)
 
 #define SEEN_DATA(bit) ((const void *)(std::uintptr_t)(bit))
 
+// lane TARGET-1, RW 0x7013C2 (the AttackPriority block's Target row): a ThingTemplate name, then an int (RW 0x42EC5E). RW resolves the template there
+// (RW 0x73AD1F: "None" -> null, an unknown name -> null with a debug line) and keeps only a found template with a name; the port keeps the name and
+// resolves it where the info is built (AttackPriorityStore::getAttackInfo), with the same skip (INFERENCE: the template store is complete by then)
+void parseAttackPriorityTarget(INI *ini, void *instance, void *, const void *)
+{
+	const std::string name = ini->getNextToken();
+	int priority = 0;
+	INI::parseInt(ini, nullptr, &priority, nullptr);
+	static_cast<GameLogicSettings::AttackPriorityDef *>(instance)->targets.emplace_back(name, priority);
+}
+
+// the AttackPriority block's field table (RW 0xC1D8EC)
+const FieldParse kAttackPriorityFields[] = {
+	{ "Default", INI::parseInt, nullptr, (int)offsetof(GameLogicSettings::AttackPriorityDef, defaultPriority) },
+	{ "Target", parseAttackPriorityTarget, nullptr, 0 },
+	{ nullptr, nullptr, nullptr, 0 }
+};
+
+// RW 0x70153B (the AIData row AttackPriority, RW 0xC1CD00): the name; a def of that name (exact compare) has its targets cleared and is parsed again,
+// else a new def (Default 1, RW 0x701323) is pushed at the list head
+void parseAttackPriorityBlock(INI *ini, void *instance, void *, const void *)
+{
+	std::vector<GameLogicSettings::AttackPriorityDef> &defs = static_cast<BlockState *>(instance)->values.attackPriorityDefs;
+	const std::string name = ini->getNextToken();
+	GameLogicSettings::AttackPriorityDef *def = nullptr;
+	for (GameLogicSettings::AttackPriorityDef &d : defs)
+	{
+		if (d.name == name)
+		{
+			def = &d;
+			break;
+		}
+	}
+	if (!def)
+	{
+		defs.insert(defs.begin(), GameLogicSettings::AttackPriorityDef());
+		def = &defs.front();
+		def->name = name;
+	}
+	def->targets.clear(); // RW 0x75E707
+	ini->initFromINI(def, kAttackPriorityFields);
+}
+
 const FieldParse kGameDataFields[] = {
 	{ "TimeAfterDamageUntilRepairAllowed", parseNoting<INI::parseUnsignedInt>, SEEN_DATA(SEEN_REPAIR_DELAY), (int)offsetof(BlockState, values.timeAfterDamageUntilRepairAllowed) },
 	{ "ForceModelsToFollowTimeOfDay", parseNoting<INI::parseBool>, SEEN_DATA(SEEN_TOD), (int)offsetof(BlockState, values.forceModelsToFollowTimeOfDay) },
@@ -197,6 +240,8 @@ const FieldParse kGameDataFields[] = {
 	{ "StandardPublicBone", INI::parseAsciiStringVectorAppend, nullptr, (int)offsetof(BlockState, values.standardPublicBones) },
 	// lane SPELL-2: SpecialPowerViewObject (row RW 0xC006C0, parseAsciiString RW 0x42EE5E, + 0xBA4): the reveal object of RW 0x896FD9
 	{ "SpecialPowerViewObject", INI::parseAsciiString, nullptr, (int)offsetof(BlockState, values.specialPowerViewObject) },
+	// lane NUGGET-1: GenericDamageFieldName (row RW 0xBFF5D0, parseAsciiString RW 0x42EE5E, + 0x14): DamageFieldNugget's object (RW 0x90F600)
+	{ "GenericDamageFieldName", INI::parseAsciiString, nullptr, (int)offsetof(BlockState, values.genericDamageFieldName) },
 	// lane OWNERFIX-1: DefaultUnitHealingBuffFxList (row RW 0xBFF8C0, parseAsciiString RW 0x42EE5E, + 0x9DC): the healing glow of a healed unit (ActiveBody)
 	{ "DefaultUnitHealingBuffFxList", INI::parseAsciiString, nullptr, (int)offsetof(BlockState, values.defaultUnitHealingBuffFxList) },
 	// lane STEALTH-1: the invisibility rows (RW 0xC00C30 CamouflageDetectorObjectFilter + 0xEB4, RW 0xC01070 ReinvisibityDelay + 0x11CC, RW 0xC01080 / 0xC01090
@@ -237,6 +282,17 @@ const FieldParse kAIDataFields[] = {
 	{ "NarrowPassageScale", parseNoting<INI::parseReal>, 0, (int)offsetof(BlockState, values.narrowPassageScale) },
 	{ "WaitForOthers", parseNoting<INI::parseBool>, 0, (int)offsetof(BlockState, values.waitForOthers) },
 	{ "UseFormations", parseNoting<INI::parseBool>, 0, (int)offsetof(BlockState, values.useFormations) },
+	// lane STEALTHFLY1: MinFlightHeight (row RW 0xC1CE60 parseReal RW 0x42ED00, AIData + 0xB0): the aerial path's ground floor (RW 0x777ED7)
+	{ "MinFlightHeight", parseNoting<INI::parseReal>, 0, (int)offsetof(BlockState, values.minFlightHeight) },
+	// lane TARGET-1: the target search's rows (RW 0xC1CB60 ForceIdleMSEC parseDurationUnsignedInt + 0x14; AttackPriorityDistanceModifier parseReal + 0x54;
+	// AttackUsesLineOfSight / AttackIgnoreInsignificantBuildings parseBool + 0x67 / + 0x68; ArtilleryMaxFriendlyFire parsePercentToReal + 0xF0; AttackPriority
+	// RW 0x70153B, row RW 0xC1CD00)
+	{ "ForceIdleMSEC", parseNoting<INI::parseDurationUnsignedInt>, 0, (int)offsetof(BlockState, values.forceIdleFrames) },
+	{ "AttackPriorityDistanceModifier", parseNoting<INI::parseReal>, 0, (int)offsetof(BlockState, values.attackPriorityDistanceModifier) },
+	{ "AttackUsesLineOfSight", parseNoting<INI::parseBool>, 0, (int)offsetof(BlockState, values.attackUsesLineOfSight) },
+	{ "AttackIgnoreInsignificantBuildings", parseNoting<INI::parseBool>, 0, (int)offsetof(BlockState, values.attackIgnoreInsignificantBuildings) },
+	{ "ArtilleryMaxFriendlyFire", parseNoting<INI::parsePercentToReal>, 0, (int)offsetof(BlockState, values.artilleryMaxFriendlyFire) },
+	{ "AttackPriority", parseAttackPriorityBlock, nullptr, 0 },
 	{ nullptr, noteUnapplied, nullptr, 0 }
 };
 const FieldParse kMultiplayerFields[] = {
@@ -245,6 +301,8 @@ const FieldParse kMultiplayerFields[] = {
 	{ "InitialCreditsMedium", parseNoting<INI::parseUnsignedInt>, SEEN_DATA(SEEN_CREDITS0 << 2), (int)offsetof(BlockState, values.initialCredits[2]) },
 	{ "InitialCreditsHigh", parseNoting<INI::parseUnsignedInt>, SEEN_DATA(SEEN_CREDITS0 << 3), (int)offsetof(BlockState, values.initialCredits[3]) },
 	{ "InitialCreditsVeryHigh", parseNoting<INI::parseUnsignedInt>, SEEN_DATA(SEEN_CREDITS0 << 4), (int)offsetof(BlockState, values.initialCredits[4]) },
+	// lane CHAT-1: MaxBeaconsPerPlayer (the MultiplayerSettings row of table RW 0xC2F768, parseInt RW 0x42EC5E, + 0x18; read by RW 0x77C6C6 / 0x81F8D8)
+	{ "MaxBeaconsPerPlayer", INI::parseInt, nullptr, (int)offsetof(BlockState, values.maxBeaconsPerPlayer) },
 	{ nullptr, noteUnapplied, nullptr, 0 }
 };
 
@@ -277,10 +335,19 @@ std::uint32_t packRgb(const RGBColor &c)
 class Load
 {
 public:
-	Load(ArchiveFileSystem *fs, const GameLogicSettings &start)
+	// `aiDataOnly` (a map's map.ini / solo.ini): AIData is the one real block, every other keyword a recording stub
+	Load(ArchiveFileSystem *fs, const GameLogicSettings &start, bool aiDataOnly = false)
 	{
 		m_env.fileSystem = fs;
 		m_state.values = start;
+		if (aiDataOnly)
+		{
+			// recording stubs only: the world's own map.ini pass parses the Weapon / Locomotor / Armor / DamageFX / FX blocks into their stores, a second
+			// parse here would apply them again
+			RegisterRecordingBlockStubs(m_env.blocks, m_recorder, { "AIData" }, StubExtent::Lenient, false);
+			reg("AIData", kAIDataFields, 2u);
+			return;
+		}
 		RegisterRecordingBlockStubs(m_env.blocks, m_recorder, { "GameData", "AIData", "MultiplayerSettings", "MultiplayerColor" }, StubExtent::Lenient);
 		reg("GameData", kGameDataFields, 1u);
 		reg("AIData", kAIDataFields, 2u);
@@ -497,6 +564,42 @@ bool GameLogicSettingsLoader::load(ArchiveFileSystem &fs, GameLogicSettings &out
 	return true;
 }
 
+bool GameLogicSettingsLoader::applyMapAIData(ArchiveFileSystem &fs, const std::string &mapDir, GameLogicSettings &out, std::vector<std::string> &errors)
+{
+	// RW 0x627224 / 0x627290: the map directory's map.ini, then its solo.ini, each through the INI table (load type 2); their AIData block writes TheAI's data
+	// (+ 0x18) like aidata.ini's, field by field. Only the AIData block is read here: the world applies the object blocks (RetailObjectWorld::applyMapIni) and
+	// the rest stays stop S-116
+	bool ok = true;
+	for (const char *file : { "map.ini", "solo.ini" })
+	{
+		const std::string path = mapDir + "\\" + file;
+		if (!fs.doesFileExist(path))
+		{
+			continue;
+		}
+		std::vector<std::uint8_t> bytes;
+		std::string error;
+		if (!fs.readFile(path, bytes, &error))
+		{
+			errors.push_back(path + ": " + error);
+			ok = false;
+			continue;
+		}
+		Load l(&fs, out, true);
+		if (!l.text(path, std::string(bytes.begin(), bytes.end()), &error))
+		{
+			errors.push_back(error);
+			ok = false;
+			continue;
+		}
+		std::set<std::string> unapplied = out.unappliedFields;
+		unapplied.insert(l.state().unapplied.begin(), l.state().unapplied.end());
+		out = l.state().values;
+		out.unappliedFields = std::move(unapplied);
+	}
+	return ok;
+}
+
 void GameLogicSettings::crc(StateHasher &h) const
 {
 	h.addBool(enableRepulsors);
@@ -516,7 +619,28 @@ void GameLogicSettings::crc(StateHasher &h) const
 	h.addFloat(narrowPassageScale);
 	h.addBool(waitForOthers);
 	h.addBool(useFormations);
+	if (minFlightHeight != FLT_MAX)
+	{
+		h.addFloat(minFlightHeight); // lane STEALTHFLY1: only a map that sets it (the hash of every other game is unchanged)
+	}
 	h.addFloat(groupMoveClickToGatherAreaFactor);
+	h.addU32(forceIdleFrames); // lane TARGET-1
+	h.addFloat(attackPriorityDistanceModifier);
+	h.addBool(attackUsesLineOfSight);
+	h.addBool(attackIgnoreInsignificantBuildings);
+	h.addFloat(artilleryMaxFriendlyFire);
+	h.addU32((std::uint32_t)attackPriorityDefs.size());
+	for (const AttackPriorityDef &d : attackPriorityDefs)
+	{
+		h.addString(d.name);
+		h.addI32(d.defaultPriority);
+		h.addU32((std::uint32_t)d.targets.size());
+		for (const auto &t : d.targets)
+		{
+			h.addString(t.first);
+			h.addI32(t.second);
+		}
+	}
 	h.addBool(forceModelsToFollowTimeOfDay);
 	h.addBool(forceModelsToFollowWeather);
 	h.addBool(bodyThresholdsLoaded);

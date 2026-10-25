@@ -19,6 +19,9 @@
 #include "Common/INIException.h"
 
 #include "GameClient/AptCanvas.h"
+#include "GameClient/GUI/AptScreens/AptImageMode.h"
+#include <godot_cpp/classes/shader.hpp>
+#include <godot_cpp/classes/shader_material.hpp>
 #include "GameClient/FontSubstitution.h"
 #include "GameClient/GdiFontMetrics.h"
 #include "GameClient/GUI/AptGadgetLayer.h"
@@ -27,6 +30,7 @@
 #include "GameClient/GUI/AptScreens/AptTimeLine.h"
 #include "GameClient/GUI/CursorTooltip.h"
 #include "GameClient/GUI/AptScreens/AptDisconnectScreen.h"
+#include "GameClient/GUI/AptScreens/AptInGameChat.h"
 #include "GameClient/GUI/AptScreens/AptSaveLoad.h"
 #include "GameClient/GUI/SaveLoadInfo.h"
 #include "GameClient/GUI/AptScreens/AptLanLobby.h"
@@ -43,6 +47,8 @@
 #include "GameClient/GUI/GameTextSource.h"
 #include "GameClient/GUI/LoadScreenInfo.h"
 #include "GameClient/GUI/PlayerStatusInfo.h"
+#include "GameClient/GUI/AptScreens/AptObjectivesMenu.h"
+#include "GameClient/GUI/AptScreens/InGameNotificationBox.h"
 #include "GameClient/GUI/Shell/Shell.h"
 #include "GameClient/GUI/Shell/ShellLayering.h"
 #include "GameClient/GUI/StillImageLoadScreen.h"
@@ -70,6 +76,7 @@
 #include "GameClient/GUI/AptScreens/AptOnlineHub.h"
 #include "GameClient/GameRecords.h"
 #include "GameNetwork/PlatformApiClient.h"
+#include "GameClient/GUI/AptScreens/AptMessenger.h"
 #include "GameClient/GUI/AptMessageBox.h"
 #include "GameClient/GUI/ProfileSwitch.h"
 #include "GameNetwork/OnlineLobbyClient.h"
@@ -83,6 +90,8 @@
 #include <godot_cpp/classes/random_number_generator.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/os.hpp>
+#include <godot_cpp/classes/dir_access.hpp>
+#include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/resource_loader.hpp>
 #include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/font_variation.hpp>
@@ -97,6 +106,7 @@
 #include <godot_cpp/classes/theme_db.hpp>
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/viewport_texture.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
@@ -161,6 +171,12 @@ std::string compact(const std::string &s)
 // lane UI-2: a texture by UV corners in the port's top-row-first textures (a pair with lo > hi mirrors that axis): a quad with explicit UVs
 void addTextureUV(RenderingServer *rs, RID item, const Rect2 &dest, const Ref<Texture2D> &texture, const float uvLo[2], const float uvHi[2], const Color &colour)
 {
+	// lane ONLINEMENU-1: a quad without area draws nothing, and Godot's canvas refuses it ("Invalid polygon data, triangulation failed", every frame:
+	// 1104 lines in the friends video's log once the FRIENDS page's entry had the focus)
+	if (!(std::fabs(dest.size.x) > 0.0f && std::fabs(dest.size.y) > 0.0f))
+	{
+		return;
+	}
 	PackedVector2Array points, uvs;
 	PackedColorArray colours;
 	const Vector2 p0 = dest.position, p1 = dest.position + dest.size;
@@ -572,6 +588,7 @@ const char *shellActionName(ShellAction a)
 		case ShellAction::ToggleQuitMenu: return "ToggleQuitMenu";
 		case ShellAction::PalantirObjectives: return "PalantirObjectives"; // lane PLAY-1
 		case ShellAction::TributeReturnToGame: return "TributeReturnToGame";
+		case ShellAction::ObjectivesReturnToGame: return "ObjectivesReturnToGame"; // lane CAMPUI-1
 		case ShellAction::CreateAHeroExit: return "CreateAHeroExit";
 		case ShellAction::OnlineGameStart: return "OnlineGameStart"; // lane ONLINE-4
 		case ShellAction::SaveGameFile: return "SaveGameFile"; // lane SAVE-2
@@ -671,12 +688,19 @@ struct ShellMode
 	std::unique_ptr<ShellCursorTooltip> cursorTooltip; // lane HOVER-1: the menus' tool tips (GuiFX.apt's ToolTip, CursorTooltip.h)
 	std::unique_ptr<AptDisconnectScreen> disconnect; // lane MP-2: DisconnectScreen.apt while the disconnect screen is shown
 	Array disconnectActions;                         // lane MP-2: the buttons pressed, for take_disconnect_actions
+	InGameChat chatModel;                            // lane CHAT-1: the chat window's draft between opens
+	std::unique_ptr<AptInGameChat> chat;             // lane CHAT-1: InGameChat.apt while the chat window is up
+	Array chatSends;                                 // lane CHAT-1: the lines Send took, for ingame_chat_update
 	SaveLoadInfo saveLoad;                           // lane MP-2: what SaveLoad.apt lists
 	QuitMenuContext quitMenuContext;    // lane END-2: the game QuitMenu.apt is opened over
 	CampaignMenuContext campaignMenu;   // lane CAMPSAVE-1: what CampaignMenu.apt shows
 	std::unique_ptr<AptQuitMenu> quitMenu; // lane END-2: QuitMenu.apt, an in-game overlay (RW 0x75E3B7), not on the shell stack
+	std::unique_ptr<InGameNotificationBoxMovieClip> notificationBox; // lane CAMPUI-1: InGameNotificationBox.apt (InGameUI + 0x9CC), a game's level
+	NotificationBoxSettings notificationSettings;                     // lane CAMPUI-1: Data\INI\InGameNotificationBox.ini
+	bool notificationSettingsLoaded = false;
 	ShellEnvironment environment;
 	PlayerStatusInfo playerStatus; // lane HUD-5: the players screen's Status rows
+	ObjectivesScreenInfo objectivesScreen; // lane CAMPUI-1: what Objectives.apt lists
 	OptionPreferences options; // lane UI-2: the user data folder's Options.ini
 	GlobalLanguage language;   // lane UI-4: language.ini's Language block (the credits roll's fonts)
 	GameLODManager gameLOD;    // lane PLAY-2: GameLOD.ini's StaticGameLOD presets (the Options screen's advanced page); lane OPTS-2: the level in effect
@@ -712,11 +736,13 @@ struct ShellMode
 	{
 		nav.reset();
 		disconnect.reset();
+		chat.reset(); // lane CHAT-1
 		if (shell)
 		{
 			shell->clearOverlay(); // lane OPTS-6
 		}
 		quitMenu.reset();
+		notificationBox.reset(); // lane CAMPUI-1
 		cursorTooltip.reset();
 		guiFX.reset();
 		shell.reset();
@@ -730,6 +756,10 @@ struct ShellMode
 // ---------------------------------------------------------------------------------------------------------------------------------
 struct AptMenuPlayer::Impl
 {
+	bool cahGuardShown = false;   ///< lane CAHPIC-1: the last picture showed Create-a-Hero's RenderPictureGuard clip
+	bool cahMapShown = false;     ///< lane CAHPIC-1: ... and its DrawMapComponent clip (the 3D view)
+	bool cahPicturePending = false; ///< lane CAHPIC-1: a picture is taken from the next frame drawn
+	std::u16string cahPictureName;  ///< lane CAHPIC-1: its file name (no extension)
 	Ref<RetailFileSystem> fs;
 	Ref<RetailFileSystem> presentationFs;
 	AptView3DViewers view3d; // lane UI-2: the View3D render objects (the end screen's rings, the menu frame)
@@ -749,6 +779,7 @@ struct AptMenuPlayer::Impl
 	GameTextTable strings;
 	FontSubstitution fonts;
 	std::map<std::string, Ref<ImageTexture>> godotTextures;
+	std::map<int, Ref<ShaderMaterial>> imageModes;
 	AptImageReplacements imageReplacements;
 	std::map<std::string, Ref<Texture2D>> brandTextures;
 	std::map<std::string, Ref<FontFile>> fontByName; // lower-cased family name and file stem
@@ -786,12 +817,31 @@ struct AptMenuPlayer::Impl
 	std::set<std::string> movieErrors;
 	struct NativeSlot
 	{
-		size_t op;   ///< index in drawnList.ops
-		size_t item; ///< index in items
+		size_t op;   ///< index in the segment's ops (drawnList.ops[segment.opBegin + op])
+		size_t item; ///< index in the segment's items
 		RID parent;
 	};
-	std::vector<NativeSlot> nativeSlots;
-	std::vector<NativeSlot> callbackSlots; // lane UI-4: the clips an engine render callback draws (WindowManager::renderCallback)
+	// lane HUDREDRAW-1: the drawn list's segments (AptCanvasSegments: an op, or a mask bracket), each under a canvas item of its own (a child of the player's
+	// item after the backdrop, in list order): a frame whose list changed in some segments draws those again and keeps the others' items
+	struct Segment
+	{
+		int firstLevel = 0, lastLevel = 0;
+		size_t opBegin = 0, opEnd = 0; ///< the range in drawnList.ops
+		RID parent;                    ///< a child of the player's item (draw index 1 + its place: the backdrop is 0)
+		std::vector<RID> items;        ///< the items drawn under parent, in creation order (their draw index)
+		std::vector<NativeSlot> nativeSlots;
+		std::vector<NativeSlot> callbackSlots; // lane UI-4: the clips an engine render callback draws (WindowManager::renderCallback)
+	};
+	std::vector<Segment> segments;
+	struct LevelCounts
+	{
+		std::string movie;
+		std::uint64_t redrawnFrames = 0, keptFrames = 0; ///< rebuilds that drew some of the level's segments again / kept all of them
+		std::uint64_t segmentsRedrawn = 0;               ///< its segments drawn again, summed over the rebuilds
+		std::uint64_t segments = 0;                      ///< in the last rebuild
+	};
+	std::map<int, LevelCounts> levelCounts; // by the segment's first level
+	std::uint64_t partialFrames = 0;        // rebuilds that drew some segments again and kept the others
 	// lane MENU-1: the canvas item at each gadget component's placeholder depth (drawCanvas): drawGadgets puts the window's commands under it, so the
 	// movie's later content (a popup box) covers the gadget as in retail, which draws the window inside the movie's render (RW 0x814BEC -> 0x6C1B52)
 	std::map<const GameWindow *, RID> gadgetAnchors;
@@ -1242,6 +1292,8 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("gadget_draw_list"), &AptMenuPlayer::gadget_draw_list); // lane OPTS-4
 	ClassDB::bind_method(D_METHOD("set_tribute_world", "world"), &AptMenuPlayer::set_tribute_world);
 	ClassDB::bind_method(D_METHOD("set_player_status", "state"), &AptMenuPlayer::set_player_status); // lane HUD-5
+	ClassDB::bind_method(D_METHOD("set_objectives_screen", "state"), &AptMenuPlayer::set_objectives_screen); // lane CAMPUI-1
+	ClassDB::bind_method(D_METHOD("notification_box", "request"), &AptMenuPlayer::notification_box); // lane CAMPUI-1
 	ClassDB::bind_method(D_METHOD("shell_top_level"), &AptMenuPlayer::shell_top_level);
 	ClassDB::bind_method(D_METHOD("shell_invoke", "level", "function", "args"), &AptMenuPlayer::shell_invoke, DEFVAL(PackedStringArray()));
 	ClassDB::bind_method(D_METHOD("take_new_game"), &AptMenuPlayer::take_new_game);
@@ -1251,6 +1303,14 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("end_game_screen", "request"), &AptMenuPlayer::end_game_screen); // lane END-1
 	ClassDB::bind_method(D_METHOD("disconnect_screen", "state"), &AptMenuPlayer::disconnect_screen); // lane MP-2
 	ClassDB::bind_method(D_METHOD("take_disconnect_actions"), &AptMenuPlayer::take_disconnect_actions);
+	ClassDB::bind_method(D_METHOD("ingame_chat_open", "mode", "receivers"), &AptMenuPlayer::ingame_chat_open); // lane CHAT-1
+	ClassDB::bind_method(D_METHOD("ingame_chat_update"), &AptMenuPlayer::ingame_chat_update);
+	ClassDB::bind_method(D_METHOD("ingame_chat_close"), &AptMenuPlayer::ingame_chat_close);
+	ClassDB::bind_method(D_METHOD("ingame_chat_has_keys"), &AptMenuPlayer::ingame_chat_has_keys);
+	ClassDB::bind_method(D_METHOD("ingame_chat_type", "text"), &AptMenuPlayer::ingame_chat_type);
+	ClassDB::bind_method(D_METHOD("ingame_chat_command", "command"), &AptMenuPlayer::ingame_chat_command);
+	ClassDB::bind_method(D_METHOD("disconnect_screen_chat", "line"), &AptMenuPlayer::disconnect_screen_chat);
+	ClassDB::bind_method(D_METHOD("disconnect_screen_type", "text"), &AptMenuPlayer::disconnect_screen_type);
 	ClassDB::bind_method(D_METHOD("set_save_load", "info"), &AptMenuPlayer::set_save_load);
 	ClassDB::bind_method(D_METHOD("set_campaign_menu", "content"), &AptMenuPlayer::set_campaign_menu); // lane CAMPSAVE-1
 	ClassDB::bind_method(D_METHOD("unlock_bonus_campaign"), &AptMenuPlayer::unlock_bonus_campaign);
@@ -1265,6 +1325,18 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("online_deliver", "id", "status", "body", "error"), &AptMenuPlayer::online_deliver);
 	ClassDB::bind_method(D_METHOD("online_status"), &AptMenuPlayer::online_status);
 	ClassDB::bind_method(D_METHOD("online_apply", "spec"), &AptMenuPlayer::online_apply);
+	ClassDB::bind_method(D_METHOD("online_social_status"), &AptMenuPlayer::online_social_status);
+	ClassDB::bind_method(D_METHOD("online_social_events"), &AptMenuPlayer::online_social_events);
+	ClassDB::bind_method(D_METHOD("online_social_apply", "spec"), &AptMenuPlayer::online_social_apply);
+	ClassDB::bind_method(D_METHOD("online_messenger_sync", "spec"), &AptMenuPlayer::online_messenger_sync);
+	ClassDB::bind_method(D_METHOD("online_friends_button", "label"), &AptMenuPlayer::online_friends_button); // lane ONLINEMENU-1
+	ClassDB::bind_method(D_METHOD("online_ask", "key", "title", "text"), &AptMenuPlayer::online_ask);
+	ClassDB::bind_method(D_METHOD("online_answers"), &AptMenuPlayer::online_answers);
+	ClassDB::bind_method(D_METHOD("online_asking", "key"), &AptMenuPlayer::online_asking);
+	ClassDB::bind_method(D_METHOD("online_friends_page_show", "spec"), &AptMenuPlayer::online_friends_page_show);
+	ClassDB::bind_method(D_METHOD("online_friends_page_close"), &AptMenuPlayer::online_friends_page_close);
+	ClassDB::bind_method(D_METHOD("online_friends_page_events"), &AptMenuPlayer::online_friends_page_events);
+	ClassDB::bind_method(D_METHOD("online_friends_page_state"), &AptMenuPlayer::online_friends_page_state);
 	ClassDB::bind_method(D_METHOD("online_start_failed", "error"), &AptMenuPlayer::online_start_failed); // Sol r1
 	ClassDB::bind_method(D_METHOD("online_game_failed", "text"), &AptMenuPlayer::online_game_failed); // lane ONLINEUX-1
 	ClassDB::bind_method(D_METHOD("online_set_counts", "counts"), &AptMenuPlayer::online_set_counts); // lane ONLINEUX-1
@@ -1284,6 +1356,7 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("set_create_a_hero", "world", "profile_dir"), &AptMenuPlayer::set_create_a_hero); // lane CAH-1
 	ClassDB::bind_method(D_METHOD("get_create_a_hero_view"), &AptMenuPlayer::get_create_a_hero_view);
 	ClassDB::bind_method(D_METHOD("get_create_a_hero_heroes"), &AptMenuPlayer::get_create_a_hero_heroes);
+	ClassDB::bind_method(D_METHOD("set_create_a_hero_portrait", "image"), &AptMenuPlayer::set_create_a_hero_portrait);
 	ClassDB::bind_method(D_METHOD("set_create_a_hero_view_texture", "texture"), &AptMenuPlayer::set_create_a_hero_view_texture);
 	ClassDB::bind_method(D_METHOD("create_a_hero_save_folder", "rotwk_install"), &AptMenuPlayer::create_a_hero_save_folder); // lane CAH-2
 	ClassDB::bind_method(D_METHOD("create_a_hero_type_name", "name"), &AptMenuPlayer::create_a_hero_type_name);
@@ -1376,6 +1449,89 @@ void AptMenuPlayer::_process(double delta)
 	render(false);
 	m->view3d.advance(); // lane UI-2
 	advanceMovies(delta * 1000.0); // lane CAMP-2
+	takeCreateAHeroPicture(); // lane CAHPIC-1
+}
+
+void AptMenuPlayer::takeCreateAHeroPicture()
+{
+	// lane CAHPIC-1: Create-a-Hero's TAKE PICTURE (AptCreateAHero.h). RotWK draws the 3D view, then (OnTakePicture having armed it) saves the window's
+	// picture (TheDisplay->takeScreenShot, RW 0x4474A0: a 24-bit .bmp named for the hero in the pictures folder, RW 0x6427E6: My Pictures + the game text
+	// APPDATA:PictureFolder). Here the picture is the window's frame the armed draw produced, read on the next frame (the viewport's texture is the frame
+	// last drawn), saved as PNG (the presentation format the F12 screenshot already uses, GodotInGameHud) in the system's pictures folder + the same
+	// subfolder; the box names the folder + the file name without its extension, as retail's does
+	AptCreateAHero *cah = m->shell && m->shell->shell ? dynamic_cast<AptCreateAHero *>(m->shell->shell->findScreenByFilename("CreateAHero.apt")) : nullptr;
+	if (!cah)
+	{
+		m->cahPicturePending = false;
+		return;
+	}
+	if (m->cahPicturePending)
+	{
+		m->cahPicturePending = false;
+		std::string error;
+		String shown;
+		const String base = OS::get_singleton()->get_system_dir(OS::SYSTEM_DIR_PICTURES);
+		const bool headless = DisplayServer::get_singleton() && DisplayServer::get_singleton()->get_name() == String("headless");
+		Viewport *vp = get_viewport();
+		Ref<Image> image = (!headless && vp && vp->get_texture().is_valid()) ? vp->get_texture()->get_image() : Ref<Image>();
+		std::u16string sub;
+		if (!m->shell->environment.gameText || !m->shell->environment.gameText->fetch("APPDATA:PictureFolder", sub))
+		{
+			error = "the game text APPDATA:PictureFolder is missing";
+		}
+		else if (base.is_empty())
+		{
+			error = "the system has no pictures folder";
+		}
+		else if (image.is_null())
+		{
+			error = "no picture was drawn (a run without a window)";
+		}
+		else
+		{
+			const String folder = base.path_join(toGodot(loadScreenU16ToUtf8(sub)));
+			const String name = toGodot(loadScreenU16ToUtf8(m->cahPictureName));
+			if (DirAccess::make_dir_recursive_absolute(folder) != OK && !DirAccess::dir_exists_absolute(folder))
+			{
+				error = "the folder " + toNative(folder) + " cannot be made";
+			}
+			else
+			{
+				const String file = folder.path_join(name + String(".png"));
+				const Error err = image->save_png(file);
+				if (err != OK)
+				{
+					error = "saving " + toNative(file) + " failed (" + toNative(UtilityFunctions::error_string(err)) + ")";
+				}
+				else
+				{
+					shown = folder.path_join(name);
+					UtilityFunctions::print("CAH picture saved: ", file);
+				}
+			}
+		}
+		const Char16String wide = shown.utf16();
+		cah->pictureTaken(std::u16string(wide.get_data(), (size_t)wide.length()), error);
+		m->dirty = true;
+		return;
+	}
+	if (m->cahGuardShown)
+	{
+		cah->pictureGuardDrawn(); // RW 0x919DA2: one per frame the guard clip is drawn
+	}
+	if (cah->takePicturePending() && m->cahMapShown)
+	{
+		const Dictionary now = Time::get_singleton()->get_datetime_dict_from_system(false); // GetLocalTime
+		AptCreateAHero::PictureTime t;
+		t.year = (int)now["year"];
+		t.month = (int)now["month"];
+		t.day = (int)now["day"];
+		t.hour = (int)now["hour"];
+		t.minute = (int)now["minute"];
+		t.second = (int)now["second"];
+		m->cahPictureName = cah->beginPicture(t);
+		m->cahPicturePending = true;
+	}
 }
 
 void AptMenuPlayer::advanceMovies(double deltaMs)
@@ -2025,6 +2181,7 @@ Dictionary AptMenuPlayer::get_backdrop_state() const
 	// lane CAMP-2: what is on screen behind the shell's movies, read from the canvas as drawn (not from the shell's flags)
 	Dictionary d;
 	d["backdrop_image"] = toGodot(m->drawnBackdrop);
+	d["model_animation_frames"] = m->view3d.animationFrames();
 	const int background = m->shell && m->shell->wm ? m->shell->wm->backgroundLevel() : -1;
 	d["background_level"] = (int64_t)background;
 	const auto it = m->levelCommands.find(background);
@@ -2310,6 +2467,56 @@ OpenBFMEPageRow pageRowOf(const Dictionary &d)
 	return r;
 }
 
+// lane ONLINEMENU-1: a page spec from the device's Dictionary (the Options screen's OpenBFME page and the online FRIENDS page)
+OpenBFMEPageSpec pageSpecOf(const Dictionary &spec)
+{
+	OpenBFMEPageSpec s;
+	s.subtitle = u16Of(spec.get("subtitle", ""));
+	s.tabsHeader = u16Of(spec.get("tabs_header", ""));
+	const Array tabs = spec.get("tabs", Array());
+	for (int64_t i = 0; i < tabs.size() && i < 16; ++i)
+	{
+		s.tabs.push_back(u16Of(tabs[i]));
+	}
+	s.tab = (int)spec.get("tab", 0);
+	s.panelHeader = u16Of(spec.get("panel_header", ""));
+	s.note = u16Of(spec.get("note", ""));
+	const Array rows = spec.get("rows", Array());
+	for (int64_t i = 0; i < rows.size() && i < 64; ++i)
+	{
+		s.rows.push_back(pageRowOf(rows[i]));
+	}
+	if (spec.has("list"))
+	{
+		s.hasList = true;
+		const Array list = spec["list"];
+		for (int64_t i = 0; i < list.size() && i < 500; ++i)
+		{
+			const Array pair = list[i];
+			s.list.emplace_back(u16Of(pair.size() > 0 ? pair[0] : Variant("")), u16Of(pair.size() > 1 ? pair[1] : Variant("")));
+		}
+	}
+	s.listFromRow = (int)spec.get("list_from_row", -1);
+	s.listActivates = (bool)spec.get("list_activates", false);
+	return s;
+}
+
+Array pageEventsOf(const std::vector<OpenBFMEPageEvent> &events)
+{
+	Array out;
+	static const char *kinds[] = { "value", "tab", "cancel", "reset", "accept", "entry", "release", "submit", "list_select", "list_activate" };
+	for (const OpenBFMEPageEvent &e : events)
+	{
+		Dictionary d;
+		d["kind"] = kinds[(int)e.kind];
+		d["key"] = toGodot(e.key);
+		d["value"] = e.value;
+		d["text"] = toGodot(u16ToUtf8(e.text));
+		out.push_back(d);
+	}
+	return out;
+}
+
 // lane OPTS-5: a row as GDScript describes them (pageRowOf's input)
 Dictionary pageRowDict(const OpenBFMEPageRow &r)
 {
@@ -2436,16 +2643,7 @@ Array AptMenuPlayer::openbfme_page_events()
 	{
 		return out;
 	}
-	static const char *kinds[] = { "value", "tab", "cancel", "reset", "accept", "entry", "release" };
-	for (const OpenBFMEPageEvent &e : o->takeExtensionEvents())
-	{
-		Dictionary d;
-		d["kind"] = kinds[(int)e.kind];
-		d["key"] = toGodot(e.key);
-		d["value"] = e.value;
-		out.push_back(d);
-	}
-	return out;
+	return pageEventsOf(o->takeExtensionEvents());
 }
 
 Dictionary AptMenuPlayer::openbfme_page_state() const
@@ -2668,6 +2866,154 @@ Dictionary AptMenuPlayer::font_metrics(const String &name, int point_size, bool 
 	return r;
 }
 
+// lane CAMPUI-1: the in-game notification box (GUI/AptScreens/InGameNotificationBox.h). Requests (kind): "begin" (the game's box: the movie in a level,
+// the INI read once; RW 0x6A6AAD creates it with InGameUI), "end", "show" { type, label, seconds, override (bool), override_image, location (0 main,
+// 1 spellStore, 2 objectives), opaque } (RW 0x7C5507 -> RW 0x69BFAE -> Open RW 0x8EB66D), "update" { now_ms, letterboxed } (RW 0x8EB9B4: answers the
+// open audio of a notice that opened, "" none), "enable" { on } (RW 0x8EB2BA), "close" (DoClose RW 0x8EB2D8); every answer has ok, error, state,
+// active (the shown notice's title / message, UTF-8), level
+Dictionary AptMenuPlayer::notification_box(const Dictionary &request)
+{
+	Dictionary out;
+	out["ok"] = false;
+	if (!m->shell)
+	{
+		out["error"] = "not in shell mode";
+		return out;
+	}
+	ShellMode &sm = *m->shell;
+	const std::string kind = toNative(String(request.get("kind", "")));
+	auto u8 = [](const std::u16string &t) { return u16ToUtf8(t); };
+	if (kind == "begin")
+	{
+		if (!sm.notificationSettingsLoaded)
+		{
+			std::string error;
+			if (!sm.environment.fileSystem || !NotificationBoxSettings::load(*sm.environment.fileSystem, sm.notificationSettings, &error))
+			{
+				out["error"] = toGodot(sm.environment.fileSystem ? error : std::string("no file system"));
+				return out;
+			}
+			sm.notificationSettingsLoaded = true;
+		}
+		if (!sm.notificationBox)
+		{
+			sm.notificationBox = std::make_unique<InGameNotificationBoxMovieClip>(*sm.wm, *sm.shell, *sm.metrics);
+			if (sm.notificationBox->level() < 0)
+			{
+				sm.notificationBox.reset();
+				out["error"] = "InGameNotificationBox.apt could not be loaded";
+				return out;
+			}
+			for (int i = 0; i < 30 && !sm.wm->isAptWindowLoaded(sm.notificationBox->level()); ++i)
+			{
+				tick(1.0 / 30.0); // the window manager loads a movie over its first updates
+			}
+			sm.notificationBox->setEnabled(true); // the game starts with its control bar shown (ShowControlBar RW 0x8046A1 enables the box)
+		}
+	}
+	else if (kind == "end")
+	{
+		sm.notificationBox.reset();
+		out["ok"] = true;
+		return out;
+	}
+	if (!sm.notificationBox)
+	{
+		out["error"] = "no notification box (begin first)";
+		return out;
+	}
+	InGameNotificationBoxMovieClip &box = *sm.notificationBox;
+	if (kind == "show")
+	{
+		InGameNotificationBoxMovieClip::Notice n;
+		if (!InGameNotificationBoxMovieClip::makeNotice(sm.notificationSettings, sm.environment.gameText, toNative(String(request.get("type", ""))),
+				toNative(String(request.get("label", ""))), (int)(int64_t)request.get("seconds", (int64_t)0), (bool)request.get("override", false),
+				toNative(String(request.get("override_image", ""))), n))
+		{
+			out["error"] = "unknown notification type '" + String(request.get("type", "")) + "' (RW 0x621E3A: nothing is shown)";
+			out["state"] = box.state();
+			return out;
+		}
+		n.location = (int)(int64_t)request.get("location", (int64_t)0);
+		n.opaque = (bool)request.get("opaque", false);
+		box.open(n);
+	}
+	else if (kind == "update")
+	{
+		out["audio"] = toGodot(box.update((unsigned)(int64_t)request.get("now_ms", (int64_t)0), (bool)request.get("letterboxed", false)));
+	}
+	else if (kind == "enable")
+	{
+		box.setEnabled((bool)request.get("on", true));
+	}
+	else if (kind == "close")
+	{
+		box.doClose();
+	}
+	else if (kind != "begin" && kind != "state")
+	{
+		out["error"] = "not a notification box request: " + String(kind.c_str());
+		return out;
+	}
+	out["ok"] = true;
+	out["state"] = box.state();
+	out["level"] = box.level();
+	out["width"] = box.messageWidth();
+	if (box.hasActive())
+	{
+		out["title"] = toGodot(u8(box.active().title));
+		out["message"] = toGodot(u8(box.active().message));
+		out["icon"] = toGodot(box.active().icon);
+	}
+	PackedStringArray errors;
+	for (const std::string &e : box.callErrors())
+	{
+		errors.push_back(toGodot(e));
+	}
+	out["call_errors"] = errors;
+	return out;
+}
+
+Dictionary AptMenuPlayer::set_objectives_screen(const Dictionary &state)
+{
+	Dictionary r;
+	r["ok"] = false;
+	if (!m->shell)
+	{
+		r["error"] = "not in shell mode";
+		return r;
+	}
+	ObjectivesScreenInfo info;
+	info.gameMode = (int)(int64_t)state.get("game_mode", (int64_t)0);
+	info.tutorialInput = (bool)state.get("tutorial_input", false);
+	const Array list = state.get("objectives", Array());
+	for (int64_t i = 0; i < list.size(); ++i)
+	{
+		const Dictionary o = list[i];
+		MissionObjective mo;
+		mo.label = toNative(String(o.get("label", String())));
+		mo.bonus = (bool)o.get("bonus", false);
+		mo.shown = (bool)o.get("shown", true);
+		mo.completed = (bool)o.get("completed", false);
+		info.objectives.push_back(mo);
+	}
+	m->shell->objectivesScreen = info;
+	m->shell->environment.objectivesScreen = &m->shell->objectivesScreen;
+	Array rows;
+	for (int row = 0; row < AptObjectivesMenu::kRows; ++row)
+	{
+		const std::string text = AptObjectivesMenu::objectiveText(info, row);
+		if (text.empty())
+		{
+			break;
+		}
+		rows.push_back(toGodot(text + " " + AptObjectivesMenu::objectiveStatus(info, row)));
+	}
+	r["ok"] = true;
+	r["rows"] = rows; // "$<label> <completed><bonus>" per row, as the providers answer
+	return r;
+}
+
 Dictionary AptMenuPlayer::set_player_status(const Dictionary &state)
 {
 	Dictionary r;
@@ -2829,8 +3175,14 @@ Dictionary AptMenuPlayer::set_load_screen_from_game(const Dictionary &resolved)
 		return out;
 	}
 	ShellMode *sm = m->shell.get();
-	m->shell->loadScreen = makeLoadScreenInfo(message.game, m->shell->setup, m->shell->text.get(),
+	LoadScreenInfo next = makeLoadScreenInfo(message.game, m->shell->setup, m->shell->text.get(),
 		[sm](const std::string &name) { return sm->skins.images.findImageByName(name) != nullptr; });
+	if (!next.error.empty())
+	{
+		out["error"] = toGodot(next.error);
+		return out;
+	}
+	m->shell->loadScreen = std::move(next);
 	const LoadScreenInfo &info = m->shell->loadScreen;
 	Array cards;
 	for (int i = 0; i < MAX_LOAD_SLOTS; ++i)
@@ -2849,6 +3201,7 @@ Dictionary AptMenuPlayer::set_load_screen_from_game(const Dictionary &resolved)
 	out["cards"] = cards;
 	out["local_card"] = info.localCard;
 	out["loading_type"] = info.gameLoadingType;
+	if (info.mapStartCount > LEGACY_MAX_SLOTS) out["map_start_count"] = info.mapStartCount;
 	out["rules_summary"] = toGodot(loadScreenU16ToUtf8(info.rulesSummary)); // lane RULES-1
 	return out;
 }
@@ -2937,8 +3290,9 @@ Dictionary AptMenuPlayer::lobby_state()
 	}
 	out["rules"] = rules;
 	Array slots;
-	for (const SkirmishGameSlot &s : g.slots)
+	for (int i = 0; i < g.serializedSlotCount(); ++i)
 	{
+		const SkirmishGameSlot &s = g.slots[i];
 		Dictionary d;
 		d["state"] = (int64_t)s.state;
 		d["template"] = (int64_t)s.playerTemplate;
@@ -3235,12 +3589,19 @@ Array AptMenuPlayer::take_load_progress_calls()
 	return out;
 }
 
-void AptMenuPlayer::set_load_screen(const Dictionary &info)
+Dictionary AptMenuPlayer::set_load_screen(const Dictionary &info)
 {
-	if (m->shell)
+	Dictionary out;
+	if (!m->shell)
 	{
-		loadScreenFromDictionary(info, m->shell->loadScreen);
+		out["error"] = "shell is not initialized";
+		return out;
 	}
+	std::string error;
+	const bool ok = loadScreenFromDictionary(info, m->shell->loadScreen, &error);
+	out["ok"] = ok;
+	if (!ok) out["error"] = toGodot(error);
+	return out;
 }
 
 bool AptMenuPlayer::set_load_progress(double percent)
@@ -3466,14 +3827,21 @@ void AptMenuPlayer::clearCanvas()
 		return;
 	}
 	// children first: a freed parent does not free its children
+	for (const Impl::Segment &g : m->segments)
+	{
+		for (size_t i = g.items.size(); i-- > 0;)
+		{
+			rs->free_rid(g.items[i]);
+		}
+		rs->free_rid(g.parent);
+	}
+	m->segments.clear();
 	for (size_t i = m->items.size(); i-- > 0;)
 	{
 		rs->free_rid(m->items[i]);
 	}
 	m->items.clear();
 	m->drawnValid = false;
-	m->nativeSlots.clear();
-	m->callbackSlots.clear();
 	m->gadgetAnchors.clear(); // lane MENU-1
 	m->drawnBackdrop.clear(); // lane CAMP-2
 	freeItemPool();
@@ -3484,11 +3852,15 @@ void AptMenuPlayer::clearCanvas()
 // and the native hooks set: the mask's canvas group, clip, custom rect, material, back-buffer copy) and gives it its new parent and index
 void AptMenuPlayer::recycleCanvas()
 {
+	for (const Impl::Segment &g : m->segments)
+	{
+		m->itemPool.insert(m->itemPool.end(), g.items.begin(), g.items.end());
+		m->itemPool.push_back(g.parent);
+	}
+	m->segments.clear();
 	m->itemPool.insert(m->itemPool.end(), m->items.begin(), m->items.end());
 	m->items.clear();
 	m->drawnValid = false;
-	m->nativeSlots.clear();
-	m->callbackSlots.clear();
 	m->drawnBackdrop.clear(); // lane CAMP-2
 }
 
@@ -3576,8 +3948,17 @@ void AptMenuPlayer::render(bool force)
 	m->levelCommands.clear();
 	m->backgroundPaths.clear();
 	const int backgroundLevel = m->shell && m->shell->wm ? m->shell->wm->backgroundLevel() : -1;
+	// lane CAHPIC-1: Create-a-Hero's render callbacks in this picture: the guard clip (RW 0x919DA2 counts its draws) and the 3D view (RW 0x91A3A9 saves the
+	// picture after drawing it); _process counts a frame for each frame the picture shows them (the canvas is rebuilt only when it changes)
+	m->cahGuardShown = false;
+	m->cahMapShown = false;
 	for (const AptRenderCommand &c : rl.commands)
 	{
+		if (c.kind == AptRenderCommand::Kind::Placeholder && c.nativeTag && c.color.mul[3] > 0.0f)
+		{
+			m->cahGuardShown = m->cahGuardShown || c.symbolName == "CreateAHero::RenderPictureGuard";
+			m->cahMapShown = m->cahMapShown || c.symbolName == "CreateAHero::DrawMapComponent";
+		}
 		if ((c.kind == AptRenderCommand::Kind::Shape || c.kind == AptRenderCommand::Kind::Text || c.kind == AptRenderCommand::Kind::Placeholder)
 			&& c.color.mul[3] > 0.0f)
 		{
@@ -3609,13 +3990,44 @@ void AptMenuPlayer::render(bool force)
 	{
 		appendTextBadges(rl, m->shell->wm->textBadges(), m->gadgets); // lane PLATFORMICON-1: the icons beside the movie rows' names
 	}
-	if (!m->stillLoadOn && m->drawnValid && sameCanvas(m->list, m->drawnList) && (!haveGadgets || sameGadgets(m->gadgets, m->drawnGadgets)))
+	// lane HUDREDRAW-1: the list's segments against the ones on screen (AptCanvasPlanRedraw): with the same gadgets on screen, the segments whose ops changed
+	// are drawn again, the others keep their items
+	const std::vector<AptCanvasSegment> segments = AptCanvasSegments(m->list);
+	AptCanvasRedrawPlan plan;
+	bool sameShape = !m->stillLoadOn && m->drawnValid && (!haveGadgets || sameGadgets(m->gadgets, m->drawnGadgets));
+	if (sameShape)
+	{
+		std::vector<AptCanvasSegment> drawn;
+		drawn.reserve(m->segments.size());
+		for (const Impl::Segment &g : m->segments)
+		{
+			drawn.push_back(AptCanvasSegment{ g.firstLevel, g.lastLevel, g.opBegin, g.opEnd });
+		}
+		plan = AptCanvasPlanRedraw(m->list, segments, m->drawnList, drawn);
+		sameShape = !plan.full;
+	}
+	const bool unchanged = sameShape && segments.size() == m->segments.size() &&
+		std::all_of(plan.same.begin(), plan.same.end(), [](bool same) { return same; });
+	if (unchanged)
 	{
 		// lane PERF-1 r2: the HUD's canvas list (and in shell mode its gadget list) is the same as the one on screen in most render frames; its items
 		// stay, only the native components are drawn again, each into a new item at its place (what a full redraw does for them)
-		redrawNativePlaceholders();
-		redrawCallbackPlaceholders(); // lane UI-4
+		for (size_t i = 0; i < m->segments.size(); ++i)
+		{
+			redrawNativePlaceholders(i);
+			redrawCallbackPlaceholders(i); // lane UI-4
+		}
+		countLevels(plan);
 		m->unchangedFrames += 1;
+	}
+	else if (sameShape && (!haveGadgets || m->gadgets.commands.empty()))
+	{
+		// lane HUDREDRAW-1: some segments changed (a movie looping a state: the spell store's buyable powers, the Palantir's powers button). A gadget window is
+		// drawn under its placeholder's item (drawGadgets): with gadgets on screen a redrawn segment could take their anchor away, so that case draws
+		// everything again (below)
+		redrawSegments(segments, plan);
+		countLevels(plan);
+		m->partialFrames += 1;
 	}
 	else
 	{
@@ -3626,6 +4038,10 @@ void AptMenuPlayer::render(bool force)
 		m->drawnList = m->list;
 		m->drawnGadgets = m->gadgets;
 		m->drawnValid = true;
+		AptCanvasRedrawPlan all;
+		all.old.assign(m->segments.size(), -1);
+		all.same.assign(m->segments.size(), false);
+		countLevels(all);
 	}
 	std::uint64_t t3 = time->get_ticks_usec();
 	m->listUs += t1 - t0;
@@ -3633,34 +4049,6 @@ void AptMenuPlayer::render(bool force)
 	m->submitUs += t3 - t2;
 	m->rebuilds += 1;
 	m->noteList();
-}
-
-bool AptMenuPlayer::sameCanvas(const AptCanvasList &a, const AptCanvasList &b)
-{
-	// every field drawCanvas reads, compared bit for bit (floats too: the same bits draw the same)
-	auto sameFloats = [](const float *x, const float *y, size_t n) { return n == 0 || std::memcmp(x, y, n * sizeof(float)) == 0; };
-	auto sameVec = [&](const std::vector<float> &x, const std::vector<float> &y) { return x.size() == y.size() && sameFloats(x.data(), y.data(), x.size()); };
-	if (a.ops.size() != b.ops.size())
-	{
-		return false;
-	}
-	for (size_t i = 0; i < a.ops.size(); ++i)
-	{
-		const AptCanvasOp &x = a.ops[i], &y = b.ops[i];
-		const float mx[6] = { x.matrix.a, x.matrix.b, x.matrix.c, x.matrix.d, x.matrix.tx, x.matrix.ty };
-		const float my[6] = { y.matrix.a, y.matrix.b, y.matrix.c, y.matrix.d, y.matrix.tx, y.matrix.ty };
-		const float tx[6] = { x.fontHeight, x.drawSize, x.scaleX, x.scaleY, x.offsetX, x.offsetY };
-		const float ty[6] = { y.fontHeight, y.drawSize, y.scaleX, y.scaleY, y.offsetX, y.offsetY };
-		if (x.kind != y.kind || x.maskShape != y.maskShape || x.bold != y.bold || x.alignment != y.alignment || x.wordWrap != y.wordWrap || x.multiline != y.multiline ||
-			x.readOnly != y.readOnly || x.dropShadow != y.dropShadow || x.nativeTag != y.nativeTag || !sameFloats(x.shadowColor, y.shadowColor, 4) || !sameFloats(x.textColor, y.textColor, 4) ||
-			!sameFloats(x.bounds, y.bounds, 4) || !sameFloats(mx, my, 6) || !sameFloats(tx, ty, 6) || !sameVec(x.positions, y.positions) || !sameVec(x.colors, y.colors) ||
-			!sameVec(x.uvs, y.uvs) || x.texture != y.texture || x.text != y.text || x.fontName != y.fontName || x.drawFont != y.drawFont || x.path != y.path ||
-			x.symbolMovie != y.symbolMovie || x.symbolName != y.symbolName || x.renderObject != y.renderObject || x.nativeVars != y.nativeVars)
-		{
-			return false;
-		}
-	}
-	return true;
 }
 
 void AptMenuPlayer::drawRenderCallback(const AptCanvasOp &op, const RID &item)
@@ -3715,37 +4103,169 @@ void AptMenuPlayer::drawRenderCallback(const AptCanvasOp &op, const RID &item)
 	}
 }
 
-void AptMenuPlayer::redrawCallbackPlaceholders()
+void AptMenuPlayer::redrawCallbackPlaceholders(size_t segment)
 {
 	RenderingServer *rs = RenderingServer::get_singleton();
-	for (const Impl::NativeSlot &slot : m->callbackSlots)
+	Impl::Segment &g = m->segments[segment];
+	for (const Impl::NativeSlot &slot : g.callbackSlots)
 	{
-		RID &item = m->items[slot.item];
+		RID &item = g.items[slot.item];
 		rs->free_rid(item);
 		item = rs->canvas_item_create();
 		rs->canvas_item_set_parent(item, slot.parent);
 		rs->canvas_item_set_draw_index(item, static_cast<int>(slot.item));
 		rs->canvas_item_set_default_texture_filter(item, RenderingServer::CANVAS_ITEM_TEXTURE_FILTER_LINEAR);
 		rs->canvas_item_set_default_texture_repeat(item, RenderingServer::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
-		drawRenderCallback(m->drawnList.ops[slot.op], item);
+		drawRenderCallback(m->drawnList.ops[g.opBegin + slot.op], item);
 	}
 }
 
-void AptMenuPlayer::redrawNativePlaceholders()
+void AptMenuPlayer::redrawNativePlaceholders(size_t segment)
 {
 	if (!m->nativeHook)
 	{
 		return;
 	}
 	RenderingServer *rs = RenderingServer::get_singleton();
-	for (const Impl::NativeSlot &slot : m->nativeSlots)
+	const Impl::Segment &g = m->segments[segment];
+	for (const Impl::NativeSlot &slot : g.nativeSlots)
 	{
 		// lane SELPERF-1: the slot's item is cleared and drawn again in place (it keeps its parent, draw index and texture settings); freeing and making
 		// a new item per slot every frame cost the selection's command bar (its button images, the portrait) about 0.1 ms a frame on the Deck
-		RID item = m->items[slot.item];
+		RID item = g.items[slot.item];
 		rs->canvas_item_clear(item);
-		m->nativeHook->drawPlaceholder(m->drawnList.ops[slot.op], item);
+		m->nativeHook->drawPlaceholder(m->drawnList.ops[g.opBegin + slot.op], item);
 	}
+}
+
+void AptMenuPlayer::countLevels(const AptCanvasRedrawPlan &plan)
+{
+	// lane HUDREDRAW-1 (get_stats "levels"): per level, whether this rebuild drew some of its segments again and how many
+	std::map<int, std::pair<std::uint64_t, std::uint64_t>> seen; // level -> (segments, drawn again)
+	for (size_t i = 0; i < m->segments.size(); ++i)
+	{
+		auto &c = seen[m->segments[i].firstLevel];
+		c.first += 1;
+		c.second += i < plan.same.size() && plan.same[i] ? 0 : 1;
+	}
+	for (auto &kv : m->levelCounts)
+	{
+		kv.second.segments = 0; // a level no longer drawn has none
+	}
+	for (const auto &kv : seen)
+	{
+		Impl::LevelCounts &counts = m->levelCounts[kv.first];
+		counts.segments = kv.second.first;
+		counts.segmentsRedrawn += kv.second.second;
+		(kv.second.second ? counts.redrawnFrames : counts.keptFrames) += 1;
+	}
+}
+
+void AptMenuPlayer::redrawSegments(const std::vector<AptCanvasSegment> &segments, const AptCanvasRedrawPlan &plan)
+{
+	// lane HUDREDRAW-1: the drawn list takes the new list's ops (the kept segments' ops are the same: moved, not copied); a kept segment keeps its items, a
+	// changed one with an old counterpart is drawn again under that one's item, the rest under new items; old segments nothing replaces go to the pool
+	RenderingServer *rs = RenderingServer::get_singleton();
+	std::vector<bool> taken(m->segments.size(), false);
+	std::set<std::string> oldPaths; // the placeholders of what is drawn again: their BinkMovies and View3D viewers are marked unused (used again if still drawn)
+	auto release = [&](Impl::Segment &g, bool parentToo) {
+		for (size_t k = g.opBegin; k < g.opEnd; ++k)
+		{
+			const AptCanvasOp &op = m->drawnList.ops[k];
+			if (op.kind == AptCanvasOp::Kind::Placeholder)
+			{
+				oldPaths.insert(op.path);
+			}
+		}
+		m->itemPool.insert(m->itemPool.end(), g.items.begin(), g.items.end());
+		if (parentToo)
+		{
+			m->itemPool.push_back(g.parent);
+		}
+		g.items.clear();
+		g.nativeSlots.clear();
+		g.callbackSlots.clear();
+	};
+	std::vector<Impl::Segment> next(segments.size());
+	std::vector<AptCanvasOp> ops;
+	ops.reserve(m->list.ops.size());
+	bool moved = false; // a segment's parent took another place among the player's children
+	for (size_t j = 0; j < segments.size(); ++j)
+	{
+		Impl::Segment &n = next[j];
+		n.firstLevel = segments[j].firstLevel;
+		n.lastLevel = segments[j].lastLevel;
+		const std::ptrdiff_t o = plan.old[j];
+		if (o >= 0)
+		{
+			Impl::Segment &g = m->segments[(size_t)o];
+			taken[(size_t)o] = true;
+			if (!plan.same[j])
+			{
+				release(g, false);
+			}
+			n.parent = g.parent;
+			n.items = std::move(g.items);
+			n.nativeSlots = std::move(g.nativeSlots);
+			n.callbackSlots = std::move(g.callbackSlots);
+			moved = moved || (size_t)o != j;
+		}
+		n.opBegin = ops.size();
+		if (o >= 0 && plan.same[j])
+		{
+			const Impl::Segment &g = m->segments[(size_t)o];
+			ops.insert(ops.end(), std::make_move_iterator(m->drawnList.ops.begin() + (std::ptrdiff_t)g.opBegin),
+				std::make_move_iterator(m->drawnList.ops.begin() + (std::ptrdiff_t)g.opEnd));
+		}
+		else
+		{
+			ops.insert(ops.end(), m->list.ops.begin() + (std::ptrdiff_t)segments[j].begin, m->list.ops.begin() + (std::ptrdiff_t)segments[j].end);
+		}
+		n.opEnd = ops.size();
+	}
+	for (size_t k = 0; k < m->segments.size(); ++k)
+	{
+		if (!taken[k])
+		{
+			release(m->segments[k], true);
+			moved = true;
+		}
+	}
+	for (auto &kv : m->movies)
+	{
+		if (oldPaths.count(kv.first))
+		{
+			kv.second.drawn = false;
+		}
+	}
+	m->drawnList.ops.swap(ops);
+	m->segments.swap(next);
+	const RID root = get_canvas_item();
+	const std::map<std::string, const GameWindow *> gadgetOfPath = gadgetPaths();
+	m->view3d.beginBuild(&oldPaths);
+	for (size_t j = 0; j < m->segments.size(); ++j)
+	{
+		Impl::Segment &g = m->segments[j];
+		if (!g.parent.is_valid())
+		{
+			g.parent = takeItem(root, static_cast<int>(1 + j));
+		}
+		else if (moved)
+		{
+			rs->canvas_item_set_draw_index(g.parent, static_cast<int>(1 + j));
+		}
+		if (plan.old[j] >= 0 && plan.same[j])
+		{
+			redrawNativePlaceholders(j);
+			redrawCallbackPlaceholders(j);
+		}
+		else
+		{
+			drawSegment(m->drawnList, j, gadgetOfPath);
+		}
+	}
+	m->view3d.endBuild();
+	freeItemPool(); // the replaced segments' items their new drawing did not reuse
 }
 
 void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
@@ -3757,23 +4277,12 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 		kv.second.drawn = false; // lane CAMP-2: a BinkMovie this list does not draw is closed (advanceMovies)
 	}
 	const RID root = get_canvas_item();
-	std::vector<RID> parents{ root };
-	RID current;
-
 	auto newItem = [&](RID parent) {
 		// Godot sorts the children of a parent by their draw index, which is 0 for every new item, with an unstable sort: siblings
 		// need increasing indices to keep the render list's order (review finding; masks and material changes make many siblings)
 		RID r = takeItem(parent, static_cast<int>(m->items.size()));
 		m->items.push_back(r);
 		return r;
-	};
-	auto itemFor = [&]() {
-		// one item until a mask bracket opens or closes (the colour transform is in the vertex colours: no per-op material)
-		if (!current.is_valid())
-		{
-			current = newItem(parents.back());
-		}
-		return current;
 	};
 	// lane FB7-1: the display's backdrop behind every Apt level (Shell::update RW 0x75E1D3 -> RW 0x65C42C slot 0): the mapped image ShellMapLowLOD
 	// (HandCreatedMappedImages.ini: InstallLoad.tga, 1024 x 768 of a 1024 x 1024 texture). INFERENCE (S-1912): it covers the stage as the movies do
@@ -3835,6 +4344,72 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 			}
 		}
 	}
+	m->gadgetAnchors.clear();
+	const std::map<std::string, const GameWindow *> gadgetOfPath = gadgetPaths();
+	m->view3d.beginBuild(); // lane UI-2
+	// lane HUDREDRAW-1: each segment under an item of its own, in list order after the backdrop
+	int labelled = 0;
+	for (const AptCanvasSegment &r : AptCanvasSegments(list))
+	{
+		Impl::Segment g;
+		g.firstLevel = r.firstLevel;
+		g.lastLevel = r.lastLevel;
+		g.opBegin = r.begin;
+		g.opEnd = r.end;
+		g.parent = takeItem(root, static_cast<int>(1 + m->segments.size()));
+		m->segments.push_back(std::move(g));
+		if (m->segments.size() == 1 || r.firstLevel != labelled)
+		{
+			// "_level<n>.<clip>...": the level and its first top clip name the level's movie in get_stats (a level loads other movies over a session)
+			labelled = r.firstLevel;
+			const std::string &path = list.ops[r.begin].path;
+			const size_t dot = path.find('.');
+			m->levelCounts[r.firstLevel].movie = path.substr(0, dot == std::string::npos ? std::string::npos : path.find('.', dot + 1));
+		}
+		drawSegment(list, m->segments.size() - 1, gadgetOfPath);
+	}
+	m->view3d.endBuild(); // lane UI-2: viewers no op drew stop rendering
+}
+
+// lane MENU-1: the gadget window of each component placeholder path (WindowManager's component records)
+std::map<std::string, const GameWindow *> AptMenuPlayer::gadgetPaths() const
+{
+	std::map<std::string, const GameWindow *> gadgetOfPath;
+	if (m->shell)
+	{
+		for (const WindowManager::ComponentRecord &rec : m->shell->wm->components())
+		{
+			if (rec.instance && rec.window)
+			{
+				gadgetOfPath[rec.instancePath] = rec.window.get();
+			}
+		}
+	}
+	return gadgetOfPath;
+}
+
+// lane HUDREDRAW-1: the ops of one segment under its own item (drawCanvas, redrawSegments)
+void AptMenuPlayer::drawSegment(const AptCanvasList &list, size_t segment, const std::map<std::string, const GameWindow *> &gadgetOfPath)
+{
+	RenderingServer *rs = RenderingServer::get_singleton();
+	Impl::Segment &g = m->segments[segment];
+	std::vector<RID> parents{ g.parent };
+	RID current;
+	auto newItem = [&](RID parent) {
+		// Godot sorts the children of a parent by their draw index, which is 0 for every new item, with an unstable sort: siblings
+		// need increasing indices to keep the render list's order (review finding; masks and material changes make many siblings)
+		RID r = takeItem(parent, static_cast<int>(g.items.size()));
+		g.items.push_back(r);
+		return r;
+	};
+	auto itemFor = [&]() {
+		// one item until a mask bracket opens or closes (the colour transform is in the vertex colours: no per-op material)
+		if (!current.is_valid())
+		{
+			current = newItem(parents.back());
+		}
+		return current;
+	};
 	// a diagnostic for artifact hunts (lane HUD-3): OPENBFME_APT_SKIP=<substring>[,<substring>...] leaves out the mesh ops whose instance path contains one
 	static const std::vector<std::string> skipPaths = [] {
 		std::vector<std::string> v;
@@ -3849,23 +4424,7 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 		return v;
 	}();
 
-	m->nativeSlots.clear();
-	m->callbackSlots.clear();
-	m->gadgetAnchors.clear();
-	// lane MENU-1: the gadget window of each component placeholder path (WindowManager's component records)
-	std::map<std::string, const GameWindow *> gadgetOfPath;
-	if (m->shell)
-	{
-		for (const WindowManager::ComponentRecord &rec : m->shell->wm->components())
-		{
-			if (rec.instance && rec.window)
-			{
-				gadgetOfPath[rec.instancePath] = rec.window.get();
-			}
-		}
-	}
-	m->view3d.beginBuild(); // lane UI-2
-	for (size_t opIndex = 0; opIndex < list.ops.size(); ++opIndex)
+	for (size_t opIndex = g.opBegin; opIndex < g.opEnd; ++opIndex)
 	{
 		const AptCanvasOp &op = list.ops[opIndex];
 		if (op.kind == AptCanvasOp::Kind::Mesh && !skipPaths.empty()
@@ -4003,7 +4562,7 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 				{
 					// lane UI-4: an engine render callback that draws text (AptMainMenu::RenderCredits): drawn in the clip's place, and again in every
 					// render frame whose canvas list is unchanged (its text moves without the list changing)
-					m->callbackSlots.push_back(Impl::NativeSlot{ opIndex, m->items.size(), parents.back() });
+					g.callbackSlots.push_back(Impl::NativeSlot{ opIndex - g.opBegin, g.items.size(), parents.back() });
 					RID item = newItem(parents.back());
 					current = RID();
 					drawRenderCallback(op, item);
@@ -4101,7 +4660,7 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 				if (m->nativeHook && op.nativeTag && m->nativeHook->handlesPlaceholder(op))
 				{
 					// lane HUD-1: the clip is a native render component (the radar, a command button image, a timer): its owner draws into a canvas item of its own
-					m->nativeSlots.push_back(Impl::NativeSlot{ opIndex, m->items.size(), parents.back() });
+					g.nativeSlots.push_back(Impl::NativeSlot{ opIndex - g.opBegin, g.items.size(), parents.back() });
 					RID item = newItem(parents.back());
 					current = RID();
 					m->nativeHook->drawPlaceholder(op, item);
@@ -4118,6 +4677,10 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 						if (kv.first == "_imageMap")
 						{
 							record = m->shell->wm->aptImage(kv.second);
+							// Donor AptPlayer::FindRenderImage (BFME2 0x4128F0
+							// parameter lookup): after records, try the mapped image
+							// name itself (VerticalScrollBar's button/thumb artwork).
+							if (!record && m->shell->skins.images.findImageByName(kv.second)) record = &kv.second;
 							mapped = true;
 						}
 					}
@@ -4281,6 +4844,22 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 						const Rect2 src(img->uvLo[0] * size.x, img->uvLo[1] * size.y, (img->uvHi[0] - img->uvLo[0]) * size.x, (img->uvHi[1] - img->uvLo[1]) * size.y);
 						RID item = newItem(parents.back());
 						current = RID();
+						// RenderImage._mode is also used by the CAH medal's _gray/_color
+						// frames. Reuse the HUD's decoded mode parser and S-5016 shaders.
+						std::string modeText;
+						for (const auto &kv : op.nativeVars) if (kv.first == "_mode") modeText = kv.second;
+						const AptImageMode mode = parseAptImageMode(modeText);
+						if (mode != APT_IMAGE_ALPHA)
+						{
+							auto &material = m->imageModes[(int)mode];
+							if (material.is_null())
+							{
+								Ref<Shader> shader; shader.instantiate();
+								shader->set_code(String(aptImageModeShader(mode).c_str()));
+								material.instantiate(); material->set_shader(shader);
+							}
+							rs->canvas_item_set_material(item, material->get_rid());
+						}
 						rs->canvas_item_add_texture_rect_region(item, Rect2(minx, miny, maxx - minx, maxy - miny), tex->get_rid(), src, Color(1, 1, 1, 1));
 						break;
 					}
@@ -4311,14 +4890,14 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 			{
 				RID item = itemFor();
 				const float det = op.matrix.a * op.matrix.d - op.matrix.b * op.matrix.c;
-				const float sdet = std::sqrt(std::fabs(det));
-				if (sdet <= 0.0f)
+				const float fieldScale = AptTextFontScale(op.matrix); // lane MENUFIX-1: the field's vertical scale (AptCanvas.h), not sqrt(|det|)
+				if (det == 0.0f || fieldScale <= 0.0f)
 				{
 					break;
 				}
 				// the font follows the device scale by min(scaleX, scaleY) (donor AptDisplayStringAllocation_ctor.cpp:105-110)
 				const float k = std::min(op.scaleX, op.scaleY);
-				const int px = std::max(1, (int)std::lround(op.drawSize * k * sdet));
+				const int px = std::max(1, (int)std::lround(op.drawSize * k * fieldScale));
 				Ref<Font> font;
 				auto fit = m->fontByName.find(lowerAscii(op.drawFont));
 				if (fit == m->fontByName.end())
@@ -4392,7 +4971,6 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 			}
 		}
 	}
-	m->view3d.endBuild(); // lane UI-2: viewers no op drew stop rendering
 }
 
 
@@ -4447,7 +5025,7 @@ void AptMenuPlayer::drawStillLoadScreen()
 	auto newItem = [&]() {
 		RID r = rs->canvas_item_create();
 		rs->canvas_item_set_parent(r, get_canvas_item());
-		rs->canvas_item_set_draw_index(r, static_cast<int>(m->items.size()));
+		rs->canvas_item_set_draw_index(r, static_cast<int>(1 + m->segments.size() + m->items.size())); // lane HUDREDRAW-1: after the movies' segments
 		rs->canvas_item_set_default_texture_filter(r, RenderingServer::CANVAS_ITEM_TEXTURE_FILTER_LINEAR);
 		rs->canvas_item_set_default_texture_repeat(r, RenderingServer::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
 		m->items.push_back(r);
@@ -4616,7 +5194,7 @@ void AptMenuPlayer::drawGadgets(const GadgetDrawList &commands)
 	bool firstCommand = true;
 	m->unanchoredGadgets = 0;
 	auto newItem = [&](RID parent) {
-		RID r = takeItem(parent, static_cast<int>(m->items.size()));
+		RID r = takeItem(parent, static_cast<int>(1 + m->segments.size() + m->items.size())); // lane HUDREDRAW-1: a root item after the movies' segments
 		m->items.push_back(r);
 		return r;
 	};
@@ -5580,6 +6158,21 @@ Dictionary AptMenuPlayer::menu_nav_state()
 
 bool AptMenuPlayer::menuKey(const InputEventKey *key)
 {
+	// lane CHAT-1: the chat window's input procedure (RW 0x8ECB8F) sees the key before the entry: Esc, Ctrl+Enter (the rest goes on to the entry below)
+	if (m->shell && m->shell->chat && ingame_chat_has_keys() && !key->is_echo())
+	{
+		const int dik = dikOf(key->get_keycode());
+		int state = key->is_pressed() ? KEY_STATE_DOWN : KEY_STATE_UP;
+		if (key->is_ctrl_pressed())
+		{
+			state |= KEY_STATE_LCONTROL;
+		}
+		if (dik && m->shell->chat->inputKey(dik, state))
+		{
+			m->dirty = true;
+			return true;
+		}
+	}
 	// lane SAVE-UI1: the top screen's own Escape procedure first (its press and its release are its alone)
 	if (key->get_keycode() == Key::KEY_ESCAPE && !key->is_echo() && menu_escape(key->is_pressed()))
 	{
@@ -5697,7 +6290,33 @@ Dictionary AptMenuPlayer::get_stats() const
 	s["last_triangles"] = (int64_t)m->list.triangles;
 	s["last_text_ops"] = (int64_t)m->list.count(AptCanvasOp::Kind::Text);
 	s["last_mask_ops"] = (int64_t)m->list.count(AptCanvasOp::Kind::MaskBegin);
-	s["canvas_items"] = (int64_t)m->items.size();
+	size_t items = m->items.size();
+	// lane HUDREDRAW-1: per level (its segments' first level): the movie, the rebuilds that drew some of its segments again / kept all, the segments drawn
+	// again (summed) and its segments in the last rebuild
+	Dictionary levels;
+	for (const Impl::Segment &g : m->segments)
+	{
+		items += 1 + g.items.size();
+	}
+	for (const auto &kv : m->levelCounts)
+	{
+		Dictionary l;
+		l["movie"] = toGodot(kv.second.movie);
+		l["redrawn"] = (int64_t)kv.second.redrawnFrames;
+		l["kept"] = (int64_t)kv.second.keptFrames;
+		l["segments_redrawn"] = (int64_t)kv.second.segmentsRedrawn;
+		l["segments"] = (int64_t)kv.second.segments;
+		levels[kv.first] = l;
+	}
+	s["canvas_items"] = (int64_t)items;
+	s["segments"] = (int64_t)m->segments.size();
+	s["partial_frames"] = (int64_t)m->partialFrames;
+	s["gadget_commands"] = (int64_t)m->gadgets.commands.size(); // lane HUDREDRAW-1: gadgets on screen make a changed level draw everything again
+	s["levels"] = levels;
+	// lane HUDREDRAW-1: the note lists' lengths (they must not grow with the frames: Apt::noteOnce / WindowManager::noteOnce)
+	s["apt_notes"] = m->A() ? (int64_t)m->A()->notes().size() : (int64_t)0;
+	WindowManager *notesWm = window_manager();
+	s["wm_notes"] = notesWm ? (int64_t)notesWm->notes().size() : (int64_t)0;
 	// microseconds per call of each stage (steps_us per tick, the rest per rebuild)
 	s["steps_us"] = m->frames ? (double)m->stepUs / (double)m->frames : 0.0;
 	s["list_us"] = m->rebuilds ? (double)m->listUs / (double)m->rebuilds : 0.0;
@@ -5839,9 +6458,9 @@ void AptMenuPlayer::set_input_forwarded(bool forwarded)
 	m->inputForwarded = forwarded;
 }
 
-Ref<Font> AptMenuPlayer::font_for(const std::string &name, float size, float *drawSize)
+Ref<Font> AptMenuPlayer::font_for(const std::string &name, float size, float *drawSize, bool bold)
 {
-	return m->fontFor(name, size, drawSize);
+	return m->fontFor(name, size, drawSize, bold);
 }
 
 Ref<Font> AptMenuPlayer::font_cell(const Ref<Font> &font, int px)
@@ -5856,8 +6475,6 @@ void AptMenuPlayer::set_native_hook(AptNativeHook *hook)
 		// lane QA-1: the items the old hook drew into may carry its resources (the HUD's globe material): they go now, before their owner frees them, and the
 		// next frame draws the canvas again (else leaving a game freed the material under live items: "Parameter material is null")
 		clearCanvas();
-		m->nativeSlots.clear();
-		m->callbackSlots.clear();
 	}
 	m->nativeHook = hook;
 	m->drawnValid = false; // lane PERF-1 r2: the native placeholders are drawn by another owner
@@ -6006,6 +6623,30 @@ Dictionary AptMenuPlayer::end_game_screen(const Dictionary &request)
 	return out;
 }
 
+namespace
+{
+// lane CHAT-1: UTF-16 to a Godot String: a surrogate pair is one character, a lone surrogate U+FFFD
+String chatU16ToString(const std::u16string &u)
+{
+	String s;
+	for (std::size_t i = 0; i < u.size(); ++i)
+	{
+		char32_t c = u[i];
+		if (c >= 0xD800 && c <= 0xDBFF && i + 1 < u.size() && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF)
+		{
+			c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+			++i;
+		}
+		else if (c >= 0xD800 && c <= 0xDFFF)
+		{
+			c = 0xFFFD;
+		}
+		s += String::chr(c);
+	}
+	return s;
+}
+} // namespace
+
 Dictionary AptMenuPlayer::disconnect_screen(const Dictionary &state)
 {
 	Dictionary out;
@@ -6025,6 +6666,45 @@ Dictionary AptMenuPlayer::disconnect_screen(const Dictionary &state)
 		out["level"] = -1;
 		return out;
 	}
+	const Variant capacityValue = state.get("map_start_count", LEGACY_MAX_SLOTS);
+	const Variant rowsValue = state.get("rows", Array());
+	if (capacityValue.get_type() != Variant::INT || (int64_t)capacityValue < LEGACY_MAX_SLOTS || (int64_t)capacityValue > MAX_SLOTS ||
+		rowsValue.get_type() != Variant::ARRAY)
+	{
+		out["error"] = "disconnect requires integer map_start_count in 8 .. 16 and an array of rows";
+		return out;
+	}
+	const int capacity = (int)capacityValue;
+	const Array src = rowsValue;
+	if (src.size() > capacity - 1)
+	{
+		out["error"] = "disconnect rows exceed map capacity";
+		return out;
+	}
+	std::vector<AptDisconnectScreen::Row> rows((size_t)src.size());
+	for (int i = 0; i < src.size(); ++i)
+	{
+		if (src[i].get_type() != Variant::DICTIONARY)
+		{
+			out["error"] = "disconnect row must be a dictionary";
+			return out;
+		}
+		const Dictionary d = src[i];
+		const Variant used = d.get("used", false), name = d.get("name", ""), votes = d.get("votes", 0), bar = d.get("bar", 100), kick = d.get("kick", false);
+		if (used.get_type() != Variant::BOOL || name.get_type() != Variant::STRING || votes.get_type() != Variant::INT ||
+			bar.get_type() != Variant::INT || kick.get_type() != Variant::BOOL || (int64_t)votes < 0 || (int64_t)votes > capacity ||
+			(int64_t)bar < 0 || (int64_t)bar > 100)
+		{
+			out["error"] = "invalid disconnect row fields";
+			return out;
+		}
+		auto &r = rows[(size_t)i];
+		r.used = (bool)used;
+		r.nameUtf8 = toNative(String(name));
+		r.votes = (int)votes;
+		r.barPercent = (int)bar;
+		r.kickShown = (bool)kick;
+	}
 	if (!sm.disconnect)
 	{
 		// RW 0x9190F0: the window manager loads DisconnectScreen.apt (the first free level, S-1123)
@@ -6041,24 +6721,30 @@ Dictionary AptMenuPlayer::disconnect_screen(const Dictionary &state)
 			a["kind"] = "quit";
 			smp->disconnectActions.push_back(a);
 		};
+		// lane CHAT-1: the chat line typed into the screen (Chat::OnBttnEnterText, RW 0x9196B9) for the game's network, and the rules (APT:DisconnectRules)
+		sm.disconnect->onChat = [smp](const std::u16string &text) {
+			Dictionary a;
+			a["kind"] = "chat";
+			a["text"] = chatU16ToString(text);
+			smp->disconnectActions.push_back(a);
+		};
+		std::u16string rules;
+		if (sm.environment.gameText && sm.environment.gameText->fetch("APT:DisconnectRules", rules))
+		{
+			sm.disconnect->setRulesText(rules);
+		}
 	}
-	std::array<AptDisconnectScreen::Row, 7> rows{};
-	const Array src = state.get("rows", Array());
-	for (int i = 0; i < 7 && i < src.size(); ++i)
-	{
-		const Dictionary d = src[i];
-		AptDisconnectScreen::Row &r = rows[(size_t)i];
-		r.used = (bool)d.get("used", false);
-		r.nameUtf8 = toNative(String(d.get("name", "")));
-		r.votes = (int)d.get("votes", 0);
-		r.barPercent = (int)d.get("bar", 100);
-		r.kickShown = (bool)d.get("kick", false);
-	}
-	const bool loaded = sm.disconnect->apply(rows);
+	const bool loaded = sm.disconnect->apply(rows, capacity);
 	m->dirty = true;
-	out["ok"] = sm.disconnect->level() >= 0;
+	out["ok"] = sm.disconnect->level() >= 0 && sm.disconnect->error().empty();
 	out["level"] = sm.disconnect->level();
 	out["loaded"] = loaded;
+	if (!sm.disconnect->error().empty()) out["error"] = toGodot(sm.disconnect->error());
+	if (capacity > LEGACY_MAX_SLOTS)
+	{
+		out["first_row"] = sm.disconnect->firstRow();
+		out["row_count"] = capacity - 1;
+	}
 	PackedStringArray calls;
 	for (const std::string &c : sm.disconnect->calls())
 	{
@@ -6192,6 +6878,177 @@ bool AptMenuPlayer::save_load_refused(const String &name, const String &error)
 	return true;
 }
 
+bool AptMenuPlayer::ingame_chat_open(int64_t mode, const String &receivers)
+{
+	if (!m->shell || !m->shell->shell || !m->shell->wm)
+	{
+		return false;
+	}
+	ShellMode &sm = *m->shell;
+	if (sm.chat || sm.disconnect)
+	{
+		return false; // RW 0x8EC97D: one window at a time; none over the disconnect screen (DAT_DEA328)
+	}
+	if (mode < 0 || mode > 4)
+	{
+		return false;
+	}
+	// RW 0x8EC97D: the window manager loads InGameChat.apt (the first free level, as the disconnect screen)
+	sm.chat = std::make_unique<AptInGameChat>(*sm.wm, *sm.shell, sm.chatModel, (InGameChatMode)mode, toNative(receivers));
+	if (sm.chat->level() < 0)
+	{
+		sm.chat.reset();
+		return false;
+	}
+	ShellMode *smp = &sm;
+	sm.chat->onSend = [smp](const std::u16string &text, InGameChatMode md) {
+		Dictionary d;
+		d["text"] = chatU16ToString(text);
+		d["mode"] = (int64_t)md;
+		smp->chatSends.push_back(d);
+	};
+	m->dirty = true;
+	return true;
+}
+
+Dictionary AptMenuPlayer::ingame_chat_update()
+{
+	Dictionary out;
+	out["open"] = false;
+	if (!m->shell)
+	{
+		return out;
+	}
+	ShellMode &sm = *m->shell;
+	if (sm.chat)
+	{
+		sm.chat->frameUpdate(); // RW 0x8ECD3E
+		if (sm.chat->closed())
+		{
+			sm.chat.reset(); // state 4: the screen goes
+			m->dirty = true;
+		}
+	}
+	out["open"] = sm.chat != nullptr;
+	if (sm.chat)
+	{
+		out["state"] = sm.chat->state();
+		out["mode"] = (int64_t)sm.chat->mode();
+		out["level"] = sm.chat->level();
+		out["entry"] = chatU16ToString(sm.chat->entryText());
+		out["has_entry"] = sm.chat->entry() != nullptr;
+	}
+	out["sends"] = sm.chatSends.duplicate();
+	sm.chatSends.clear();
+	return out;
+}
+
+void AptMenuPlayer::ingame_chat_close()
+{
+	if (m->shell && m->shell->chat)
+	{
+		m->shell->chat->close();
+		m->dirty = true;
+	}
+}
+
+bool AptMenuPlayer::ingame_chat_has_keys() const
+{
+	// the window takes the keyboard from its open until its close animation starts (RW 0x8ECB8F uses every GWM_CHAR); the disconnect screen's chat entry
+	// takes it while the screen is up (lane CHAT-1)
+	if (m->shell && m->shell->disconnect && m->shell->disconnect->chatEntry())
+	{
+		return true;
+	}
+	return m->shell && m->shell->chat && (m->shell->chat->state() == AptInGameChat::STATE_LOADING || m->shell->chat->state() == AptInGameChat::STATE_OPEN);
+}
+
+bool AptMenuPlayer::disconnect_screen_chat(const String &line)
+{
+	if (!m->shell || !m->shell->disconnect)
+	{
+		return false;
+	}
+	std::u16string u;
+	for (int i = 0; i < line.length(); ++i)
+	{
+		const char32_t c = line[i];
+		if (c > 0xFFFF)
+		{
+			u.push_back((char16_t)(0xD800 + ((c - 0x10000) >> 10)));
+			u.push_back((char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF)));
+		}
+		else
+		{
+			u.push_back((char16_t)c);
+		}
+	}
+	m->dirty = true;
+	return m->shell->disconnect->showChat(u);
+}
+
+bool AptMenuPlayer::disconnect_screen_type(const String &text)
+{
+	if (!m->shell || !m->shell->disconnect || !m->shell->disconnect->chatEntry())
+	{
+		return false;
+	}
+	std::u16string u;
+	for (int i = 0; i < text.length(); ++i)
+	{
+		const char32_t c = text[i];
+		if (c > 0xFFFF)
+		{
+			u.push_back((char16_t)(0xD800 + ((c - 0x10000) >> 10)));
+			u.push_back((char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF)));
+		}
+		else
+		{
+			u.push_back((char16_t)c);
+		}
+	}
+	GadgetTextEntrySetText(m->shell->disconnect->chatEntry(), u);
+	m->dirty = true;
+	return m->shell->wm && m->shell->wm->invokeCallback("AptDisconnectScreen::Chat::OnBttnEnterText", std::string());
+}
+
+bool AptMenuPlayer::ingame_chat_type(const String &text)
+{
+	if (!m->shell || !m->shell->chat || !m->shell->chat->entry())
+	{
+		return false;
+	}
+	std::u16string u;
+	for (int i = 0; i < text.length(); ++i)
+	{
+		const char32_t c = text[i];
+		if (c > 0xFFFF)
+		{
+			u.push_back((char16_t)(0xD800 + ((c - 0x10000) >> 10)));
+			u.push_back((char16_t)(0xDC00 + ((c - 0x10000) & 0x3FF)));
+		}
+		else
+		{
+			u.push_back((char16_t)c);
+		}
+	}
+	m->shell->chat->typeText(u);
+	m->dirty = true;
+	return true;
+}
+
+bool AptMenuPlayer::ingame_chat_command(const String &command)
+{
+	if (!m->shell || !m->shell->chat || !m->shell->wm)
+	{
+		return false;
+	}
+	const std::string name = "AptInGameChat::" + toNative(command);
+	const bool ok = m->shell->wm->invokeCallback(name, std::string());
+	m->dirty = true;
+	return ok;
+}
+
 Array AptMenuPlayer::take_disconnect_actions()
 {
 	Array a;
@@ -6268,6 +7125,7 @@ Dictionary AptMenuPlayer::set_create_a_hero(Object *worldObject, const String &p
 	}
 	ShellMode &sm = *m->shell;
 	std::vector<std::string> listErrors;
+	world->set_hero_stats_profile(profileDir.utf8().get_data());
 	sm.cahHeroes.load(m->fs->archive_fs(), profileDir.utf8().get_data(), &listErrors);
 	for (const std::string &e : listErrors)
 	{
@@ -6297,6 +7155,8 @@ Dictionary AptMenuPlayer::get_create_a_hero_view() const
 	const char page = screen->currentPage();
 	out["page"] = page ? String(std::string(1, page).c_str()) : String();
 	out["revision"] = (int64_t)screen->displayRevision();
+	out["last_message"] = String(screen->lastMessage().c_str()); // lane CAHPIC-1: the last box's labels (the --cah-picture run waits for it)
+	out["picture_frames"] = (int64_t)screen->pictureFrames();     // lane CAHPIC-1: the guard clip's draws since PrepareToTakePicture
 	PackedByteArray record;
 	if (const CreateAHeroHero *h = screen->displayedHero())
 	{
@@ -6366,6 +7226,15 @@ bool AptMenuPlayer::create_a_hero_type_name(const String &name)
 	}
 	m->dirty = true;
 	return screen->typeName(u);
+}
+
+void AptMenuPlayer::set_create_a_hero_portrait(const String &image)
+{
+	if (m->shell && m->shell->wm)
+	{
+		m->shell->wm->setAptImage("Cah::Portrait", toNative(image));
+		m->dirty = true;
+	}
 }
 
 void AptMenuPlayer::set_create_a_hero_view_texture(const Ref<Texture2D> &texture)
@@ -6473,10 +7342,16 @@ Dictionary AptMenuPlayer::set_online(Object *worldObject, const Dictionary &opti
 		return r;
 	}
 	OnlineLobbyClient::Options o;
+	o.installId = toNative(String(options.get("install", String())));
+	o.deviceHash = toNative(String(options.get("device", String())));
+	const Dictionary client = options.get("client", Dictionary());
+	o.clientPlatform = toNative(String(client.get("platform", String())));
+	o.clientVersion = toNative(String(client.get("version", String())));
 	o.profileDigest = toNative(world->net_profile_digest());
 	o.platform = localPlatform(); // lane PLATFORMICON-1: the one value told about this machine
 	o.playerTemplateCount = factions;
 	o.colorCount = colors;
+	o.enableSocial = !o.installId.empty();
 	o.pollMs = (std::uint32_t)(int64_t)options.get("poll_ms", (int64_t)o.pollMs);
 	// lane ONLINE-5: the staging room's polls are held by a lobby that can (20 s: one request per player every 20 s in an idle room); "long_poll_s" 0
 	// turns it off (plain polls every poll_ms)
@@ -6519,6 +7394,9 @@ Array AptMenuPlayer::online_take_requests()
 		d["token"] = toGodot(q.token);
 		d["held"] = q.held; // lane ONLINE-5: a poll the lobby may keep for hold_seconds: its own connection (online_http.gd)
 		d["hold_seconds"] = (int64_t)q.holdSeconds;
+		d["max_slots"] = (int64_t)q.maxSlots;
+		d["channel"] = q.channel == OnlineLobbyClient::HttpRequest::Social ? "social" :
+			q.channel == OnlineLobbyClient::HttpRequest::Room ? "room" : "ordinary";
 		out.push_back(d);
 	}
 	return out;
@@ -6643,6 +7521,8 @@ Dictionary AptMenuPlayer::online_status()
 	}
 	r["running"] = mine;
 	r["in_game"] = c.inGame();
+	// lane ONLINEMENU-1: the corner's ping: the player's latest link to the game relay ("" not measured yet, "none" no answer, else "<ms>")
+	r["relay_ping"] = toGodot(!c.ownRelayKnown() ? std::string() : c.ownRelayRttMs() < 0 ? std::string("none") : std::to_string(c.ownRelayRttMs()));
 	r["host"] = c.amIHost();
 	r["mode"] = toGodot(std::string(OnlineLobbyClient::modeName(c.profile()))); // lane UBERJOIN-1: "normal" or "uber" (Quick Match matches by it)
 	r["room_mode"] = toGodot(std::string(OnlineLobbyClient::modeName(c.gameMode())));
@@ -6650,21 +7530,34 @@ Dictionary AptMenuPlayer::online_status()
 	r["game_id"] = toGodot(c.gameId());
 	r["busy"] = c.busy();
 	Array ready;
-	for (const auto &v : c.slotViews())
+	for (int i = 0; i < c.gameInfo().serializedSlotCount(); ++i)
 	{
-		ready.push_back(v.ready);
+		ready.push_back(c.slotViews()[(size_t)i].ready);
 	}
 	r["ready"] = ready;
+	Array reportPlayers;
+	for (size_t i = 0; i < c.slotViews().size(); ++i)
+	{
+		const auto &slot = c.slotViews()[i];
+		if (slot.state != "player" || slot.playerId.empty()) continue;
+		Dictionary player;
+		player["id"] = toGodot(slot.playerId);
+		player["name"] = u8(c.gameInfo().slots[i].name);
+		player["you"] = slot.you;
+		reportPlayers.push_back(player);
+	}
+	r["report_players"] = reportPlayers;
 	// lane ONLINE-5: the players' start positions (-1: random) and whether the lobby holds the staging room's polls
 	Array startPos;
-	for (const SkirmishGameSlot &gs : c.gameInfo().slots)
+	for (int i = 0; i < c.gameInfo().serializedSlotCount(); ++i)
 	{
-		startPos.push_back((int64_t)gs.startPos);
+		startPos.push_back((int64_t)c.gameInfo().slots[i].startPos);
 	}
 	r["start_pos"] = startPos;
 	r["hold_seconds"] = (int64_t)c.holdSeconds();
 	AptOnlineShell *screen = sm.shell ? dynamic_cast<AptOnlineShell *>(sm.shell->findScreenByFilename("OnlineShell.apt")) : nullptr;
 	r["screen"] = screen != nullptr;
+	r["messenger"] = screen && screen->messenger() != nullptr;
 	if (screen)
 	{
 		r["page"] = toGodot(screen->currentPage());
@@ -6677,7 +7570,7 @@ Dictionary AptMenuPlayer::online_status()
 		r["level"] = (int64_t)screen->level();
 		// lane ONLINE-5: what each Ready box was told to show (SetReadyState), the host's refused starts, the start spots the map tab shows
 		Array icons;
-		for (int i = 0; i < MAX_SLOTS; ++i)
+		for (int i = 0; i < c.gameInfo().serializedSlotCount(); ++i)
 		{
 			icons.push_back(toGodot(screen->readyIcon(i)));
 		}
@@ -6691,6 +7584,519 @@ Dictionary AptMenuPlayer::online_status()
 		r["start_spots"] = spots;
 	}
 	return r;
+}
+
+Dictionary AptMenuPlayer::online_social_status() const
+{
+	Dictionary out;
+	out["available"] = false;
+	if (!m->shell || !m->shell->online)
+	{
+		return out;
+	}
+	const OnlineLobbyClient &c = *m->shell->online;
+	const OnlineLobbyClient::SocialState &s = c.social();
+	auto text16 = [](const std::u16string &v) { return String::utf8(OnlineLobbyClient::utf16ToUtf8(v).c_str()); };
+	auto player = [&](const OnlineLobbyClient::Player &p) {
+		Dictionary d;
+		d["pid"] = toGodot(p.pid);
+		d["code"] = toGodot(p.code);
+		d["nick"] = text16(p.nick);
+		return d;
+	};
+	out["available"] = s.available;
+	out["unsupported"] = s.unsupported; // ONLINEMENU-1: the lobby has no social service (the screens say "not available on this server yet")
+	Dictionary me;
+	me["pid"] = toGodot(s.me.pid);
+	me["code"] = toGodot(s.me.code);
+	me["nick"] = text16(s.me.nick);
+	me["hidden"] = s.me.hidden;
+	Dictionary privacy;
+	privacy["invites"] = toGodot(s.me.privacy.invites);
+	privacy["challenges"] = toGodot(s.me.privacy.challenges);
+	privacy["requests"] = toGodot(s.me.privacy.requests);
+	privacy["presence"] = toGodot(s.me.privacy.presence);
+	me["privacy"] = privacy;
+	out["me"] = me;
+	Array friends;
+	for (const auto &f : s.friends)
+	{
+		Dictionary d = player(f);
+		auto presence = std::find_if(s.presence.begin(), s.presence.end(), [&](const auto &p) { return p.pid == f.pid; });
+		d["status"] = presence == s.presence.end() ? String("offline") : toGodot(presence->state);
+		d["request"] = false;
+		friends.push_back(d);
+	}
+	out["friends"] = friends;
+	Array requests;
+	for (const auto &item : s.requests)
+	{
+		Dictionary d;
+		d["id"] = toGodot(item.id);
+		d["from"] = player(item.from);
+		d["to"] = player(item.to);
+		d["at"] = (int64_t)item.at;
+		requests.push_back(d);
+	}
+	out["requests"] = requests;
+	Array invites;
+	for (const auto &item : s.invites)
+	{
+		Dictionary d;
+		d["id"] = toGodot(item.id);
+		d["from"] = player(item.from);
+		d["to"] = player(item.to);
+		d["game"] = toGodot(item.game);
+		d["kind"] = toGodot(item.kind);
+		d["mode"] = item.hasMode ? Variant(toGodot(item.mode)) : Variant();
+		d["note"] = toGodot(item.note);
+		d["expires"] = (int64_t)item.expires;
+		invites.push_back(d);
+	}
+	out["invites"] = invites;
+	Array presence;
+	for (const auto &item : s.presence)
+	{
+		Dictionary d;
+		d["pid"] = toGodot(item.pid);
+		d["state"] = toGodot(item.state);
+		d["game"] = item.hasGame ? Variant(toGodot(item.game)) : Variant();
+		d["joinable"] = item.joinable;
+		d["since"] = (int64_t)item.since;
+		d["map"] = item.hasMap ? Variant(toGodot(item.map)) : Variant();
+		d["mode"] = item.hasMode ? Variant(toGodot(item.mode)) : Variant();
+		presence.push_back(d);
+	}
+	out["presence"] = presence;
+	Array notices;
+	for (const auto &item : s.notices)
+	{
+		Dictionary d;
+		d["id"] = toGodot(item.id);
+		d["kind"] = toGodot(item.kind);
+		d["invite"] = item.hasInvite ? Variant(toGodot(item.invite)) : Variant();
+		d["at"] = (int64_t)item.at;
+		notices.push_back(d);
+	}
+	out["notices"] = notices;
+	Array recent;
+	for (const auto &game : s.recent)
+	{
+		Dictionary d;
+		d["game"] = toGodot(game.game);
+		d["at"] = (int64_t)game.at;
+		Array players;
+		for (const auto &entry : game.players)
+		{
+			Dictionary p = player(entry.player);
+			p["target"] = toGodot(entry.target);
+			players.push_back(p);
+		}
+		d["players"] = players;
+		recent.push_back(d);
+	}
+	out["recent"] = recent;
+	Array blocks;
+	for (const auto &item : s.blocks)
+	{
+		Dictionary d = player(item.player);
+		d["note"] = toGodot(item.note);
+		d["at"] = (int64_t)item.at;
+		blocks.push_back(d);
+	}
+	out["blocks"] = blocks;
+	out["blocks_next"] = s.hasBlocksNext ? Variant(toGodot(s.blocksNext)) : Variant();
+	Array heads;
+	for (const auto &item : s.chatHeads)
+	{
+		Dictionary d;
+		d["pid"] = toGodot(item.pid);
+		d["last_id"] = (int64_t)item.lastId;
+		d["read_id"] = (int64_t)item.readId;
+		heads.push_back(d);
+	}
+	out["chat_heads"] = heads;
+	out["chat"] = heads;
+	Array threads;
+	for (const auto &item : s.threads)
+	{
+		Dictionary d;
+		d["pid"] = toGodot(item.pid);
+		d["nick"] = text16(item.nick);
+		d["code"] = toGodot(item.code);
+		d["last_id"] = (int64_t)item.lastId;
+		d["read_id"] = (int64_t)item.readId;
+		threads.push_back(d);
+	}
+	out["threads"] = threads;
+	out["threads_next"] = s.hasThreadsNext ? Variant(toGodot(s.threadsNext)) : Variant();
+	Dictionary conversations;
+	for (const auto &pair : s.conversations)
+	{
+		Dictionary conversation;
+		Array messages;
+		for (const auto &item : pair.second.messages)
+		{
+			Dictionary d;
+			d["id"] = (int64_t)item.id;
+			d["from"] = toGodot(item.from);
+			d["to"] = toGodot(item.to);
+			d["text"] = toGodot(item.text);
+			d["at"] = (int64_t)item.at;
+			d["client_id"] = toGodot(item.clientId);
+			messages.push_back(d);
+		}
+		conversation["messages"] = messages;
+		conversation["next"] = pair.second.hasNext ? Variant((int64_t)pair.second.next) : Variant();
+		conversation["has_more"] = pair.second.hasNext;
+		conversation["last_id"] = (int64_t)pair.second.lastId;
+		conversation["read_id"] = (int64_t)pair.second.readId;
+		conversations[toGodot(pair.first)] = conversation;
+	}
+	out["conversations"] = conversations;
+	out["seq"] = toGodot(s.seq);
+	Dictionary stats;
+	stats["v"] = 1;
+	stats["players"] = (int64_t)s.stats.players;
+	stats["games_open"] = (int64_t)s.stats.gamesOpen;
+	stats["games_running"] = (int64_t)s.stats.gamesRunning;
+	stats["as_of"] = (int64_t)s.stats.asOf;
+	out["stats"] = stats;
+	Array roomPlayers;
+	if (c.inGame())
+	{
+		for (std::size_t i = 0; i < c.slotViews().size(); ++i)
+		{
+			const auto &slot = c.slotViews()[i];
+			if (slot.state != "player" || slot.you) continue;
+			Dictionary d;
+			d["pid"] = slot.pid.empty() ? Variant() : Variant(toGodot(slot.pid));
+			d["nick"] = text16(c.gameInfo().slots[i].name);
+			d["blocked"] = slot.blocked;
+			d["target"] = slot.playerId.empty() ? Variant() : Variant(toGodot(slot.playerId));
+			roomPlayers.push_back(d);
+		}
+	}
+	out["room_players"] = roomPlayers;
+	return out;
+}
+
+Array AptMenuPlayer::online_social_events()
+{
+	Array out;
+	if (!m->shell || !m->shell->online) return out;
+	for (const auto &event : m->shell->online->takeSocialEvents())
+	{
+		Dictionary d;
+		const char *kind = event.kind == OnlineLobbyClient::SocialEvent::Error ? "error" :
+			event.kind == OnlineLobbyClient::SocialEvent::Chat ? "chat" :
+			event.kind == OnlineLobbyClient::SocialEvent::Recovery ? "recovery" :
+			event.kind == OnlineLobbyClient::SocialEvent::NoticeEvent ? "notice" : "changed";
+		d["kind"] = kind;
+		if (!event.request.empty()) d["request"] = toGodot(event.request);
+		if (!event.code.empty()) d["code"] = toGodot(event.code);
+		if (!event.pid.empty()) d["pid"] = toGodot(event.pid);
+		if (!event.id.empty()) d["id"] = toGodot(event.id);
+		if (!event.text.empty() || event.kind == OnlineLobbyClient::SocialEvent::Recovery)
+			d[event.kind == OnlineLobbyClient::SocialEvent::Recovery ? "code" : "message"] = toGodot(event.text);
+		out.push_back(d);
+	}
+	return out;
+}
+
+Dictionary AptMenuPlayer::online_social_apply(const Dictionary &spec)
+{
+	Dictionary out;
+	auto fail = [&](const std::string &error) {
+		out["ok"] = false;
+		out["error"] = toGodot(error);
+		return out;
+	};
+	if (!m->shell || !m->shell->online) return fail("not_in_shell");
+	OnlineLobbyClient &c = *m->shell->online;
+	const std::string action = toNative(String(spec.get("action", String())));
+	const std::string pid = toNative(String(spec.get("pid", String())));
+	const std::string id = toNative(String(spec.get("id", String())));
+	const std::string text = toNative(String(spec.get("text", String())));
+	const std::string note = toNative(String(spec.get("note", String())));
+	bool ok = false;
+	if (action == "request_friend_code") ok = c.requestFriendCode(toNative(String(spec.get("code", String()))));
+	else if (action == "request_friend") ok = c.requestFriend(pid);
+	else if (action == "accept_friend") ok = c.acceptFriend(id);
+	else if (action == "decline_friend") ok = c.declineFriend(id);
+	else if (action == "remove_friend") ok = c.removeFriend(pid);
+	else if (action == "block_player") ok = c.blockPlayer(pid, note);
+	else if (action == "unblock_player") ok = c.unblockPlayer(pid);
+	else if (action == "fetch_blocks") ok = c.fetchBlocks(toNative(String(spec.get("after", String()))));
+	else if (action == "send_invite")
+		ok = c.sendInvite(pid, toNative(String(spec.get("kind", String("invite")))),
+			toNative(String(spec.get("mode", String()))), note);
+	else if (action == "accept_invite") ok = c.acceptInvite(id);
+	else if (action == "leave_accept_invite") ok = c.acceptInviteAfterLeave(id);
+	else if (action == "decline_invite") ok = c.declineInvite(id, bool(spec.get("busy", false)));
+	else if (action == "fetch_recent") ok = c.fetchRecent();
+	else if (action == "fetch_threads") ok = c.fetchThreads(toNative(String(spec.get("after", String()))));
+	else if (action == "fetch_messages")
+		ok = c.fetchMessages(pid, (std::uint64_t)(int64_t)spec.get("after", (int64_t)0));
+	else if (action == "send_message")
+		ok = c.sendMessage(pid, toNative(String(spec.get("client_id", String()))), text);
+	else if (action == "mark_read")
+		ok = c.markRead(pid, (std::uint64_t)(int64_t)spec.get("through", (int64_t)0));
+	else if (action == "set_privacy")
+	{
+		const Dictionary value = spec.get("privacy", Dictionary());
+		OnlineLobbyClient::Privacy privacy;
+		privacy.invites = toNative(String(value.get("invites", String())));
+		privacy.challenges = toNative(String(value.get("challenges", String())));
+		privacy.requests = toNative(String(value.get("requests", String())));
+		privacy.presence = toNative(String(value.get("presence", String())));
+		ok = c.setPrivacy(privacy);
+	}
+	else if (action == "set_presence")
+		ok = c.setPresence(toNative(String(spec.get("state", String()))), spec.has("hidden"), bool(spec.get("hidden", false)));
+	else if (action == "generate_recovery") ok = c.generateRecovery();
+	else if (action == "leave_game")
+	{
+		if (!c.inGame()) return fail("not_in_game");
+		c.leaveGame();
+		ok = true;
+	}
+	else if (action == "create_challenge")
+	{
+		AptOnlineShell *screen = m->shell->shell ?
+			dynamic_cast<AptOnlineShell *>(m->shell->shell->findScreenByFilename("OnlineShell.apt")) : nullptr;
+		if (!screen) return fail("online_screen_closed");
+		ok = screen->createChallenge(pid, toNative(String(spec.get("mode", String()))),
+			toNative(String(spec.get("password", String()))));
+		if (!ok) return fail("challenge_not_started");
+	}
+	else return fail("bad_action");
+	if (!ok) return fail(c.lastSocialError().empty() ? "social_unavailable" : c.lastSocialError());
+	out["ok"] = true;
+	return out;
+}
+
+// lane ONLINEMENU-1: the online FRIENDS button and page (AptOnlineShell; NOT RETAIL)
+namespace
+{
+AptOnlineShell *onlineShellOf(Shell *shell)
+{
+	return shell ? dynamic_cast<AptOnlineShell *>(shell->findScreenByFilename("OnlineShell.apt")) : nullptr;
+}
+} // namespace
+
+void AptMenuPlayer::online_friends_button(const String &label)
+{
+	if (AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr))
+	{
+		s->setFriendsButton(utf8ToU16(toNative(label)).substr(0, 32));
+	}
+}
+
+bool AptMenuPlayer::online_ask(const String &key, const String &title, const String &text)
+{
+	AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr);
+	return s && s->askYesNo(toNative(key).substr(0, 64), utf8ToU16(toNative(title)).substr(0, 64), utf8ToU16(toNative(text)).substr(0, 400));
+}
+
+bool AptMenuPlayer::online_asking(const String &key)
+{
+	AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr);
+	return s && s->asking(toNative(key));
+}
+
+PackedStringArray AptMenuPlayer::online_answers()
+{
+	PackedStringArray out;
+	if (AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr))
+	{
+		for (const std::string &a : s->takeAnswers())
+		{
+			out.push_back(toGodot(a));
+		}
+	}
+	return out;
+}
+
+Dictionary AptMenuPlayer::online_friends_page_show(const Dictionary &spec)
+{
+	Dictionary r;
+	r["ok"] = false;
+	AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr);
+	if (!s)
+	{
+		r["error"] = "OnlineShell.apt is not up";
+		return r;
+	}
+	std::string error;
+	const bool ok = s->openFriendsPage(pageSpecOf(spec), &error);
+	r["ok"] = ok;
+	r["error"] = toGodot(error);
+	if (!ok)
+	{
+		UtilityFunctions::printerr(toGodot("SHELL friends page: " + error));
+	}
+	return r;
+}
+
+void AptMenuPlayer::online_friends_page_close()
+{
+	if (AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr))
+	{
+		s->closeFriendsPage();
+	}
+}
+
+Array AptMenuPlayer::online_friends_page_events()
+{
+	AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr);
+	return s ? pageEventsOf(s->takeFriendsEvents()) : Array();
+}
+
+Dictionary AptMenuPlayer::online_friends_page_state() const
+{
+	Dictionary d;
+	AptOnlineShell *s = onlineShellOf(m->shell ? m->shell->shell.get() : nullptr);
+	d["shell"] = s != nullptr;
+	d["open"] = s && s->friendsPageOpen();
+	if (s)
+	{
+		d["button"] = Rect2(AptOnlineShell::kFriendsButtonLeft, AptOnlineShell::kFriendsButtonTop, AptOnlineShell::kFriendsButtonRight - AptOnlineShell::kFriendsButtonLeft,
+			AptOnlineShell::kFriendsButtonBottom - AptOnlineShell::kFriendsButtonTop);
+	}
+	OpenBFMEOptionsPage *page = s ? s->friendsPage() : nullptr;
+	if (!page || !page->shown())
+	{
+		return d;
+	}
+	d["tab"] = page->spec().tab;
+	Array tabs;
+	for (std::size_t i = 0; i < page->spec().tabs.size(); ++i)
+	{
+		std::array<int, 4> r{};
+		page->rect("tab:" + std::to_string(i), r);
+		tabs.push_back(stageRect(r));
+	}
+	d["tabs"] = tabs;
+	Dictionary rows;
+	for (const OpenBFMEPageRow &row : page->spec().rows)
+	{
+		if (row.key.empty())
+		{
+			continue;
+		}
+		Dictionary rd;
+		std::array<int, 4> r{};
+		if (page->rect(row.key, r))
+		{
+			rd["rect"] = stageRect(r);
+		}
+		rd["value"] = row.value;
+		rd["value_text"] = toGodot(u16ToUtf8(row.valueText));
+		rd["label"] = toGodot(u16ToUtf8(row.label));
+		rows[toGodot(row.key)] = rd;
+	}
+	d["rows"] = rows;
+	Array list;
+	for (const auto &item : page->spec().list)
+	{
+		list.push_back(toGodot(u16ToUtf8(item.first)));
+	}
+	d["list_rows"] = list;
+	std::array<int, 4> lr{};
+	if (page->rect("list", lr))
+	{
+		d["list"] = stageRect(lr);
+	}
+	d["help"] = toGodot(u16ToUtf8(page->helpText()));
+	return d;
+}
+
+Dictionary AptMenuPlayer::online_messenger_sync(const Dictionary &spec)
+{
+	Dictionary out;
+	out["open"] = false;
+	if (!m->shell || !m->shell->shell) return out;
+	AptOnlineShell *screen = dynamic_cast<AptOnlineShell *>(m->shell->shell->findScreenByFilename("OnlineShell.apt"));
+	AptMessenger *messenger = screen ? screen->messenger() : nullptr;
+	if (!messenger) return out;
+	if (spec.has("rows"))
+	{
+		const Array rows = spec.get("rows", Array());
+		for (int tab = 0; tab < 2; ++tab)
+		{
+			std::vector<AptMessenger::Row> nativeRows;
+			if (rows.size() > tab && rows[tab].get_type() == Variant::ARRAY)
+			{
+				const Array entries = rows[tab];
+				for (int i = 0; i < entries.size() && i < 200; ++i)
+				{
+					AptMessenger::Row row;
+					if (entries[i].get_type() == Variant::DICTIONARY)
+					{
+						const Dictionary item = entries[i];
+						row.id = toNative(String(item.get("pid", String())));
+						row.name = utf8ToU16(toNative(String(item.get("nick", String()))));
+						row.status = utf8ToU16(toNative(String(item.get("status", String()))));
+						row.request = bool(item.get("request", false));
+						row.blocked = bool(item.get("blocked", false));      // lane ONLINEMENU-1
+						row.friendable = bool(item.get("friendable", true));
+					}
+					else if (entries[i].get_type() == Variant::ARRAY)
+					{
+						const Array item = entries[i];
+						if (item.size() > 0) row.id = toNative(String(item[0]));
+						if (item.size() > 1) row.name = utf8ToU16(toNative(String(item[1])));
+						if (item.size() > 2) row.status = utf8ToU16(toNative(String(item[2])));
+						if (item.size() > 3) row.request = bool(item[3]);
+					}
+					else continue;
+					nativeRows.push_back(std::move(row));
+				}
+			}
+			messenger->setRows(tab, nativeRows);
+		}
+	}
+	if (spec.has("chat"))
+	{
+		const Array chats = spec.get("chat", Array());
+		for (int tab = 0; tab < 2; ++tab)
+		{
+			std::vector<std::u16string> lines;
+			if (chats.size() > tab && chats[tab].get_type() == Variant::ARRAY)
+			{
+				const Array entries = chats[tab];
+				for (int i = 0; i < entries.size() && i < 200; ++i)
+					lines.push_back(utf8ToU16(toNative(String(entries[i]))));
+			}
+			messenger->setChat(tab, lines);
+		}
+	}
+	if (spec.has("clear_entry_if"))
+		messenger->acknowledgeMessage(utf8ToU16(toNative(String(spec.get("clear_entry_if", String())))));
+	if (spec.has("select")) // lane ONLINEMENU-1 (Sol): the player the FRIENDS page chose
+		messenger->selectPlayer(toNative(String(spec.get("select", String()))));
+	out["open"] = true;
+	out["tab"] = messenger->activeTab();
+	out["selected"] = toGodot(messenger->selectedPlayer());
+	Array actions;
+	for (const auto &action : messenger->takeActions())
+	{
+		Dictionary d;
+		const char *kind = action.kind == AptMessenger::Action::Select ? "select" :
+			action.kind == AptMessenger::Action::AddFriend ? "add_friend" :
+			action.kind == AptMessenger::Action::RemoveFriend ? "remove_friend" :
+			action.kind == AptMessenger::Action::AcceptFriend ? "accept_friend" :
+			action.kind == AptMessenger::Action::Invite ? "invite" :
+			action.kind == AptMessenger::Action::Ignore ? "block" :
+			action.kind == AptMessenger::Action::Unignore ? "unblock" : "send";
+		d["kind"] = kind;
+		d["pid"] = toGodot(action.player);
+		d["text"] = String::utf8(OnlineLobbyClient::utf16ToUtf8(action.text).c_str());
+		actions.push_back(d);
+	}
+	out["actions"] = actions;
+	return out;
 }
 
 Dictionary AptMenuPlayer::online_apply(const Dictionary &spec)

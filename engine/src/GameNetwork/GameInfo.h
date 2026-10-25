@@ -17,7 +17,8 @@
 #include <string>
 #include <vector>
 
-constexpr int MAX_SLOTS = 8;              // ZH GameNetwork/GameInfo.h
+constexpr int LEGACY_MAX_SLOTS = 8;       // ZH GameNetwork/GameInfo.h / RotWK 2.01
+constexpr int MAX_SLOTS = 16;             // OpenBFME extension; map-gated, not a simulation profile
 constexpr int PLAYERTEMPLATE_RANDOM = -1; // ZH Common/PlayerTemplate.h
 constexpr int PLAYERTEMPLATE_OBSERVER = -2;
 
@@ -143,6 +144,10 @@ struct SkirmishGameSlot
 struct SkirmishGameInfo
 {
 	SkirmishGameSlot slots[MAX_SLOTS];
+	// OpenBFME map capacity: 8 for legacy maps/records, actual start count (9..16)
+	// for extended maps. Network/save encoders must explicitly tag the latter.
+	int mapStartCount = LEGACY_MAX_SLOTS;
+	int serializedSlotCount() const { return mapStartCount > LEGACY_MAX_SLOTS ? MAX_SLOTS : LEGACY_MAX_SLOTS; }
 	std::string mapName; // the map cache key
 	std::uint32_t mapCRC = 0;
 	std::uint32_t mapSize = 0;
@@ -283,7 +288,7 @@ struct SkirmishGameInfo
 				return false;
 			}
 		}
-		return mapName == o.mapName && mapCRC == o.mapCRC && mapSize == o.mapSize && mapMask == o.mapMask && seed == o.seed && startingCash == o.startingCash
+		return mapStartCount == o.mapStartCount && mapName == o.mapName && mapCRC == o.mapCRC && mapSize == o.mapSize && mapMask == o.mapMask && seed == o.seed && startingCash == o.startingCash
 			&& superweaponRestriction == o.superweaponRestriction && inProgress == o.inProgress && rules == o.rules && legendaryHeroes == o.legendaryHeroes
 			&& simulationProfile == o.simulationProfile;
 	}
@@ -305,4 +310,3 @@ struct NewGameMessage
 	int rankPoints = 0;
 	SkirmishGameInfo game; // TheSkirmishGameInfo at the moment of the message
 };
-

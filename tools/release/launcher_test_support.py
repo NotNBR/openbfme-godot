@@ -6,6 +6,7 @@ import ctypes
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from ctypes import wintypes
 from pathlib import Path
@@ -15,6 +16,12 @@ PLATFORM = "windows-x64" if WINDOWS else "linux-x64"
 GAME_EXE = "OpenBFME.exe" if WINDOWS else "OpenBFME.x86_64"
 LAUNCHER_EXE = "OpenBFMELauncher.exe" if WINDOWS else "OpenBFMELauncher.x86_64"
 ARCHIVE_SUFFIX = ".zip" if WINDOWS else ".tar.gz"
+# lane MACGATE-1: the launcher tests serve and run linux-x64 / windows-x64 packages; a launcher on macOS takes none of them (it does no
+# automated updates by design: updater.macos_updates_unsupported(), game_start.gd), so on macOS they are skipped by name; the Mac launcher
+# has its own tests (test_macos_update.py, test_macplay.py)
+MACOS = sys.platform == "darwin"
+MACOS_SKIP = ("SKIP on macOS: these tests drive the Linux / Windows launcher's update path; the Mac launcher does no automated updates "
+              "(test_macos_update.py / test_macplay.py cover it)")
 
 
 def godot_engine(executable: str) -> str:

@@ -24,7 +24,7 @@
 // PathfindCellInfoPool
 // ---------------------------------------------------------------------------------------------------------
 // lane PATHPERF-4: the records live in blocks that never move (cells and searches keep pointers to them), so the pool can grow: allocate makes the
-// first block, and with a growth limit an empty free list gets another block instead of failing (setGrowthLimit; retail grows too: 0x200 fixed
+// first block, and with a growth limit an empty free list gets another block instead of failing (setGrowthLimit: the Uber profile only; BFME1 keeps 0x200 fixed
 // slots plus an overflow list, Open-BFME-1 PathfindCellInfoPoolReset.cpp). Until the first block runs out nothing differs from a fixed pool
 void PathfindCellInfoPool::addBlock(int count)
 {

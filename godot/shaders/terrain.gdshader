@@ -11,6 +11,7 @@ render_mode unshaded, cull_back;
 
 #include "res://shaders/terrain_common.gdshaderinc"
 #include "res://shaders/selection_decals.gdshaderinc"
+#include "res://shaders/radius_cursor.gdshaderinc"
 
 varying vec2 v_sage_xy; // lane SELPERF-1: the world point of the pixel (SAGE x, y) for the selection's merge decals
 
@@ -40,5 +41,12 @@ void fragment() {
 	vec4 sel = sel_merge(v_sage_xy);
 	if (sel.a > 0.0) {
 		ALBEDO = mix(ALBEDO, retail_output(sel.rgb), sel.a);
+	}
+	// Composite the retail radius texture with the terrain, as with selection decals.
+	vec4 cursor = radius_cursor_sample(v_sage_xy);
+	if (radius_cursor_params.y > 0.5) {
+		ALBEDO = mix(ALBEDO, retail_output(cursor.rgb), cursor.a);
+	} else {
+		ALBEDO += retail_output(cursor.rgb) * cursor.a;
 	}
 }

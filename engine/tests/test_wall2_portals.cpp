@@ -241,6 +241,33 @@ TEST_CASE("wall2 portals: without the postern gate the far side of the wall is a
 	delete back;
 }
 
+TEST_CASE("wall2 portals review of #63: a Via chain that loops back on itself ends at its first repeat; the path through the gate is found and walks each "
+		  "Via waypoint once")
+{
+	PortalWorld w;
+	// A's Via M now goes on to P, and P back to M (Link From:A Via:M Via:P Via:M ... as data could chain them): neither has a link of its own
+	PathfindWaypoint pw;
+	pw.pos = { 215.0f, 105.0f, 0.0f };
+	pw.type = PWAYPOINT_WALK;
+	pw.owner = w.wall->id;
+	const int p = w.pf->createWaypoint(pw);
+	w.pf->setWaypointNext(w.m, p);
+	w.pf->setWaypointNext(p, w.m);
+	bool partial = true;
+	Path *path = w.pathTo(305.0f, 105.0f, &partial);
+	REQUIRE(path);
+	CHECK_FALSE(partial);
+	int atM = 0, atP = 0;
+	for (const NodeView &nv : nodes(*path))
+	{
+		atM += nv.x == 205.0f ? 1 : 0;
+		atP += nv.x == 215.0f ? 1 : 0;
+	}
+	CHECK(atM == 1);
+	CHECK(atP == 1);
+	delete path;
+}
+
 TEST_CASE("wall2 portals: the hierarchical corridor crosses the portal and records the hop (the waypoint, its start cell); the search takes it and drops it")
 {
 	PortalWorld w;

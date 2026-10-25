@@ -363,6 +363,8 @@ TEST_CASE("save4a: the game's block registry is the exact inventory: every simul
 						  "obfme:CreateAHero xfer SAVE-4d",
 						  "obfme:TerrainTrees xfer SAVE-4d",
 						  "obfme:LargeGroupAudio xfer SAVE-4d",
+						  "CHUNK_ObjectivesMenu xfer CAMPUI-1",
+						  "CHUNK_MissionObjectives xfer CAMPUI-1",
 					  });
 	// this synthetic game's state hash sections are all declared (no shroud or pathfinder contributor: those exist in a real game, test_save4a_retail.cpp)
 	CHECK(f.logic->gameState().undeclaredSections(f.logic->stateHashSectionNames()).empty());

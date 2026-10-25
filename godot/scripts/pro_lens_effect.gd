@@ -20,10 +20,10 @@
 ## draws with given a linear tone map at exposure 1, no glow and no adjustments (OpenBFME's "enhanced" look has AgX and
 ## glow); attach() puts them back when log_output is off, and detach() and freeing the effect always do.
 ##
-## It also reads the distance along the view at one pixel of the viewport (ask_distance, then `distance` once `answered`
-## reaches the request; below 0 where nothing is drawn, the sky, or outside the picture), for focusing on whatever is
-## drawn there. Set the lens from the main thread; the passes run on the render thread. pro_camera.gd sets it from its
-## lens; it can be used on its own too.
+## It also reads the distance along the view at a pixel of the viewport (ask_distance, then distance_of(request) once
+## `answered` reaches the request; below 0 where nothing is drawn, the sky, or outside the picture), for focusing on
+## whatever is drawn there; requests may overlap, each is answered with its own pixel. Set the lens from the main
+## thread; the passes run on the render thread. pro_camera.gd sets it from its lens; it can be used on its own too.
 ##
 ## It needs the Forward+ renderer: a RenderingDevice and an RGBA16F 3D colour buffer, which the shader writes. Without
 ## them it draws nothing and says why once (`problem`, and a warning).
@@ -31,6 +31,8 @@ extends CompositorEffect
 
 const Lens := preload("res://scripts/pro_lens.gd")
 const TILE := 16              # SOURCE's
+const PROBES := 16            # distance requests answered a frame at most (the probe buffer's slots); more wait
+const ANSWERS_KEPT := 256     # distance requests whose answers distance_of keeps, the latest
 
 var taps := 128               # the blur's samples per pixel (more: smoother, slower; 256 for a still)
 var max_blur := Lens.MAX_BLUR # the largest blur circle drawn, a share of the image's width (larger: slower)
@@ -41,12 +43,13 @@ var ev := 0.0                 # exposure, stops
 var image_mm := Lens.SENSOR.x # the image's width in mm on the sensor's scale (pro_camera.gd image_mm)
 var units_per_metre := Lens.UNITS_PER_METRE
 var log_output := false       # ACEScct, to grade later (off: the picture as OpenBFME draws it)
-var distance := -1.0          # along the view at the asked pixel, world units; < 0: nothing drawn there (sky, outside)
-var answered := 0             # the distance request answered last
+var answered := 0             # the distance request answered last; every request up to it is answered
 var problem := ""             # why the effect draws nothing, once it knows ("": it draws)
 
+var _mutex := Mutex.new()     # the distance requests and their answers, shared by the main and the render thread
 var _asked := 0
-var _ask_at := Vector2i.ZERO
+var _pending: Array = []      # [number, pixel] of each request not answered yet, oldest first
+var _answers := {}            # request number -> distance, the latest ANSWERS_KEPT
 var _rd: RenderingDevice
 var _shader: RID
 var _pipeline: RID
@@ -96,15 +99,45 @@ func _report(why: String, error := false) -> void:
 		push_warning("LENS " + why)
 
 
-## Read the distance along the view at `pixel` (of the viewport) with the next frame; returns the request's number
-## (`answered` reaches it). Without a RenderingDevice nothing is drawn, so it is answered at once, below 0.
+## Read the distance along the view at `pixel` (of the viewport) with the next frame; returns the request's number, for
+## distance_of() once `answered` reaches it. Requests may overlap: each is answered with its own pixel, in the order
+## asked, PROBES a frame. Without a RenderingDevice nothing is drawn, so it is answered at once, below 0.
 func ask_distance(pixel: Vector2i) -> int:
-	_ask_at = pixel           # before the number: the render thread reads the number first
+	_mutex.lock()
 	_asked += 1
+	var number := _asked
 	if RenderingServer.get_rendering_device() == null:
-		distance = -1.0
-		answered = _asked
-	return _asked
+		_answer(number, -1.0)
+	else:
+		_pending.append([number, pixel])
+	_mutex.unlock()
+	return number
+
+
+## The answer to distance request `number`: along the view, world units, below 0 where nothing is drawn there (the sky,
+## or outside the picture); NAN while it is not answered, and once ANSWERS_KEPT later answers have replaced it.
+func distance_of(number: int) -> float:
+	_mutex.lock()
+	var d: float = _answers.get(number, NAN)
+	_mutex.unlock()
+	return d
+
+
+## Request `number` answered with `d`, the oldest answer beyond ANSWERS_KEPT forgotten (requests are answered in order).
+## With _mutex held.
+func _answer(number: int, d: float) -> void:
+	_answers[number] = d
+	_answers.erase(number - ANSWERS_KEPT)
+	answered = maxi(answered, number)
+
+
+## The oldest waiting requests answered with `distances`, one each, in order; on the render thread, the only one that
+## takes requests off _pending (ask_distance only adds to it).
+func _answered(distances: Array) -> void:
+	_mutex.lock()
+	for d in distances:
+		_answer(_pending.pop_front()[0], d)
+	_mutex.unlock()
 
 
 ## `effect` on `camera`'s compositor where it sees linear light: right after OpenBFME's gamma composite (its last
@@ -224,18 +257,22 @@ func _setup() -> void:
 	state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_sampler = _rd.sampler_create(state)
 	_params = _rd.storage_buffer_create(128)
-	_probe = _rd.storage_buffer_create(16)
+	_probe = _rd.storage_buffer_create(PROBES * 4)
 
 
 func _render_callback(_type: int, render_data: RenderData) -> void:
+	# the oldest waiting distance requests, PROBES at most (ask_distance may add more meanwhile; they wait)
+	_mutex.lock()
+	var probes := _pending.slice(0, PROBES)
+	_mutex.unlock()
+	var probing := not probes.is_empty()
 	if _rd == null or not _pipeline.is_valid():
+		if probing and problem != "":
+			_answered(probes.map(func(_request): return -1.0))     # it draws nothing: nothing drawn there
 		return
-	# the lens as it is now, for every pass (the main thread may change it meanwhile); the request's number before its
-	# pixel, which ask_distance sets first
-	var asked := _asked
+	# the lens as it is now, for every pass (the main thread may change it meanwhile)
 	var lens := {"focal": focal, "aperture": aperture, "focus": focus, "ev": ev, "width": image_mm, "taps": taps,
-		"at": _ask_at, "mm": 1000.0 / units_per_metre, "log": log_output, "cap": max_blur}
-	var probing := answered < asked
+		"at": Vector2i.ZERO, "slot": 0, "mm": 1000.0 / units_per_metre, "log": log_output, "cap": max_blur}
 	var changes: bool = lens.aperture > 0.0 or absf(lens.ev) > 1e-6 or lens.log
 	if not (changes or probing):
 		return
@@ -250,8 +287,7 @@ func _render_callback(_type: int, render_data: RenderData) -> void:
 	if _rd.texture_get_format(color).format != RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT:
 		_report("the 3D colour buffer is not RGBA16F (the Forward+ renderer's), which the shader writes: it draws nothing")
 		if probing:
-			distance = -1.0
-			answered = asked
+			_answered(probes.map(func(_request): return -1.0))
 		return
 	_targets(size, _rd.texture_get_format(color).format)
 	var inverse := render_data.get_render_scene_data().get_view_projection(0).inverse()
@@ -265,16 +301,24 @@ func _render_callback(_type: int, render_data: RenderData) -> void:
 		_uniform(RenderingDevice.UNIFORM_TYPE_IMAGE, 7, [_copy])])
 	var tiles := Vector2i(ceili(float(size.x) / TILE), ceili(float(size.y) / TILE))
 	if probing:
-		# the viewport's pixel in the frame the 3D is drawn at, which 3D scaling makes smaller
+		# each request's pixel, read into its own slot of the probe buffer; the buffer read once for all of them
 		var target := buffers.get_target_size()
-		var at := Vector2i((Vector2(lens.at) * Vector2(size) / Vector2(target.max(Vector2i.ONE))).floor())
-		if at.x < 0 or at.y < 0 or at.x >= size.x or at.y >= size.y:
-			distance = -1.0       # outside the picture: nothing drawn there
-		else:
-			lens.at = at
-			_pass(uniforms, inverse, size, lens, 3, Vector2i.ONE)
-			distance = _rd.buffer_get_data(_probe, 0, 4).to_float32_array()[0]
-		answered = asked
+		var inside := []
+		for slot in probes.size():
+			# the viewport's pixel in the frame the 3D is drawn at, which 3D scaling makes smaller
+			var at := Vector2i((Vector2(probes[slot][1]) * Vector2(size) / Vector2(target.max(Vector2i.ONE))).floor())
+			inside.append(at.x >= 0 and at.y >= 0 and at.x < size.x and at.y < size.y)
+			if inside[slot]:
+				lens.at = at
+				lens.slot = slot
+				_pass(uniforms, inverse, size, lens, 3, Vector2i.ONE)
+		var slots := PackedFloat32Array()
+		if inside.has(true):
+			slots = _rd.buffer_get_data(_probe, 0, probes.size() * 4).to_float32_array()
+		var distances := []
+		for slot in probes.size():
+			distances.append(slots[slot] if inside[slot] else -1.0)    # outside the picture: nothing drawn there
+		_answered(distances)
 	if not changes:
 		return
 	var pixels := Vector2i(ceili(size.x / 8.0), ceili(size.y / 8.0))
@@ -292,7 +336,7 @@ func _pass(uniforms: RID, inverse: Projection, size: Vector2i, lens: Dictionary,
 	var open: bool = lens.aperture > 0.0
 	values.append_array([size.x, size.y, lens.at.x, lens.at.y, lens.mm, lens.focus * lens.mm, lens.focal,
 		lens.focal / lens.aperture if open else lens.focal, size.x / lens.width, maxf(2.0, lens.cap * size.x),
-		pow(2.0, lens.ev), lens.taps, 1.0 if open else 0.0, index, 1.0 if lens.log else 0.0, 0.0])
+		pow(2.0, lens.ev), lens.taps, 1.0 if open else 0.0, index, 1.0 if lens.log else 0.0, lens.slot])
 	_rd.buffer_update(_params, 0, values.size() * 4, values.to_byte_array())
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, _pipeline)
@@ -341,8 +385,8 @@ const SOURCE := """#version 450
 // scripts/pro_lens_effect.gd, whose header has the method: each pixel's blur circle from its depth by the thin lens
 // (scripts/pro_lens.gd); the largest blur in each TILE x TILE tile (pass 0), then the largest of the tiles it can reach
 // (pass 1); the blur itself, a single pass over a disc as large as that reach, in linear colour, then the exposure and,
-// with log_output, the ACEScct encode (pass 2). Pass 3 reads the distance at one pixel, to focus on it; pass 4 copies
-// the frame for pass 2 to read. The colour buffer is linear here (after OpenBFME's gamma composite decode); bright
+// with log_output, the ACEScct encode (pass 2). Pass 3 reads the distance at one pixel into its slot, to focus on it;
+// pass 4 copies the frame for pass 2 to read. The colour buffer is linear here (after OpenBFME's gamma composite decode); bright
 // pixels keep their energy, so a light out of focus spreads into a bright disc.
 //
 // Sources: blur_pass's gather loop (the clamp behind the pixel, the smoothstep reach, the running average) is adapted
@@ -367,13 +411,15 @@ layout(set = 0, binding = 0, std430) restrict readonly buffer Params {
 	float use_dof;
 	float pass_index;
 	float log_output;       // 1: ACEScct
+	float probe_slot;       // pass 3's slot in Probe
 } p;
 layout(set = 0, binding = 1) uniform sampler2D depth_tex;
 layout(rgba16f, set = 0, binding = 3) uniform restrict image2D color_img;      // the frame
 layout(r32f, set = 0, binding = 4) uniform restrict image2D tile_img;
 layout(r32f, set = 0, binding = 5) uniform restrict image2D reach_img;
+// one slot for each distance request answered this frame
 layout(set = 0, binding = 6, std430) restrict writeonly buffer Probe {
-	float distance;
+	float distance[];
 } probe_out;
 // the frame's copy (pass 4), read by pass 2
 layout(rgba16f, set = 0, binding = 7) uniform restrict image2D copy_img;
@@ -500,7 +546,8 @@ void main() {
 		}
 	} else if (id == ivec2(0)) {
 		float depth = texelFetch(depth_tex, ivec2(p.probe), 0).r;
-		probe_out.distance = depth > 0.0 ? view_z(depth) : -1.0;   // reversed z: 0 is the cleared far plane, nothing drawn
+		// reversed z: 0 is the cleared far plane, nothing drawn
+		probe_out.distance[int(p.probe_slot)] = depth > 0.0 ? view_z(depth) : -1.0;
 	}
 }
 """

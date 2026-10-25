@@ -69,6 +69,9 @@ public:
 	// noted as an event, as before)
 	virtual bool turnOnBuff(const FXObject &, int /*type*/, const std::string & /*thingTemplate*/, int /*lifeFrames*/) { return false; }
 	virtual bool turnOffBuff(const FXObject &, int /*type*/) { return false; }
+	// lane FX-4: a ViewShake nugget (RW 0x5DFF32 -> TheTacticalView vslot 0x1AC = W3DView::shake RW 0x486D86) with the angle already drawn from the client stream:
+	// true when the world shook its camera (else it is noted as an event, as before)
+	virtual bool viewShake(const Coord3D & /*epicenter*/, int /*type*/, float /*angle*/) { return false; }
 };
 
 class FXPlayback

@@ -83,7 +83,7 @@ private:
 	void setMyState(int state);     // RW 0x8921E3
 	void replayPending();           // RW 0x891F9B
 	void resetRequests();           // RW 0x891CEB
-	void idleFromAI();              // RW 0x5E821A(2) through aiDoCommand's CMD_FROM_AI branch
+	void idleFromAI() override;     // RW 0x5E821A(2) through aiDoCommand's CMD_FROM_AI branch
 	void dispatch(const RoutedCommand &c);
 
 	// the data (raw module lines, RW table 0xC05010)

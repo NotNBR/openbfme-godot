@@ -45,6 +45,8 @@
 ##     --hud7=<a,b,...>      (lane HUD-7, with --auto) scripts/hud7_player.gd: radar (the view box and a radar click), deselect (a left click on empty
 ##                           ground), sell (a structure's Sell button), upgrade (the fortress's upgrade bubble in progress), herocancel (a hero recruited, then
 ##                           cancelled by a right click); hud7-<name>.png in --screens
+##     --pingwheel=<a,b,...> (with --auto) scripts/ping_wheel_player.gd: the ping wheel (not retail) driven by input events: wheel, kinds, space, menus,
+##                           options, hash (PINGWHEEL_HASH=quiet|pings), video (frames in --screens); pingwheel-<name>.png in --screens
 ##     --autocast1=<a,...>   (lane AUTOCAST-1, with --auto) scripts/autocast1_player.gd: witchking (a right click on the Witch-king's Morgul Blade
 ##                           button turns its autocast on, the button glows, he casts it at an enemy hero by himself; off again); autocast1-<name>.png
 ##     --visual2=<a,...>     (lane VISUAL-2, with --auto) scripts/visual2_player.gd: fog (what the local player sees of the enemy in the fog: drawn
@@ -188,6 +190,11 @@
 ##     --online-rejoin[=ID]  the game restarted: rejoin the player's running game (the saved lobby session; the lobby's rejoin START), re-simulate it from
 ##                           the relay's log ("Rejoining" on screen), then play on
 ##     Pause key             pauses a network game for every player (OpenBFME addition, S-3901); Pause again (any player) resumes
+##   lane CHAT-1 (in-game chat, a LAN / online game only, as retail): Enter chats to everyone, Backspace to the allies (InGameChat.apt; Enter sends, Esc
+##     closes); the lines show at the top right in the sender's colour. Test options: --chat-at=FRAME:everyone|allies:TEXT (repeatable) types and sends
+##     TEXT through the chat window at FRAME; --chat-mute=SLOT mutes a slot; --chat-shot=FILE saves the window 1.5 s after the last --chat-at line went
+##     Ctrl+B then a left click on the ground places a beacon (allies and observers see it, a minimap ping every 1.2 s; Delete removes your own);
+##     --beacon-at=FRAME (repeatable) presses Ctrl+B and clicks the middle of the screen at FRAME; --beacon-shot=FILE saves the window 3 s after the last
 ##     --net-pause-at=FRAME / --net-resume-after-ms=MS   the same from the command line (tests); --net-shot-pause=FILE / --net-shot-rejoin=FILE save the
 ##                           window once the game has been paused / rejoining for 2 s / 0.5 s (the proof pictures)
 ##     --online-spectate=ID  watch the game ID as a spectator (the lobby's spectator START; waits for the host to start it; also mid-game): the whole map
@@ -240,6 +247,9 @@
 ##
 ##   lane CAH-1, Create-a-Hero: the main menu's Create-a-Hero opens CreateAHero.apt over its map mode (scripts/create_a_hero_view.gd); the heroes are the system
 ##   heroes of the archives and the profile's MyHero_<id>.cah in retail's save folder (--cah-profile=DIR); the Skirmish / LAN lobby's Hero combo picks one for the slot
+##     --cah-picture         (lane CAHPIC-1, with --auto) the main menu's My Heroes, past the promo page, then the Manager's TAKE PICTURE with real clicks:
+##                           the panels close, the picture is saved in the pictures folder (the box says where), the panels come back; --screens writes
+##                           cahpic-<step>.png; "CAHPIC RESULT ok|FAIL <why>" ends the run
 ##     --cah                 (with --auto) build a hero in the builder through the movies' own functions and commands (class, appearance, name, powers), save it,
 ##                           back to the main menu, pick it in the Skirmish lobby's Hero combo (with --faction), start, recruit it at the fortress; exit 0 when the
 ##                           hero was saved, chosen, installed and made. --screens writes cah1-*.png. Lane CAH-2 r2: the run saves into a temporary folder
@@ -280,6 +290,7 @@ var _perf_log_path := ""      # lane MP-3: --perf-log=<file>: every rendered fra
 var _perf_log: FileAccess = null
 var _perf_log_prev_us := 0
 var _net_census := ""         # lane MP-3: --net-census=<file>: the network game's per-logic-frame census CSV, written when the game ends
+var _net_early_orders := true # lane NETLAG-2: --no-early-orders: every order waits for RotWK's frame + 1 (early orders run a frame sooner where the link allows)
 var _perf_stat_pid := -1      # the perf stat of the current window
 var _perf_stat_index := 0
 var _perf_stat_done := {}     # the finished window's { file, frames }, read at the next window's end
@@ -289,6 +300,7 @@ var _perf_last := 0
 var _perf_prev_us := 0
 const DisplaySettings := preload("res://scripts/display_settings.gd") # lane OPTS-1
 const OnlineStats := preload("res://scripts/online_stats.gd") # lane ONLINECOUNT-1
+const MenuText := preload("res://scripts/menu_text.gd") # lane MENUFIX-1: OpenBFME's lines over the menus in the menus' look
 const AppIcon := preload("res://scripts/app_icon.gd") # lane OWNERFIX-3: the OpenBFME window icon (not Godot's)
 var _display: RefCounted                 # lane OPTS-1: the display settings in effect (openbfme-display.cfg)
 var _display_path := ""
@@ -342,6 +354,8 @@ var _hud: Node
 ## lane PLAY-1: the mouse setup forced on the command line ("alternate": the right click orders, "classic": the left click orders, "": the player's setting)
 var _mouse_override := ""
 var _move_hints: Node3D
+var _pings: Node3D      # the ping wheel (not retail): scripts/ping_board.gd, the pings shown
+var _ping_wheel: CanvasLayer # scripts/ping_wheel.gd, the wheel the ping key opens
 ## lane PLAY-1: the free camera (the owner's presentation option, not retail): --free-camera or Options.ini "OpenBFMEFreeCamera = yes"
 var _free_camera_flag := false
 ## mapworkshop (openbfme-no-shroud.patch): --no-shroud draws the live game without its shroud and fog, as the viewers' debug view does
@@ -368,6 +382,7 @@ var _hover1_menus := "" # lane HOVER-1: --hover1-menus=DIR
 var _hover1_menus_started := false
 var _devport8 := PackedStringArray() # lane DEVPORT-8 (scripts/devport8_player.gd: attack)
 var _hud7 := PackedStringArray() # lane HUD-7 (scripts/hud7_player.gd: radar, deselect, sell, upgrade, herocancel)
+var _pingwheel := PackedStringArray() # the ping wheel's scenarios (scripts/ping_wheel_player.gd)
 var _autocast1 := PackedStringArray() # lane AUTOCAST-1 (scripts/autocast1_player.gd: witchking)
 var _visual2 := PackedStringArray() # lane VISUAL-2 (scripts/visual2_player.gd: fog, trees, look)
 var _start_spot := -1            # lane HUD-5
@@ -377,6 +392,7 @@ var _game_frames := 0
 var _auto_task_started := false
 # lane ONLINE-2
 var _online_join := ""
+var _online_invite := ""
 var _online_host := false
 var _online_lobby := ""
 var _online_name := ""
@@ -385,7 +401,10 @@ var _online_players := 2
 var _online: Node = null
 # lane ONLINE-4
 var _online_http: Node = null
+var _online_reports: Node = null
+var _online_social: Node = null
 var _online_walk := ""
+var _friends_code := "" # lane ONLINEMENU-1: --friends-code (the friends walk)
 var _online_start_file := "" # lane MP-DROP-1: --online-start-file=FILE
 var _online_shots := ""
 var _online_password := ""
@@ -396,6 +415,10 @@ var _online_note: CanvasLayer = null ## "Online play is a test feature", shown w
 var _stats: Node = null              ## lane ONLINECOUNT-1: scripts/online_stats.gd (null: not asked for: off, or not made yet)
 var _stats_off := ""                 ## why the count is not asked for ("" = it is); set once, when the menu first shows
 var _stats_label: Label = null       ## the main menu's / the online menu's "N players online" line
+var _menu_text_errors: Array = []    ## lane MENUFIX-1: faces scripts/menu_text.gd did not find (reported once each)
+var _menu_text_reported := {}        ## lane MENUFIX-1: the faces of _menu_text_errors already reported
+var _menu_text_top := 30.0           ## lane MENUFIX-1: the top left lines' first line (window pixels; under the fps counter's line)
+var _menu_text_line := 18.0          ## lane MENUFIX-1: a top left line's height (window pixels)
 const ONLINE_DEFAULT_LOBBY := "https://play.openbfme.com"
 const ONLINE_SESSION_FILE := "user://online_session.txt" # lane ONLINE-3's file (scripts/online_lobby.gd SESSION_FILE)
 var _online_saved_session := ""
@@ -412,6 +435,7 @@ var _platform_http: Node = null
 var _platform_ready := false
 var _hub_online := {}              # the online game being started: { id, match, tournament } (the record's id: the match's when there is one)
 var _hub_kind := ""                # "skirmish" / "lan" / "online": the kind of the game being played ("" none: not recorded)
+var _last_game_online := false     # DEVINPR-1: the game the score screen is of was an online one (its Report button; not after a skirmish / LAN game)
 var _hub_game_id := ""
 var _game_start_unix := 0
 var _online_rejoin := false        # lane ONLINE-3
@@ -503,6 +527,17 @@ var _lan_shots := "" ## lane UBERJOIN-1: --lan-shots=DIR (join): the game list (
 var _lan_shot_start := "" # lane UI-1: (host) the window 8 s after Play Game: the countdown's QM:STARTINGGAME box (the media)
 var _net_shot := ""
 var _net_shot_frame := -1
+# lane CHAT-1: the chat window's scripted lines (--chat-at), mutes, the proof shot, the scroll-back shown while the window is open
+var _chat_script: Array = [] # [{frame, everyone, text, stage, at}]
+var _chat_mutes: Array = []
+var _chat_shot := ""
+var _chat_open_shot := "" # --chat-open-shot=FILE: the window with the typed line, just before the first scripted Send
+var _chat_shot_at := -1
+var _chat_history_shown := false
+var _chat_lines_seen := 0
+var _beacon_script: Array = [] # [{frame, stage, at}] (lane CHAT-1)
+var _beacon_shot := ""
+var _beacon_shot_at := -1
 # lane NETLAG-1: --net-press=TEMPLATE: the command delay through the HUD (a build button pressed, the frame and the time its unit reaches the queue)
 var _net_press := ""
 var _net_press_state := 0 # 0 not yet, 1 pressed (waiting for the queue), 2 done, 3 an object selected (the control bar shows its buttons next frames)
@@ -630,6 +665,7 @@ var _quit_flow := ""            # lane END-2: --quit / --quit-restart (the scrip
 var _cah: Node = null           # lane CAH-1: the Create-a-Hero builder's 3D view while CreateAHero.apt is up
 var _cah_profile := ""          # lane CAH-1: --cah-profile=DIR (the folder of the profile's MyHero*.cah; default <user data>/Save)
 var _cah_demo := false          # lane CAH-1: --cah (the scripted builder -> lobby -> game run)
+var _cah_picture := false       # lane CAHPIC-1: --cah-picture (Create-a-Hero's TAKE PICTURE with real clicks)
 var _cah_builder_only := false  # lane CAH-1: --cah-builder-only (quit after the builder part)
 var _cah_real_profile := false   # lane CAH-2 r2: --cah-real-profile (the --cah run writes the player's real save folder; default: a temporary one)
 var _cah_temp_root := ""        # lane CAH-2 r2: the --cah run's temporary user data folder (removed at its end)
@@ -657,6 +693,8 @@ func _ready() -> void:
 		if arg.begins_with("--res="):
 			var p := arg.substr(6).split("x")
 			_res = Vector2i(int(p[0]), int(p[1]))
+		elif arg == "--cah-picture":
+			_cah_picture = true
 		elif arg == "--cah":
 			_cah_demo = true
 		elif arg == "--cah-builder-only":
@@ -674,6 +712,8 @@ func _ready() -> void:
 			_perf_stat = arg.substr(12)
 		elif arg.begins_with("--perf-log="):
 			_perf_log_path = arg.substr(11)
+		elif arg == "--no-early-orders":
+			_net_early_orders = false
 		elif arg.begins_with("--net-census="):
 			_net_census = arg.substr(13)
 		elif arg == "--perf":
@@ -780,6 +820,8 @@ func _ready() -> void:
 			_hover1_menus = arg.substr(15)
 		elif arg.begins_with("--hud7="):
 			_hud7 = arg.substr(7).split(",", false)
+		elif arg.begins_with("--pingwheel="):
+			_pingwheel = arg.substr(12).split(",", false)
 		elif arg.begins_with("--devport8="):
 			_devport8 = arg.substr(11).split(",", false)
 		elif arg.begins_with("--autocast1="):
@@ -836,7 +878,12 @@ func _ready() -> void:
 		elif arg.begins_with("--ai="):
 			_ai = int(arg.substr(5))
 		elif arg.begins_with("--opponents="):
-			_opponents = clampi(int(arg.substr(12)), 1, 7)
+			var count := arg.substr(12)
+			if not count.is_valid_int() or int(count) < 1 or int(count) > 15:
+				printerr("GAME FAIL: --opponents must be an integer from 1 to 15")
+				get_tree().quit(2)
+				return
+			_opponents = int(count)
 		elif arg.begins_with("--warp="):
 			_warp = float(arg.substr(7))
 		elif arg.begins_with("--warp-scale="):
@@ -847,6 +894,8 @@ func _ready() -> void:
 			_advance = float(arg.substr(10))
 		elif arg.begins_with("--screens="):
 			_screens = arg.substr(10)
+		elif arg.begins_with("--online-invite="):
+			_online_invite = arg.substr(16)
 		elif arg.begins_with("--online-join="):
 			_online_join = arg.substr(14).trim_prefix("openbfme://join/").trim_suffix("/")
 		elif arg.begins_with("openbfme://join/"):
@@ -868,6 +917,20 @@ func _ready() -> void:
 			_net_shot_spectate = arg.substr(20)
 		elif arg.begins_with("--net-shot-observe="):
 			_net_shot_observe = arg.substr(19)
+		elif arg.begins_with("--chat-at="): # lane CHAT-1
+			var parts := arg.substr(10).split(":", true, 2)
+			if parts.size() == 3:
+				_chat_script.append({"frame": int(parts[0]), "everyone": parts[1] == "everyone", "text": parts[2], "stage": 0, "at": 0})
+		elif arg.begins_with("--chat-mute="):
+			_chat_mutes.append(int(arg.substr(12)))
+		elif arg.begins_with("--chat-shot="):
+			_chat_shot = arg.substr(12)
+		elif arg.begins_with("--chat-open-shot="):
+			_chat_open_shot = arg.substr(17)
+		elif arg.begins_with("--beacon-at="):
+			_beacon_script.append({"frame": int(arg.substr(12)), "stage": 0, "at": 0})
+		elif arg.begins_with("--beacon-shot="):
+			_beacon_shot = arg.substr(14)
 		elif arg.begins_with("--net-pause-at="):
 			_net_pause_at = int(arg.substr(15))
 		elif arg.begins_with("--net-resume-after-ms="):
@@ -895,6 +958,8 @@ func _ready() -> void:
 			DirAccess.make_dir_recursive_absolute(_capture_dir)
 		elif arg.begins_with("--online-walk="):
 			_online_walk = arg.substr(14)
+		elif arg.begins_with("--friends-code="):
+			_friends_code = arg.substr(15)
 		elif arg.begins_with("--online-shots="):
 			_online_shots = arg.substr(15)
 		elif arg.begins_with("--online-password="):
@@ -953,6 +1018,10 @@ func _ready() -> void:
 			_cli_mission = int(arg.substr(10))
 		elif arg.begins_with("--difficulty="):
 			_cli_difficulty = preload("res://scripts/campaign_flow.gd").difficulty_from_command(arg.substr(13))
+		elif arg.begins_with("--stance-at="):
+			_stance_at = int(arg.substr(12)) # lane CAMPUI-1 (proof captures, test hooks)
+		elif arg.begins_with("--objectives-at="):
+			_objectives_at = int(arg.substr(16)) # lane CAMPUI-1 (proof captures)
 		elif arg == "--campaign-win":
 			_campaign_win = true
 		elif arg.begins_with("--campaign-check="):
@@ -1271,6 +1340,8 @@ func _boot() -> void:
 		return
 	_sync_shell_volumes()
 	print("GAME shell booted in %.0f ms: %d strings, lobby seed %d" % [boot.load_ms, boot.strings, boot.seed])
+	get_viewport().size_changed.connect(_style_menu_texts) # lane MENUFIX-1
+	_style_menu_texts()
 	# lane CAH-1: the Create-a-Hero builder's and the lobby's heroes: the system heroes of the archives and the profile's MyHero*.cah (RW 0x61EEB6: <user data>\\Save\\)
 	var cah: Dictionary = {"ok":true} if _fs.is_bfme1() else _shell.set_create_a_hero(_world, _cah_profile_dir())
 	print("GAME Create-a-Hero heroes: %d in %s %s" % [cah.get("heroes", 0), _cah_profile_dir(), "" if cah.ok else str(cah.errors)])
@@ -1289,7 +1360,7 @@ func _boot() -> void:
 	_campaign_flow.name = "CampaignFlow"
 	_campaign_flow.game = self
 	_campaign_flow.world = _world
-	_campaign_flow.hooks = _campaign_win or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") # lane OWNERFIX-1 / DEVPORT-7: their scenarios use the logged test hooks
+	_campaign_flow.hooks = _campaign_win or _stance_at >= 0 or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") # lane OWNERFIX-1 / DEVPORT-7: their scenarios use the logged test hooks
 	_campaign_flow.auto_win = _campaign_win
 	_campaign_flow.movies = _campaign_movies # lane CAMP-1H
 	add_child(_campaign_flow)
@@ -1348,7 +1419,7 @@ func _boot() -> void:
 		_on_online_started(FileAccess.get_file_as_string(_online_start_file))
 	elif not _online_walk.is_empty():
 		_online_walk_run() # lane ONLINE-4
-	elif not _online_join.is_empty() or _online_host or _online_rejoin or _online_spectate:
+	elif not _online_join.is_empty() or not _online_invite.is_empty() or _online_host or _online_rejoin or _online_spectate:
 		_online_open() # lane ONLINE-2
 	elif _net_host > 0 or not _net_join.is_empty():
 		_net_open()
@@ -1364,6 +1435,18 @@ func _process(delta: float) -> void:
 		_capture_tick() # lane ONLINE-4
 	Release.set_in_game(_state == State.PLAYING) # lane RELEASE-1: the version corner in the menus only
 	_campaign_check_tick() # lane CAMP-1
+	if _stance_at >= 0 and _state == State.PLAYING and _world != null and _world.get_presented_frame() >= _stance_at:
+		_stance_at = -1
+		_stance_proof()
+	if _objectives_at >= 0 and _state == State.PLAYING and _world != null and _world.get_presented_frame() >= _objectives_at:
+		_objectives_at = -1
+		print("GAME --objectives-at: the objectives screen at frame %d" % _world.get_presented_frame())
+		_palantir_objectives()
+		get_tree().create_timer(6.0, true).timeout.connect(_close_objectives)
+	if _online_reports != null:
+		if _online_http != null:
+			_online_reports.set_context(_shell.online_status())
+		_online_reports.set_available((_state == State.SCORE and _last_game_online) or (_state == State.MENU and _shell.shell_stack().has("OnlineShell.apt")))
 	if _state == State.MENU:
 		if _menu_style == "bfme2" and _frames % 5 == 0 and _shell.shell_stack().size() > 0 and _shell.shell_stack()[-1] == "MainMenu.apt":
 			_hide_bfme2_campaign_buttons() # lane DEVPORT-8: the BFME2 campaigns are not in this tree (BFME2_CAMPAIGNS)
@@ -1402,6 +1485,9 @@ func _process(delta: float) -> void:
 				_fail("the main menu refused AptMainMenu::" + cmd)
 			elif _save_ui_test:
 				_save_flow.run_ui_test() # lane SAVE-UI1: the mission the main menu's campaign started
+		elif _cah_picture and _menu_revealed and _frames >= LEVEL_MAIN_MENU_FRAMES + 30 and _shell_pictures_seen > 0:
+			_cah_picture = false
+			_cah_picture_run()
 		elif not _campaign_click.is_empty() and _menu_revealed and _frames >= LEVEL_MAIN_MENU_FRAMES + 30 and _shell_pictures_seen > 0:
 			var click := _campaign_click
 			_campaign_click = ""
@@ -1564,6 +1650,8 @@ func _on_shell_request(action: String, argument: String) -> void:
 		_palantir_objectives()
 	elif action == "TributeReturnToGame":
 		_close_tribute()
+	elif action == "ObjectivesReturnToGame":
+		_close_objectives() # lane CAMPUI-1
 	elif action.begins_with("QuitMenu"):
 		_quit_menu_action(action, argument)
 	elif action.begins_with("CampaignMenu"):
@@ -1705,6 +1793,7 @@ func _apply_pending_menu_style() -> void:
 	if not heroes.get("ok", false):
 		_fail("shell style switch heroes: " + str(heroes.get("errors", [])))
 		return
+	_style_menu_texts() # lane MENUFIX-1: the other style's archives carry their own faces
 	_shell.set_openbfme_available(true)
 	if _platform_ready:
 		_shell.set_game_records(FileAccess.get_file_as_string(RECORDS_FILE) if FileAccess.file_exists(RECORDS_FILE) else "")
@@ -1832,6 +1921,47 @@ func campaign_click(button: String, difficulty: String) -> String:
 	return ""
 
 
+## lane CAHPIC-1: --cah-picture. Frames, not seconds, between the clicks (the run also works under Movie Maker's fixed frame rate)
+func _cah_picture_run() -> void:
+	var why := ""
+	if not await _click_button(_shell.shell_top_level(), "MyHeroes"):
+		why = "no My Heroes button"
+	else:
+		await _step(150)
+		if not await _click_button(_shell.shell_top_level(), "Main.mcNewFeaturesScreen.mcClassButtons.Continue"):
+			why = "no Continue button on the promo page"
+	if why.is_empty():
+		await _step(150)
+		if not _screens.is_empty():
+			_save_named("cahpic-1-manager")
+		if not await _click_button(_shell.shell_top_level(), "Main.mcManagerScreen.Screen.TabNav.Appearance.TakePicture"):
+			why = "no TAKE PICTURE button"
+	if why.is_empty():
+		await _step(12)
+		if not _screens.is_empty():
+			_save_named("cahpic-2-panels-closing")
+		var waited := 0
+		while waited < 600 and not _cah_picture_box():
+			await _step(10)
+			waited += 10
+		if not _cah_picture_box():
+			why = "no picture box after %d frames" % waited
+		else:
+			await _step(45) # the panels' opening animation under the box
+			if not _screens.is_empty():
+				_save_named("cahpic-3-box")
+			print("CAHPIC box: ", _shell.get_create_a_hero_view().get("last_message", ""))
+			await _step(90)
+	print("CAHPIC RESULT %s" % ("ok" if why.is_empty() else "FAIL " + why))
+	get_tree().quit(0 if why.is_empty() else 1)
+
+
+## lane CAHPIC-1: the screen showed TAKE PICTURE's box (its last message names the picture texts or the could-not-save box)
+func _cah_picture_box() -> bool:
+	var m := str(_shell.get_create_a_hero_view().get("last_message", ""))
+	return m.begins_with("GUI:OnPictureTakenTitle") or m.contains("could not be saved")
+
+
 func _campaign_click_run(button: String, difficulty: String) -> void:
 	print("GAME campaign click: SoloPlayNav.%s, %s" % [button, difficulty])
 	var error: String = await campaign_click(button, difficulty)
@@ -1893,6 +2023,12 @@ func _click_at_stage(p: Vector2) -> void:
 
 func _on_shell_screen(filename: String) -> void:
 	print("GAME screen: ", filename)
+	# lane CAMPUI-1: a mission's first CAMERA_LETTERBOX_BEGIN (MAP ANG Angmar's intro, frame 1) runs before the HUD movie is on the shell's stack, so
+	# _set_control_bar_hidden could not hide its level then: the movie came up drawn under the whole intro. Retail's HideControlBar (RW 0x804576) is a
+	# state of the control bar, so the movie is hidden as soon as it is shown
+	if filename == "Palantir.apt" and _control_bar_hidden:
+		_shell.set_level_visible(_palantir_level(), false)
+		print("GAME control bar hidden on the HUD movie's arrival")
 	if _state == State.MENU and filename != "MainMenu.apt":
 		_audio.play_submenu_music()
 
@@ -1958,21 +2094,31 @@ func _begin_game(message: Dictionary) -> void:
 	for i in 4:
 		await get_tree().process_frame
 	_shell.auto_process = false
+	# LoadScreen opens by hiding the front-end background. Restore its rotating
+	# ring after the opening frames, before presenting load progress.
+	_shell.shell_fscommand("SetBackground", "fadein")
 	var started := Time.get_ticks_msec()
 	_load_log.clear()
+	var world_was_visible: bool = _world.visible
+	_world.hide() # keep partially constructed terrain behind the loading screen
+	_on_load_progress(0) # present the initial bar before synchronous loading
 	var opts := {"progress": Callable(self, "_on_load_progress"), "test_hooks": _end or not _zoom1.is_empty() or _rules_shot > 0 or not _gamemodes.is_empty() or _uber1 > 0 or _play_script.ends_with("spell3_player.gd") or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") or _play_script.ends_with("ownerfix2_player.gd")} # lane ZOOM-1: the bars scenario hurts some units (logged)
 	if _record and _net_state.is_empty():
 		opts["record"] = _last_replay_path() # lane MP-2: every skirmish is recorded
+	if _pingwheel.has("hash"):
+		opts["hash_every_frame"] = true # the ping wheel's check: every logic frame's state hash, compared with a run without pings
 	var rep: Dictionary = _world.start_new_game(opts)
 	_report = rep
 	print("GAME load: %d ms, ok=%s" % [Time.get_ticks_msec() - started, rep.ok])
 	if rep.has("timings_ms"): # lane PERF-1: where the load went (ms per stage)
 		print("GAME load timings: ", JSON.stringify(rep.timings_ms))
 	if not rep.ok:
+		_world.visible = world_was_visible
 		for e in rep.errors.slice(0, 20):
 			print("  load error: ", e)
 		_fail("start_new_game failed")
 		return
+	_world.visible = world_was_visible
 	_enter_game(rep)
 	if _online_spectate:
 		for arg in OS.get_cmdline_user_args():
@@ -2045,6 +2191,9 @@ func _set_control_bar_hidden(hidden: bool) -> void:
 		_shell.set_level_visible(_palantir_level(), not hidden)
 	if _hud != null:
 		_hud.visible = not hidden
+	# lane CAMPUI-1: HideControlBar disables the notification box (it closes at once), ShowControlBar enables it (RW 0x804576 / 0x8046A1 -> RW 0x8EB2BA)
+	if _campaign_flow != null and _campaign_flow._cine != null:
+		_campaign_flow._cine.set_notification_enabled(not hidden)
 	# the tests read it back from the render list a few frames later
 	for i in 3:
 		await get_tree().process_frame
@@ -2117,16 +2266,27 @@ func _show_rules_summary(text: String) -> void:
 	_rules_layer.layer = 91
 	add_child(_rules_layer)
 	var label := Label.new()
+	label.name = "Rules"
 	label.set_meta("game_text", true)
 	label.text = text
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.anchor_right = 1.0
 	label.anchor_top = 0.13 # below the movie's title, above its map panel
-	label.add_theme_font_size_override("font_size", 24)
-	label.add_theme_color_override("font_color", Color(1.0, 0.84, 0.35))
-	label.add_theme_color_override("font_outline_color", Color.BLACK)
-	label.add_theme_constant_override("outline_size", 6)
 	_rules_layer.add_child(label)
+	_style_rules_summary()
+
+
+## lane MENUFIX-1: the menus' face at 17 stage pixels (was Godot's face at 24 window pixels), gold as before, an outline that scales too.
+## Lane MENUFIX-2 (Sol's MENUFIX-1 follow-up): again on a resize while the loading screen shows it (_style_menu_texts)
+func _style_rules_summary() -> void:
+	if _rules_layer == null:
+		return
+	var label: Label = _rules_layer.get_node("Rules")
+	var size := get_viewport().get_visible_rect().size
+	MenuText.apply(label, _shell, size, 17.0, _menu_text_errors, Color(1.0, 0.84, 0.35))
+	label.add_theme_color_override("font_outline_color", Color.BLACK)
+	label.add_theme_constant_override("outline_size", maxi(2, roundi(4 * MenuText.scale_of(size))))
+	_report_menu_text_errors()
 
 
 func _hide_rules_summary() -> void:
@@ -2146,7 +2306,7 @@ func _on_load_progress(percent: int) -> void:
 	_shell.set_load_progress(percent)
 	_shell.tick(0.033)
 	_shell.render(true)
-	RenderingServer.force_draw(false, 0.0)
+	RenderingServer.force_draw(true, 0.0) # swap buffers: progress must reach the window
 	if _menu1_runner != null and percent >= 40:
 		_menu1_runner.loading_check(percent) # lane MENU-1: the loading screen's layering and picture
 	if not _loading_shot_done and percent >= 40 and not _screens.is_empty():
@@ -2155,6 +2315,7 @@ func _on_load_progress(percent: int) -> void:
 
 
 func _enter_game(rep: Dictionary) -> void:
+	_shell_leave_for_game() # Remove the loading ring before exposing gameplay.
 	_hide_rules_summary() # lane RULES-1
 	_shell.hide_still_load_screen() # lane MENU-1: a campaign mission's picture loading screen
 	# retail: the shell is popped, the HUD movie (Palantir) is the only movie left
@@ -2398,6 +2559,46 @@ func _install_hud(rep: Dictionary) -> void:
 	print("GAME move hints: ", JSON.stringify(mh))
 	if not mh.ok:
 		printerr("GAME move hints: ", mh.errors)
+	_install_pings(hud)
+
+
+## the ping wheel (NOT RETAIL, an OpenBFME addition): hold the ping key (Options, Interface: OpenBFMEPingKey) for the wheel, let go on a sector
+## for a ping on the map, the minimap and a sound (scripts/ping_wheel.gd, scripts/ping_board.gd). Presentation only. Local only for now: a network game
+## gets no wheel (its allies would not see the pings; ping_board.gd names the seam a network message will use), nor does a run with no player of its own
+func _install_pings(hud: Node) -> void:
+	if not _net_state.is_empty():
+		print("GAME ping wheel: off in network games (pings are not sent to the other players yet)")
+		return
+	if _local_index < 0:
+		print("GAME ping wheel: off (no local player)")
+		return
+	_ping_wheel = load("res://scripts/ping_wheel.gd").new()
+	_pings = load("res://scripts/ping_board.gd").new()
+	add_child(_pings)
+	_game_nodes.append(_pings)
+	var r: Dictionary = _pings.setup(hud, _world, _audio, _fs, _local_index)
+	print("GAME pings: ", JSON.stringify(r))
+	if not r.ok:
+		printerr("GAME pings: ", r.errors)
+	_ping_wheel.board = _pings
+	_ping_wheel.pick = hud.ping_point # the terrain under the pointer, the minimap's point over the minimap, none over the rest of the HUD
+	_ping_wheel.can_open = _ping_wheel_allowed
+	_ping_wheel.commandmap = hud.get_command_map()
+	if _shell != null:
+		_ping_wheel.font = _shell.shell_font("Albertus MT", 24).get("font")
+	add_child(_ping_wheel) # after the HUD: the wheel sees the ping key first
+	_game_nodes.append(_ping_wheel)
+	var values: Dictionary = _game_options.current() if _game_options != null else load("res://scripts/game_options.gd").defaults()
+	_ping_wheel.configure(values.OpenBFMEPingWheel == "yes", values.OpenBFMEPingKey)
+
+
+## the wheel opens only over the running game: no menu (the quit menu, Options, a save screen, the tribute screen, the powers screen) has the input
+func _ping_wheel_allowed() -> bool:
+	if _state != State.PLAYING or _quit_open or _shell == null or _shell.modal_menu():
+		return false
+	if _display_screen != null and _display_screen.is_open():
+		return false
+	return _hud == null or not _hud.get_spellbook_state().get("store", {}).get("open", false)
 
 
 ## lane PLAY-1: which button orders. TARGET FACTS (RotWK game.dat, caveat S-001): GlobalData's constructor sets m_useAlternateMouse (+ 0x5C) to 1 (RW 0x642A4B:
@@ -2536,6 +2737,8 @@ func _step(frames: int) -> void:
 	var until := Time.get_ticks_msec() + int(frames * 1000.0 / 60.0)
 	for i in frames:
 		await get_tree().process_frame
+	if not Engine.get_write_movie_path().is_empty():
+		return # lane SPELLRC-1: a recording's frames are its clock (see _wait_seconds)
 	while Time.get_ticks_msec() < until:
 		await get_tree().process_frame
 
@@ -2708,6 +2911,15 @@ func _run_auto() -> void:
 		var pd8 = dp8.new()
 		await pd8.run(self, _devport8)
 		get_tree().quit(0 if pd8.fail_count == 0 else 1)
+		return
+	if not _pingwheel.is_empty():
+		var pw: GDScript = load("res://scripts/ping_wheel_player.gd")
+		if pw == null or not pw.can_instantiate():
+			_fail("scripts/ping_wheel_player.gd does not load")
+			return
+		var ppw = pw.new()
+		await ppw.run(self, _pingwheel)
+		get_tree().quit(0 if ppw.fail_count == 0 else 1)
 		return
 	if not _hud7.is_empty():
 		var h7: GDScript = load("res://scripts/hud7_player.gd")
@@ -2891,6 +3103,12 @@ func _run_cah() -> void:
 		return
 	await _step(30)
 	_cah_shot("4-appearance")
+	var attributes := "Main.mcAppearanceScreen.Screen.TypeWindow"
+	_cah_invoke(attributes + ":gotoAndPlay", ["_attributes"])
+	await _step(60)
+	_cah_shot("4a-attributes")
+	_cah_invoke(attributes + ":gotoAndPlay", ["_appearance"])
+	await _step(60)
 	# lane CAH-2 r2: a colour picked with the mouse on the shown colour tab's palette (GadgetColorPicker.swf's Click button: the drag writes <tab>Cursor,
 	# the ColorPicker component reads the palette texel, SetColor -> Appearance::On<tab>): the hero's record must change
 	var before: PackedByteArray = _shell.get_create_a_hero_view().get("record", PackedByteArray())
@@ -3367,6 +3585,9 @@ func _end_game_tick() -> void:
 func _input(event: InputEvent) -> void:
 	# lane END-2: Esc toggles the quit menu (the options meta command, RW 0x9DB877 -> ToggleQuitMenu RW 0x921C9D), as the Palantir's options button does
 	if _state == State.PLAYING and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		# lane CHAT-1: Esc closes the chat window (its input procedure, RW 0x8ECB8F, through the HUD's key path), never the quit menu behind it
+		if _shell != null and _shell.has_method("ingame_chat_has_keys") and _shell.ingame_chat_has_keys():
+			return
 		get_viewport().set_input_as_handled()
 		# review r1: Esc in the Options screen opened from the quit menu closes Options only (the quit menu and the pause stay)
 		var stack: PackedStringArray = _shell.shell_stack()
@@ -3394,12 +3615,16 @@ func _input(event: InputEvent) -> void:
 		if not stack.is_empty() and stack[-1] == "PlayerTribute.apt":
 			_close_tribute()
 			return
+		# lane CAMPUI-1: Escape over the objectives screen closes it (its key handler RW 0x8E8B61 -> ReturnToGame RW 0x8E873E), not the quit menu
+		if not stack.is_empty() and stack[-1] == "Objectives.apt":
+			_close_objectives()
+			return
 		_toggle_quit_menu()
 
 
 ## lane PLAY-1: the Palantir's flag (AptPalantir::OnBttnObjectives RW 0x6D40C9). In a skirmish or a multiplayer game (RW 0x625456: mode 2 or a network game)
 ## RW 0x914EF0 pushes PlayerTribute.apt over the game when none is up and the game is not ending (the end-game timer, RW 0x914F37); otherwise RW 0x8E8843 opens
-## the objectives screen, which is not ported (S-1922)
+## the objectives screen (lane CAMPUI-1: _open_objectives)
 ## lane PLATFORMICON-1: --net-score-shot: the local player forfeits through the quit menu (as --net-end's joiner does); the game leaves to the score screen, which is saved
 func _net_score_flow() -> void:
 	await _press_escape()
@@ -3431,7 +3656,11 @@ func _palantir_objectives() -> void:
 	var ctx: Dictionary = _world.get_quit_menu_context()
 	var mode: int = ctx.get("mode", 2)
 	if mode != 2 and mode != 1 and mode != 5:
-		print("GAME STOP [S-1922] the objectives screen (RW 0x8E8843) is not ported")
+		# lane CAMPUI-1: RW 0x8E8843, the objectives screen (Tab over it closes it: its key handler RW 0x8E8B61)
+		if _shell.shell_stack().has("Objectives.apt"):
+			_close_objectives()
+		else:
+			_open_objectives(mode)
 		return
 	if _shell.shell_stack().has("PlayerTribute.apt") or _quit_open or _state != State.PLAYING:
 		return
@@ -3445,6 +3674,85 @@ func _palantir_objectives() -> void:
 		printerr("GAME PlayerTribute.apt: ", str(_shell.get_shell_report().errors))
 		return
 	print("GAME tribute screen open (PlayerTribute.apt, RW 0x914EF0)")
+
+
+var _objectives_paused := false # lane CAMPUI-1: the objectives screen paused the game (RW 0x8E8843 -> RW 0x625AF1(1, 0, 1))
+var _stance_at := -1 ## --stance-at=F (lane CAMPUI-1, proof captures; the start option test_hooks): at logic frame F the Witch King is selected, the Palantir's stance button clicked and its Battle item hovered
+var _objectives_at := -1 ## --objectives-at=F (lane CAMPUI-1, proof captures): the Palantir flag's objectives screen opens at logic frame F, closes 6 s later
+
+
+## lane CAMPUI-1: AptObjectivesMenu's opening (RW 0x8E8843): not twice, not while the screen is disabled (DISABLE_OBJECTIVES_SCREEN, RW 0x8E89BD), a menu
+## is up or the game is not playing; the game is paused unless it is a network game or the tutorial (RW 0x625AF1(1, 0, 1), as the quit menu); the
+## notification box closes (DoClose RW 0x8EB2D8); then Objectives.apt over the game with the tracker's objectives (GameWorld.get_mission_objectives)
+func _open_objectives(mode: int) -> void:
+	if _quit_open or _state != State.PLAYING or _shell.shell_stack().has("PlayerTribute.apt"):
+		return
+	var obj: Dictionary = _world.get_mission_objectives()
+	if not bool(obj.get("screen_enabled", true)):
+		print("GAME objectives screen: disabled by the map's script (DISABLE_OBJECTIVES_SCREEN)")
+		return
+	var screen: Dictionary = _shell.set_objectives_screen({"game_mode": 0 if mode == 0 else mode, "objectives": obj.get("objectives", [])})
+	if not screen.get("ok", false):
+		printerr("GAME objectives screen: ", screen.get("error", "?"))
+		return
+	if mode != 1 and mode != 5 and mode != 6:
+		_objectives_paused = not _world.is_paused()
+		_world.set_paused(true)
+	if _campaign_flow != null and _campaign_flow._cine != null:
+		_campaign_flow._cine.close_notification() # RW 0x8E8934: DoClose (RW 0x8EB2D8) before the screen opens
+	if not _shell.shell_push("Objectives.apt"):
+		printerr("GAME Objectives.apt: ", str(_shell.get_shell_report().errors))
+		_close_objectives_unpause()
+		return
+	if _hud != null:
+		_hud.set_objectives_screen_open(true)
+	print("GAME objectives screen open (Objectives.apt, RW 0x8E8843): ", JSON.stringify(screen.get("rows", [])))
+
+
+## lane CAMPUI-1: ReturnToGame (RW 0x8E873E -> RW 0x8E86A5), Escape / Tab / Enter (RW 0x8E8B61): the shell pops the screen; the dtor (RW 0x8E8CED) unpauses
+func _close_objectives() -> void:
+	var stack: PackedStringArray = _shell.shell_stack()
+	if stack.is_empty() or stack[-1] != "Objectives.apt":
+		return
+	_shell.shell_pop()
+	_close_objectives_unpause()
+	if _hud != null:
+		_hud.set_objectives_screen_open(false)
+	print("GAME objectives screen closed")
+
+
+## lane CAMPUI-1: --stance-at: the stance radial for the proof captures, through the HUD's own input (a click on the Palantir's stance button, the pointer
+## over its first item); every step is printed
+func _stance_proof() -> void:
+	var wk: Dictionary = _world.debug_script_unit("Witch King")
+	print("GAME --stance-at: Witch King ", wk)
+	if not wk.get("ok", false):
+		return
+	_hud.select_object(int(wk.id))
+	await _step(10)
+	var b: Dictionary = _hud.find_button_window("CommandButtons.0")
+	print("GAME --stance-at: the stance button ", b)
+	if not b.get("found", false):
+		return
+	var at := Vector2(float(b.x), float(b.y))
+	_hud.inject_mouse_move(at)
+	await _step(3)
+	_hud.inject_mouse_button(MOUSE_BUTTON_LEFT, true, at)
+	await _step(2)
+	_hud.inject_mouse_button(MOUSE_BUTTON_LEFT, false, at)
+	await _step(20)
+	for item in ["subMenu0.trays.0.rot.bttnFrame", "subMenu0.trays.1.rot.bttnFrame", "subMenu0.trays.2.rot.bttnFrame"]:
+		var it: Dictionary = _hud.find_button_window(item)
+		print("GAME --stance-at: item ", item, " ", it)
+	var first: Dictionary = _hud.find_button_window("subMenu0.trays.1.rot.bttnFrame")
+	if first.get("found", false):
+		_hud.inject_mouse_move(Vector2(float(first.x), float(first.y)))
+
+
+func _close_objectives_unpause() -> void:
+	if _objectives_paused:
+		_world.set_paused(false)
+		_objectives_paused = false
 
 
 ## PlayerTribute.apt closes (its <path>_ReturnToGame, Escape): RW 0x914C51 marks it closing and the shell pops it (RW 0x62215B)
@@ -4618,6 +4926,14 @@ func _finish_end_flow(faction: String, prefix := "end1") -> void:
 
 
 func _wait_seconds(sec: float) -> void:
+	# lane SPELLRC-1: under the movie writer (--write-movie, a fixed frame rate) a rendered frame is 1 / fps of game time however long it takes to draw:
+	# the wait counts that game time, or a slow recording host ends it before the movies' animations ran (a scripted click then misses)
+	if not Engine.get_write_movie_path().is_empty():
+		var left := sec
+		while left > 0.0:
+			await get_tree().process_frame
+			left -= get_process_delta_time()
+		return
 	var until := Time.get_ticks_msec() + int(sec * 1000.0)
 	while Time.get_ticks_msec() < until:
 		await get_tree().process_frame
@@ -4756,6 +5072,7 @@ func _online_open() -> void:
 	_online.profile = _world.net_profile_digest()
 	_online.mode = "uber" if _world.simulation_profile() == "uber" else "normal" # lane UBERJOIN-1
 	_online.join_id = _online_join
+	_online.invite_id = _online_invite
 	_online.rejoin = _online_rejoin # lane ONLINE-3
 	_online.spectate = _online_spectate
 	if _online_host:
@@ -4770,6 +5087,9 @@ func _online_open() -> void:
 			"setup": {"map": _map_key, "startingCash": 1500, "slots": slots}}
 	_online.started.connect(_on_online_started)
 	_online.failed.connect(func(m: String): _fail("online: " + m))
+	_online.notice.connect(func(m: String): Release._message(m, "Online notice", "", false))
+	_online_report_panel(_online.lobby_url)
+	_online.report_context.connect(func(context: Dictionary): _online_reports.set_context(context))
 	add_child(_online)
 	print("GAME ONLINE lobby %s, profile %s, %s" % [_online.lobby_url, _online.profile, "rejoin" if _online_rejoin else ("spectate " + _online_join) if _online_spectate else ("join " + _online_join) if not _online_join.is_empty() else "host"])
 	_online.begin()
@@ -4883,6 +5203,7 @@ func _platform_tick() -> void:
 ## what the score screen will record: the kind of game and its id (a LAN game's id is the same on every peer: made from the shared start message)
 func _hub_begin(message: Dictionary) -> void:
 	_game_start_unix = int(Time.get_unix_time_from_system())
+	_last_game_online = not _hub_online.is_empty() # DEVINPR-1 (review of WP-C)
 	if not _hub_online.is_empty():
 		_hub_kind = "online"
 		_hub_game_id = str(_hub_online.get("id", ""))
@@ -4955,7 +5276,12 @@ func _open_online_shell() -> void:
 	if FileAccess.file_exists(ONLINE_SESSION_FILE):
 		session = FileAccess.get_file_as_string(ONLINE_SESSION_FILE).strip_edges()
 	_online_saved_session = session
-	var r: Dictionary = _shell.set_online(_world, {"lobby_url": url, "remembered_name": name, "session_token": session})
+	var options: Dictionary = load("res://scripts/online_identity.gd").identity()
+	if options.has("error"):
+		_fail("online screens: " + str(options.error))
+		return
+	options.merge({"lobby_url": url, "remembered_name": name, "session_token": session})
+	var r: Dictionary = _shell.set_online(_world, options)
 	if not r.ok:
 		_fail("online screens: " + str(r.get("error", "")))
 		return
@@ -4966,10 +5292,27 @@ func _open_online_shell() -> void:
 	_online_http.shell = _shell
 	_online_http.lobby_url = url
 	add_child(_online_http)
+	_online_report_panel(url)
+	if _online_social != null:
+		_online_social.queue_free()
+	_online_social = load("res://scripts/online_social.gd").new()
+	_online_social.shell = _shell
+	_online_social.reports = _online_reports
+	add_child(_online_social)
 	print("GAME ONLINE screens: lobby %s (online play is a test feature)" % url)
 	_online_test_note()
 	if not _shell.shell_push("OnlineShell.apt"):
 		_fail("the shell refused OnlineShell.apt: " + str(_shell.get_shell_report().errors))
+
+
+func _online_report_panel(url: String) -> void:
+	if _online_reports != null and _online_reports.lobby_url == url:
+		return
+	if _online_reports != null:
+		_online_reports.queue_free()
+	_online_reports = load("res://scripts/online_reports.gd").new()
+	_online_reports.lobby_url = url
+	add_child(_online_reports)
 
 
 ## The whole Online menu is a test feature (docs/PLAYING.md): a note in the top left corner says so while its screens are up (the retail screens keep
@@ -4981,24 +5324,66 @@ func _online_test_note() -> void:
 	_online_note.layer = 100
 	_online_note.name = "OnlineTestNote"
 	var label := Label.new()
+	label.name = "Note"
 	label.text = "Online play is a test feature"
-	label.add_theme_font_size_override("font_size", 13)
-	label.add_theme_color_override("font_color", Color(1, 0.9, 0.6, 0.9))
-	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
-	label.add_theme_constant_override("shadow_offset_x", 1)
-	label.add_theme_constant_override("shadow_offset_y", 1)
-	label.offset_left = 8
-	label.offset_top = 30 # lane ONLINE-5: under the fps counter's line (scripts/fps_overlay.gd draws at y 4, 16 px): the two never overlap
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.set_meta("game_text", true) # the game's own text (not a developer overlay)
 	_online_note.add_child(label)
 	add_child(_online_note)
+	_style_menu_texts() # lane MENUFIX-1: the menus' look, in the top left corner under the fps counter's line
+
+
+## lane MENUFIX-1: OpenBFME's own lines over the menus in the menus' look (scripts/menu_text.gd) at the window's size; again on every resize. The top
+## left lines (the online test note, then the players-online line) start under the fps counter's line (scripts/fps_overlay.gd: y 4, 16 px times the
+## interface scale) and never overlap it; the version corner is top right (Release.style_corner).
+func _style_menu_texts() -> void:
+	if _shell == null:
+		return
+	var size := get_viewport().get_visible_rect().size
+	var k := MenuText.scale_of(size)
+	Release.style_corner(_shell, size, _menu_text_errors)
+	var left := roundf(MenuText.MARGIN_PX * k)
+	_menu_text_top = maxf(30.0, left)
+	var y := _menu_text_top
+	if _online_note != null:
+		var note: Label = _online_note.get_node("Note")
+		_menu_text_line = MenuText.apply(note, _shell, size, MenuText.CORNER_PX, _menu_text_errors)
+		note.position = Vector2(left, y)
+	if _stats_label != null:
+		_menu_text_line = MenuText.apply(_stats_label, _shell, size, MenuText.CORNER_PX, _menu_text_errors)
+		var online: bool = _online_note != null and _online_note.visible and _shell.shell_stack().has("OnlineShell.apt")
+		_stats_label.position = Vector2(left, y + (_menu_text_line if online else 0.0))
+	_style_rules_summary() # lane MENUFIX-2
+	_report_menu_text_errors()
+
+
+func _report_menu_text_errors() -> void:
+	for face: String in _menu_text_errors:
+		if not _menu_text_reported.has(face):
+			_menu_text_reported[face] = true
+			push_error("GAME ERROR menu text: the archives have no %s; OpenBFME's lines over the menus use Godot's face" % face)
 
 
 ## lane ONLINECOUNT-1: "N players online" (scripts/online_stats.gd). The main menu shows it in its own line, the online menu's pages under the test-feature note;
 ## the count is asked for only while one of those is on top, never in a game, and not at all when the player turned it off
 func _online_count_tick() -> void:
 	var stack: PackedStringArray = _shell.shell_stack()
+	if _shell.online_status().get("signed_in", false):
+		if _stats != null:
+			_stats.set_mode("")
+		var social: Dictionary = _shell.online_social_status()
+		var stats: Dictionary = social.get("stats", {})
+		var text := OnlineStats.line(stats, stats.has("games_open")) if not str(social.get("seq", "")).is_empty() and stats.has("players") and stack.has("OnlineShell.apt") and _stats_off.is_empty() else ""
+		var ping := _online_ping_line() if stack.has("OnlineShell.apt") else ""
+		if not ping.is_empty():
+			text = ping if text.is_empty() else text + "\n" + ping
+		# lane ONLINEMENU-1: what waits in the Messenger (friend requests, invites, unread chat) or the last friends result (scripts/online_social.gd)
+		var social_line: String = _online_social.corner_line() if _online_social != null and stack.has("OnlineShell.apt") else ""
+		if not social_line.is_empty():
+			text = social_line if text.is_empty() else text + "\n" + social_line
+		if (_stats_label != null and _stats_label.text != text) or (_stats_label == null and not text.is_empty()):
+			_online_count_show(text)
+		return
 	var mode := ""
 	if _menu_revealed and stack.size() > 0:
 		# the staging room (the player is in a game of the lobby) shows no count and asks nothing: its own polls keep the player counted
@@ -5021,7 +5406,20 @@ func _online_count_tick() -> void:
 		_stats.counts_changed.connect(func(c: Dictionary) -> void: _shell.online_set_counts(c)) # lane ONLINEUX-1 r2: the home page's ticker
 	_stats.set_mode(mode)
 	if _stats_label != null:
-		_stats_label.position = Vector2(8, 48) if mode == "online" else Vector2(8, 30)
+		# lane MENUFIX-1: the online pages show it under the test-feature note
+		_stats_label.position = Vector2(_stats_label.position.x, _menu_text_top + (_menu_text_line if mode == "online" else 0.0))
+
+
+## lane ONLINEMENU-1 (owner, 2026-10-20: "the player can just see their ping on the side"): "Ping: 42 ms" under the count while signed in: the
+## round trip to the game server (the relay every game goes through; the room's, else the one the lobby names), measured every minute; Options >
+## Online's "Show my ping" turns it off
+func _online_ping_line() -> String:
+	if str(_shell.get_options().get("OpenBFMEShowPing", "yes")).to_lower() == "no":
+		return ""
+	var ping := str(_shell.online_status().get("relay_ping", ""))
+	if ping.is_empty():
+		return ""
+	return "Ping: no answer from the game server" if ping == "none" else "Ping: %s ms" % ping
 
 
 func _online_count_show(text: String) -> void:
@@ -5031,16 +5429,13 @@ func _online_count_show(text: String) -> void:
 		layer.name = "OnlineCountLayer"
 		_stats_label = Label.new()
 		_stats_label.name = "OnlineCount"
-		_stats_label.add_theme_font_size_override("font_size", 13)
-		_stats_label.add_theme_color_override("font_color", Color(1, 0.9, 0.6, 0.9))
-		_stats_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
-		_stats_label.add_theme_constant_override("shadow_offset_x", 1)
-		_stats_label.add_theme_constant_override("shadow_offset_y", 1)
+		_stats_label.position = Vector2(8, _menu_text_top)
 		_stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_stats_label.tooltip_text = "Players in OpenBFME's online lobbies and games"
 		_stats_label.set_meta("game_text", true)
 		layer.add_child(_stats_label)
 		add_child(layer)
+		_style_menu_texts() # lane MENUFIX-1
 	_stats_label.text = text
 	_stats_label.visible = not text.is_empty()
 	if _stats != null:
@@ -5132,9 +5527,22 @@ func _online_walk_run() -> void:
 	_shell.shell_fscommand("AptMainMenu::OnlineButtonPressed", "")
 	if not await _online_wait("the sign-in page", func(st): return st.get("page", "") == "OnlineLogin", 30.0):
 		return _online_walk_end(false)
-	await _wait_seconds(2.0)
+	if not await _online_wait("the nickname field", func(_st):
+		for gadget in _shell.list_gadgets():
+			if gadget.get("name", "") == "OnlineLogin::Nickname" and not gadget.get("hidden", true):
+				return true
+		return false, 30.0):
+		return _online_walk_end(false)
 	_online_shot("login")
-	_online_apply({"nickname": _online_name if not _online_name.is_empty() else ("Host" if _online_walk == "host" else "Joiner")})
+	# lane ONLINEMENU-1: the nickname field is made by the page's own InitGadgets some frames after the page shows: retried until it exists (10 s)
+	var nick := _online_name if not _online_name.is_empty() else ("Host" if _online_walk == "host" else "Joiner")
+	var nick_until := Time.get_ticks_msec() + 10000
+	while true:
+		var r: Dictionary = _shell.online_apply({"nickname": nick})
+		if r.ok or Time.get_ticks_msec() > nick_until:
+			print("GAME ONLINE WALK {\"nickname\":\"%s\"} -> %s" % [nick, "ok" if r.ok else str(r.errors)])
+			break
+		await _wait_seconds(0.25)
 	_online_apply({"command": "AptOnline::Login::Login"})
 	if not await _online_wait("the home page", func(st): return st.get("signed_in", false) and st.get("page", "") == "OnlineHome", 30.0):
 		return _online_walk_end(false)
@@ -5142,6 +5550,12 @@ func _online_walk_run() -> void:
 	await _wait_seconds(2.0)
 	_online_shot("home")
 	print("GAME ONLINE WALK motd: ", _shell.online_status().get("motd", []))
+	if _online_walk == "social":
+		var walk: RefCounted = load("res://tests/social_walk.gd").new()
+		return _online_walk_end(await walk.run(self))
+	if _online_walk == "friends": # lane ONLINEMENU-1: the FRIENDS page walk (the owner's video): --friends-code=<a friend's code>
+		var fwalk: RefCounted = load("res://tests/friends_walk.gd").new()
+		return _online_walk_end(await fwalk.run(self, _friends_code))
 	if _online_walk == "rejoin":
 		return _online_walk_rejoin()
 	if _online_walk == "hub":
@@ -5197,6 +5611,18 @@ func _online_walk_run() -> void:
 			await _online_click("*TabButtons.RulesTab")
 			await _wait_seconds(1.5)
 			_online_shot("staging-rules-host")
+			# lane ONLINEMENU-1: the CONNECTIONS screen (each player's link to the relay in RotWK's grid), then its own Done back to the room
+			await _online_click("*LowerButtons_Host.Connections")
+			await _wait_seconds(4.0)
+			_online_shot("connections")
+			await _online_click("*MainButtons.Done")
+			await _wait_seconds(2.0)
+			# SOCIAL-1 (landed by lane ONLINEMENU-1): the frame's MESSENGER button opens RotWK's Messenger over the room
+			_online_apply({"command": "AptMessenger::OnMessengerBttn"})
+			await _wait_seconds(3.0)
+			_online_shot("messenger-friends")
+			_online_apply({"command": "AptMessenger::OnMessengerBttn"})
+			await _wait_seconds(2.0)
 		if not await _online_wait("%d players ready" % players, func(st):
 				var ready: Array = st.get("ready", [])
 				var n := 0
@@ -5220,12 +5646,20 @@ func _online_walk_run() -> void:
 			return _online_walk_end(str(_shell.online_status().get("boxes", [])).contains("no_relay"))
 		print("GAME ONLINE WALK: the START arrived: the game loads")
 		return
-	# join
-	if not await _online_wait("an open game in the list", func(st):
-			for r in st.get("games", []):
-				if not str(r).ends_with("|watch") and not str(r).ends_with("|rejoin"):
-					return true
-			return false, 60.0):
+	# join. Lane ONLINEMENU-1: the list is the lobby's at the page's entry and at each REFRESH (retail's GameSpy list came live): the walk presses
+	# the page's own Refresh every 4 s while the host's room is not listed yet (it may be made after this page opened)
+	var open_game := func(st):
+		for r in st.get("games", []):
+			if not str(r).ends_with("|watch") and not str(r).ends_with("|rejoin"):
+				return true
+		return false
+	var game_listed := false
+	for attempt in 15:
+		if await _online_wait("an open game in the list", open_game, 4.0):
+			game_listed = true
+			break
+		_online_apply({"command": "AptOnline::CustomMatch::Refresh"})
+	if not game_listed:
 		return _online_walk_end(false)
 	_online_apply({"command": "GameSorter::OnSortName"})
 	await _wait_seconds(1.5)
@@ -5483,7 +5917,7 @@ func _net_poll_lobby() -> void:
 
 
 func _net_begin() -> void:
-	var opts := {"script": _net_script, "desync_dir": OS.get_user_data_dir(), "census": not _net_census.is_empty()}
+	var opts := {"script": _net_script, "desync_dir": OS.get_user_data_dir(), "census": not _net_census.is_empty(), "early_orders": _net_early_orders}
 	if not _net_record.is_empty():
 		opts["record"] = _net_record
 	elif _record:
@@ -5578,6 +6012,11 @@ func _net_tick() -> void:
 		if st.has("relay"):
 			# lane ONLINE-2: an online game's relay link (no address on screen)
 			_net_label.text += "  ONLINE via relay: %s, round trip %d ms" % ["bound" if st.relay.bound else "not bound", int(st.relay.round_trip_ms)]
+		# lane NETLAG-2: the command delay a player feels (the run-ahead in 200 ms frames, the orders' mean time from issue to the frame that ran them)
+		var lat := str(st.get("input_latency_ms", ""))
+		var mean := lat.substr(lat.find("mean ") + 5).get_slice(" ", 0) if lat.find("mean ") >= 0 else "-"
+		_net_label.text += "\norder delay: run-ahead %d frame(s), orders so far: mean %s ms, frames held %d" % [int(st.get("run_ahead", -1)), mean,
+			int(st.get("stalled_frames", 0))]
 	if st.frame / 50 != _net_last_print:
 		_net_last_print = st.frame / 50
 		# lane RENDERWAIT-1: the hash is the last one taken where the logic was held (of frame hash_frame)
@@ -5609,10 +6048,14 @@ func _net_tick() -> void:
 	_online_relay_tick(st) # lane ONLINEUX-1
 	_net_pause_tick(st) # lane ONLINE-3
 	_net_press_tick(st) # lane NETLAG-1
+	_chat_tick(st) # lane CHAT-1
 	if _state != State.PLAYING:
 		return
 	if _net_frames > 0 and st.frame >= _net_frames:
 		print("GAME NET status: ", JSON.stringify(st))
+		if _hud != null and _hud.has_method("beacon_state"): # lane CHAT-1: what this client saw of the chat and the beacons
+			print("GAME BEACON state: ", JSON.stringify(_hud.beacon_state()))
+			print("GAME CHAT stats: ", JSON.stringify(_world.net_chat_stats()), " lines ", JSON.stringify(_hud.message_lines_state().get("history", [])))
 		_write_measurements()
 		if _net_end:
 			if not _net_end_started and _games_started == 1:
@@ -5771,6 +6214,160 @@ func _net_pause_tick(st: Dictionary) -> void:
 	_pause_key_down = down
 
 
+## lane CHAT-1: the in-game chat (GameClient/InGameChat.h, InGameChat.apt over the game): CHAT_ALLIES / CHAT_EVERYONE open the window (RW 0x81FEE0 /
+## 0x81FF34: only in a network game, never over the quit menu or another menu), Send formats the line with the mode's label (APT:TeamChat "<Team> %s" ...)
+## and sends it to the mode's recipients (RW 0x8ECF3E); received lines show as "[Name] line" in the sender's colour with IncomingChatNotification (RW
+## 0x8D54D1). The scroll-back replaces the message lines while the window is open (OpenBFME addition)
+func _chat_open(everyone: bool) -> bool:
+	var info: Dictionary = _world.net_chat_info()
+	if not info.get("network", false) or _quit_open or _shell.modal_menu():
+		return false
+	var active: bool = info.get("local_active", false)
+	var mode := 0 if not everyone else (1 if active else 4)
+	var label := "Chat:Allies" if mode == 0 else ("Chat:Everyone" if mode == 1 else "Chat:Observers")
+	var receivers: String = _hud.chat_text(label)
+	if receivers.is_empty():
+		printerr("GAME chat: the game text has no ", label)
+	var ok: bool = _shell.ingame_chat_open(mode, receivers)
+	if ok:
+		print("GAME CHAT window open (mode %d, %s)" % [mode, receivers])
+	return ok
+
+
+## lane CHAT-1 (OpenBFME addition, S-5150): the mute. RotWK's only mute is GameSlot + 0xA from PlayerStatus.apt's checkboxes, which a multiplayer game never
+## opens (its Tab opens PlayerTribute.apt, RW 0x81FFD8 -> 0x914EF0), so the chat window takes "/mute NAME", "/unmute NAME" and "/mute" (the list) instead;
+## like retail's mute it hides that player's lines on this machine only and leaves them out of this player's Everyone lines. True when the line was one
+func _chat_slash(text: String) -> bool:
+	var t := text.strip_edges()
+	var lower := t.to_lower()
+	if not (lower == "/mute" or lower.begins_with("/mute ") or lower.begins_with("/unmute ")):
+		return false
+	var info: Dictionary = _world.net_chat_info()
+	var slots: Array = info.get("slots", [])
+	if lower == "/mute":
+		var names: Array = []
+		for sl in slots:
+			if sl.get("muted", false):
+				names.append(String(sl.name))
+		_hud.add_chat_line("Muted: %s" % (", ".join(PackedStringArray(names)) if not names.is_empty() else "nobody"), -1)
+		return true
+	var mute := lower.begins_with("/mute ")
+	var who := t.substr(6 if mute else 8).strip_edges()
+	var found := -1
+	for i in slots.size():
+		var sl: Dictionary = slots[i]
+		if sl.get("player", false) and not sl.get("local", false) and String(sl.name).to_lower() == who.to_lower():
+			found = i
+	if found < 0:
+		_hud.add_chat_line("No other player is called %s" % who, -1)
+		return true
+	_world.net_chat_set_muted(found, mute)
+	_hud.add_chat_line(("%s is muted" if mute else "%s is no longer muted") % String(slots[found].name), -1)
+	print("GAME CHAT %s slot %d" % ["muted" if mute else "unmuted", found])
+	return true
+
+
+func _chat_tick(st: Dictionary) -> void:
+	if _hud == null or _shell == null or not _hud.has_method("take_chat_requests"):
+		return
+	if not _world.is_logic_held(): # RENDERWAIT-1: the chat reads the live players (net_chat_info / mask / take); the next held frame does it
+		return
+	_hud.set_network_game(true) # the chat and beacon keys work in a network game only (RW 0x441B7C)
+	_beacon_tick(st)
+	if _chat_lines_seen == 0 and not _chat_mutes.is_empty():
+		for m in _chat_mutes:
+			_world.net_chat_set_muted(int(m), true)
+			print("GAME CHAT muted slot %d" % int(m))
+		_chat_mutes.clear()
+		_chat_lines_seen = -1 # (done once)
+	for everyone in _hud.take_chat_requests():
+		_chat_open(bool(everyone))
+	# the scripted lines: the window opened, the text typed into its entry, Send pressed a few frames later
+	for c in _chat_script:
+		if int(c.stage) == 3:
+			continue
+		if c.stage == 0 and int(st.get("frame", 0)) >= int(c.frame):
+			if _chat_open(bool(c.everyone)):
+				c.stage = 1
+				c.at = _frames
+		elif c.stage == 1 and _frames - int(c.at) >= 10 and _shell.ingame_chat_update().get("has_entry", false):
+			_shell.ingame_chat_type(String(c.text))
+			c.stage = 2
+			c.at = _frames
+		elif c.stage == 2 and _frames - int(c.at) >= 20:
+			if not _chat_open_shot.is_empty():
+				print("GAME CHAT open shot %s: %s" % [_chat_open_shot, error_string(get_viewport().get_texture().get_image().save_png(_chat_open_shot))])
+				_chat_open_shot = ""
+			print("GAME CHAT send pressed: ", _shell.ingame_chat_command("Send"))
+			c.stage = 3
+			c.at = _frames
+			_chat_shot_at = _frames
+		break
+	var cs: Dictionary = _shell.ingame_chat_update()
+	var open: bool = cs.get("open", false)
+	if open != _chat_history_shown:
+		_chat_history_shown = open
+		_hud.set_chat_history_shown(open)
+	for snd in cs.get("sends", []):
+		if _chat_slash(String(snd.text)):
+			continue
+		var mode := int(snd.mode)
+		var line: String = _hud.chat_format(mode, String(snd.text))
+		var mask: int = _world.net_chat_mask(mode)
+		var r: Dictionary = _world.net_chat_send(line, mask)
+		print("GAME CHAT sent mode %d mask %d: %s -> %s" % [mode, mask, line, JSON.stringify(r)])
+		if not r.get("ok", false):
+			_hud.add_chat_line("Your message was not sent: %s" % String(r.get("error", "")), -1)
+	for l in _world.net_chat_take():
+		var shown := "[%s] %s" % [String(l.name), String(l.text)] # RW 0x8D54D1: L"[%ls] %ls"
+		_hud.add_chat_line(shown, int(l.color))
+		print("GAME CHAT line slot %d: %s" % [int(l.slot), shown])
+		if _audio != null:
+			_audio.play_misc("IncomingChatNotification") # RW 0x8D354A
+	if not _chat_shot.is_empty() and _chat_shot_at >= 0 and _frames - _chat_shot_at >= 45:
+		var all_sent := true
+		for c in _chat_script:
+			all_sent = all_sent and int(c.stage) == 3
+		if all_sent:
+			print("GAME CHAT shot %s: %s" % [_chat_shot, error_string(get_viewport().get_texture().get_image().save_png(_chat_shot))])
+			print("GAME CHAT lines state: ", JSON.stringify(_hud.message_lines_state()))
+			_chat_shot = ""
+
+
+## lane CHAT-1: the scripted beacons (--beacon-at): Ctrl+B through the HUD's key path (PLACE_BEACON, RW 0x81F8D8 case 0x90), then a left click on the middle
+## of the screen (the GUI command's click, RW 0x83D7AD -> MSG_PLACE_BEACON), as a player does it
+func _beacon_tick(st: Dictionary) -> void:
+	for b in _beacon_script:
+		if int(b.stage) == 2:
+			continue
+		if int(b.stage) == 0 and int(st.get("frame", 0)) >= int(b.frame):
+			_hud.inject_key(0x1D, true)  # DIK_LCONTROL
+			_hud.inject_key(0x30, true)  # DIK_B
+			_hud.inject_key(0x30, false)
+			_hud.inject_key(0x1D, false)
+			b.stage = 1
+			b.at = _frames
+			print("GAME BEACON Ctrl+B: ", JSON.stringify(_hud.beacon_state()))
+		elif int(b.stage) == 1 and _frames - int(b.at) >= 5:
+			var c := get_viewport().get_visible_rect().size * Vector2(0.7, 0.62) # open ground right of the start's fortress (the middle is the fortress)
+			_hud.inject_mouse_move(c)
+			_hud.inject_mouse_button(1, true, c)
+			_hud.inject_mouse_button(1, false, c)
+			b.stage = 2
+			b.at = _frames
+			_beacon_shot_at = _frames
+			print("GAME BEACON click at %s" % str(c))
+		break
+	if not _beacon_shot.is_empty() and _beacon_shot_at >= 0 and _frames - _beacon_shot_at >= 90:
+		var done := true
+		for b in _beacon_script:
+			done = done and int(b.stage) == 2
+		if done:
+			print("GAME BEACON shot %s: %s" % [_beacon_shot, error_string(get_viewport().get_texture().get_image().save_png(_beacon_shot))])
+			print("GAME BEACON state: ", JSON.stringify(_hud.beacon_state()), " lines ", JSON.stringify(_hud.message_lines_state().get("lines", [])))
+			_beacon_shot = ""
+
+
 ## lane MP-2: the disconnect screen (DisconnectScreen.apt through the shell's window manager), its buttons, the left-game notices and the local player's quit
 func _net_disconnect_tick(dc: Dictionary) -> void:
 	if dc.is_empty():
@@ -5806,7 +6403,24 @@ func _net_disconnect_tick(dc: Dictionary) -> void:
 		if a.kind == "kick":
 			_world.net_disconnect_kick(a.row)
 		elif a.kind == "quit":
+			# RW 0x9195E1: the chat line Network:PlayerLeftGame with the local player's name first, then the votes and the quit
+			var me := ""
+			if _world.is_logic_held(): # RENDERWAIT-1: net_chat_info reads the live players
+				for sl in _world.net_chat_info().get("slots", []):
+					if sl.get("local", false):
+						me = String(sl.name)
+			var left: String = _hud.chat_text("Network:PlayerLeftGame") if _hud != null else ""
+			if not left.is_empty():
+				_world.net_disconnect_chat(left.replace("%ls", me).replace("%s", me))
 			_world.net_disconnect_quit()
+		elif a.kind == "chat": # lane CHAT-1: the disconnect screen's chat (RW 0x9196B9 -> sendDisconnectChat)
+			print("GAME NET disconnect chat sent: ", JSON.stringify(_world.net_disconnect_chat(String(a.text))))
+	# lane CHAT-1: the disconnect chat's lines go into the screen's ChatBox while it is up (RW 0x8D5403 shows them only then)
+	for l in (_world.net_disconnect_chat_take() if _world.is_logic_held() else []):
+		var line := "[%s] %s" % [String(l.name), String(l.text)]
+		if _dc_shown:
+			_shell.disconnect_screen_chat(line)
+		print("GAME NET disconnect chat line slot %d: %s (%s)" % [int(l.slot), line, "shown" if _dc_shown else "no screen"])
 	var left: Array = dc.get("left", [])
 	while _dc_left_seen < left.size():
 		_show_end_message({"text": "Network:PlayerLeftGame", "name": left[_dc_left_seen]}) # RW 0x8D57D8
@@ -6334,12 +6948,18 @@ func _campaign_check_tick() -> void:
 ## --qa: the scripted human plays (or, --qa-idle, watches an AI game), then the game is left the way a player leaves it and the score screen's Continue must
 ## return to the lobby. One QA SUMMARY line carries the player's findings and the flow's.
 func _run_qa() -> void:
+	var guard = load("res://scripts/qa_player.gd").RunGuard.new()
+	await guard.run(self, PackedStringArray([_qa_tag]))
+	get_tree().quit(0 if guard.fail_count == 0 else 1)
+
+
+func _run_qa_scenario() -> String:
 	if not _net_state.is_empty() or _net_host > 0 or not _net_join.is_empty() or not _lan_mode.is_empty() or not _replay_file.is_empty():
 		_fail("QA: the scripted player does not play a network session or a replay")
-		return
+		return "the scripted player does not play a network session or a replay"
 	if _hud == null:
 		_fail("QA: the HUD was not installed")
-		return
+		return "the HUD was not installed"
 	var qa: Node = load("res://scripts/qa_scene.gd" if not _qa_scene.is_empty() else "res://scripts/qa_player.gd").new()
 	qa.name = "QAPlayer"
 	add_child(qa)
@@ -6354,6 +6974,8 @@ func _run_qa() -> void:
 	else:
 		summary = await qa.play()
 	_world.set_time_scale(1.0)
+	if summary.is_empty():
+		return "QA player produced no summary (final assertion not reached)"
 	summary["real_seconds"] = (Time.get_ticks_msec() - started) / 1000.0
 	var flow := {"end_screen": false, "end_hidden": false, "auto_score": false, "quit_exit": false, "score_screen": false, "continue_to_lobby": false}
 	if summary.get("victory", false) or summary.get("defeat", false):
@@ -6422,7 +7044,7 @@ func _run_qa() -> void:
 	print("QA SUMMARY ", JSON.stringify(summary))
 	var complete: bool = flow.score_screen and flow.continue_to_lobby
 	print("QA RESULT: flow %s, %d issues" % ["complete" if complete else "INCOMPLETE", summary.get("issues", []).size()])
-	get_tree().quit(0 if complete else 1)
+	return "" if complete else "flow INCOMPLETE"
 
 
 

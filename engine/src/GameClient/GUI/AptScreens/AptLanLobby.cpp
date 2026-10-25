@@ -549,7 +549,8 @@ void AptLanLobby::fillGamesList()
 		{
 			map.resize(map.size() - 4);
 		}
-		const std::string players = std::to_string(occupied) + "/" + std::to_string(MAX_SLOTS);
+		// lane P16: the count is the game's own slots (the map's start count, capped at the record capacity)
+		const std::string players = std::to_string(occupied) + "/" + std::to_string(std::min(g.info.mapStartCount, MAX_SLOTS));
 		const std::string status = g.inProgress ? "in progress" : "";
 		const Color c = 0xFFFFFFFFu;
 		// lane UBERJOIN-1: the game's performance mode (carried by the announced GameInfo's simulation profile), tagged as the online list does
@@ -711,6 +712,7 @@ void AptLanLobby::update()
 	// RW 0x8490E0
 	pruneLan(); // a gadget that went falls back to its live twin (and the list refills)
 	pumpLan();
+	updateExtendedRows();
 	serviceReadyBoxes(); // lane ONLINE-5
 	if (m_box)
 	{
@@ -741,12 +743,13 @@ void AptLanLobby::update()
 	case 2:
 		if (m_lan && !m_lan->currentGame())
 		{
-			// RW 0x849160 .. 0x84919B: TheLAN->RequestGameCreate; the host's slot 0, every other slot open (ZH LanGameOptionsMenu's host start)
+			// RW 0x849160 .. 0x84919B: TheLAN->RequestGameCreate; the host's slot 0, every other slot open (ZH LanGameOptionsMenu's host start).
+			// lane P16: the map's slots only (a slot past the map's starts does not exist)
 			SkirmishGameInfo info = setupModel() ? setupModel()->info() : SkirmishGameInfo();
-			for (int s = 1; s < MAX_SLOTS; ++s)
+			for (int s = 1; s < info.mapStartCount; ++s)
 			{
 				info.slots[s] = SkirmishGameSlot();
-				info.slots[s].state = SLOT_OPEN;
+				info.slots[s].state = s < info.mapStartCount ? SLOT_OPEN : SLOT_CLOSED;
 			}
 			m_lan->requestGameCreate(info);
 		}

@@ -97,6 +97,14 @@ void Apt::note(const std::string &kind, const std::string &detail)
 	m_notes.push_back({ kind, detail });
 }
 
+void Apt::noteOnce(const std::string &kind, const std::string &detail)
+{
+	if (m_notedOnce.emplace(kind, detail).second)
+	{
+		m_notes.push_back({ kind, detail });
+	}
+}
+
 std::size_t Apt::noteCount(const std::string &kind) const
 {
 	std::size_t n = 0;
@@ -1127,7 +1135,7 @@ bool Apt::duplicateClip(AptSpriteInst *context, const AptValue &source, const Ap
 	copy->color = src->color;
 	copy->visible = src->visible;
 	copy->clipDepth = src->clipDepth;
-	note("duplicate-copies-placement-only", std::string()); // UNVERIFIED (S-104): clip actions and properties
+	noteOnce("duplicate-copies-placement-only", std::string()); // UNVERIFIED (S-104): clip actions and properties
 	return true;
 }
 

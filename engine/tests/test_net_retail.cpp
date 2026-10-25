@@ -1135,3 +1135,42 @@ TEST_CASE("net retail (merge): the per-subsystem breakdown covers every word of 
 	}
 	CHECK(objects.size() == g.game->logic().report().objects);
 }
+
+namespace
+{
+// lane NETLAG-2: a local lockstep driver whose next batch can be held (the lockstep waiting for another player's orders)
+class GatedDriver : public LiveGameFrameDriver
+{
+public:
+	LockstepDriver inner{ nullptr, nullptr };
+	bool hold = false;
+	Capture capture() const override { return inner.capture(); }
+	void pump(UnsignedInt protocolFrame, CommandList &pending) override { inner.pump(protocolFrame, pending); }
+	bool acquire(UnsignedInt frame, FrameBatch &out) override { return !hold && inner.acquire(frame, out); }
+	void completed(const FrameCompletion &c) override { inner.completed(c); }
+};
+} // namespace
+
+TEST_CASE("netlag2 pacing: a frame the lockstep held runs as soon as its input is complete (not at the next 200 ms tick), the frames after it keep "
+		  "their times, and a presentation-only step (advance(0)) runs nothing")
+{
+	OPENBFME_REQUIRE_START(s);
+	Loaded g;
+	load(*s, gameMessage(*s, 77u), g);
+	GatedDriver driver;
+	g.game->setFrameDriver(&driver);
+	CHECK(g.game->advance(0.2) == 1);
+	driver.hold = true;
+	CHECK(g.game->advance(0.2) == 0); // due, held: the lockstep waits
+	CHECK(g.game->stalledFrames() == 1);
+	CHECK(g.game->advance(0.05) == 0); // still held: counted once
+	CHECK(g.game->stalledFrames() == 1);
+	driver.hold = false;
+	CHECK(g.game->advance(0.0) == 0);  // presentation only: the held frame waits for a step where time passes
+	CHECK(g.game->advance(0.01) == 1); // the orders came: it runs now (before NETLAG-2 it waited for the next tick, 0.2 s of clock time)
+	CHECK(g.game->advance(0.15) == 1); // the next frame keeps its time: due 0.2 s after the held one was (0.05 + 0.01 + 0.15 = 0.21 s of clock)
+	CHECK(g.game->advance(0.18) == 0); // 0.01 + 0.18: not yet
+	CHECK(g.game->advance(0.02) == 1); // 0.21
+	CHECK(g.game->stalledFrames() == 1);
+	g.game->setFrameDriver(nullptr);
+}

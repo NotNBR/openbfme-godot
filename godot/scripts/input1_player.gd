@@ -14,7 +14,7 @@
 extends "res://scripts/play1_player.gd"
 
 
-func run(p_game: Node, scenarios: PackedStringArray) -> void:
+func _run(p_game: Node, scenarios: PackedStringArray) -> void:
 	game = p_game
 	hud = game._hud
 	world = game._world
@@ -24,15 +24,7 @@ func run(p_game: Node, scenarios: PackedStringArray) -> void:
 		game.get_tree().root.size = Vector2i(1280, 720)
 		await game._step(10)
 		print("INPUT1 headless: the window is %s" % window_size())
-	for s in scenarios:
-		var r: String = await call("_scenario_" + s)
-		if r == "":
-			ok_count += 1
-			print("INPUT1 %s: ok" % s)
-		else:
-			fail_count += 1
-			print("INPUT1 %s: FAIL %s" % [s, r])
-	print("INPUT1 RESULT: %d ok, %d failed" % [ok_count, fail_count])
+	await _run_scenarios(scenarios)
 
 
 # ---- keys ------------------------------------------------------------------------------------------------------------------------------------------------
@@ -40,7 +32,7 @@ func run(p_game: Node, scenarios: PackedStringArray) -> void:
 var _mods := {"ctrl": false, "shift": false, "alt": false}
 
 
-func _key_event(code: Key, down: bool) -> InputEventKey:
+func _modified_key_event(code: Key, down: bool) -> InputEventKey:
 	var e := InputEventKey.new()
 	e.keycode = code
 	e.physical_keycode = code
@@ -56,16 +48,16 @@ func key(code: Key, mods: Array = []) -> void:
 	for m in mods:
 		_mods[m] = true
 		var mk: Key = KEY_CTRL if m == "ctrl" else (KEY_SHIFT if m == "shift" else KEY_ALT)
-		Input.parse_input_event(_key_event(mk, true))
+		Input.parse_input_event(_modified_key_event(mk, true))
 		await game._step(2)
-	Input.parse_input_event(_key_event(code, true))
+	Input.parse_input_event(_modified_key_event(code, true))
 	await game._step(2)
-	Input.parse_input_event(_key_event(code, false))
+	Input.parse_input_event(_modified_key_event(code, false))
 	await game._step(2)
 	for m in mods:
 		_mods[m] = false
 		var mk: Key = KEY_CTRL if m == "ctrl" else (KEY_SHIFT if m == "shift" else KEY_ALT)
-		Input.parse_input_event(_key_event(mk, false))
+		Input.parse_input_event(_modified_key_event(mk, false))
 		await game._step(2)
 
 
@@ -238,11 +230,11 @@ func _scenario_keys() -> String:
 			# a modifier record: the modifier alone (BEGIN on the press, END on the release)
 			var mk: Key = KEY_CTRL if rec.ctrl else (KEY_SHIFT if rec.shift else KEY_ALT)
 			_mods[mods[0]] = true
-			Input.parse_input_event(_key_event(mk, true))
+			Input.parse_input_event(_modified_key_event(mk, true))
 			await game._step(2)
 			var after_down: Dictionary = metas()
 			_mods[mods[0]] = false
-			Input.parse_input_event(_key_event(mk, false))
+			Input.parse_input_event(_modified_key_event(mk, false))
 			await game._step(2)
 			var after_up: Dictionary = metas()
 			var fired: bool = (after_down.last_meta == rec.name and rec.transition == 0) or (after_up.last_meta == rec.name and rec.transition == 1)

@@ -14,6 +14,7 @@
 #include "Common/Thing/ThingTemplate.h"
 #include "GameClient/HudObjects.h"
 #include "GameLogic/GameMessage.h"
+#include "GameLogic/BeaconCommands.h"
 #include "GameLogic/ObjectTemplateInfo.h"
 #include "GameLogic/Module/SpecialPowerModules.h"
 #include "GameLogic/Module/BehaviorModule.h"
@@ -759,16 +760,42 @@ MessageDisposition CommandTranslator::translate(const ClientMessage &msg)
 				viewHomeBase();
 				return MessageDisposition::Destroy;
 			// lane INPUT-1: cases RotWK's handler executes whose effect is not ported (stop S-287): counted, never dropped silently. CHAT_BUDDIES
-			// RW 0x81FF84, CHAT_ALLIES / CHAT_EVERYONE RW 0x81FEE0 / 0x81FF34 (the chat box), TOGGLE_CONTROL_BAR
-			// RW 0x82001B (hides the Palantir), ALL_CHEER RW 0x820128 (MSG_DO_CHEER 1080 and its text), PLACE_BEACON RW 0x820298, ORDER_SYNCHRONIZE RW
+			// RW 0x81FF84 (the online Messenger overlay), TOGGLE_CONTROL_BAR
+			// RW 0x82001B (hides the Palantir), ALL_CHEER RW 0x820128 (MSG_DO_CHEER 1080 and its text), ORDER_SYNCHRONIZE RW
 			// 0x82028E (MSG_ORDER_SYNCHRONIZE 1136), TOGGLE_PLANNING_MODE RW 0x82065C (the War of the Ring planning), TOGGLE_FAST_FORWARD_MODE RW 0x820542
 			// (replays only), the camera key flags BEGIN_ / END_CAMERA_* RW 0x8200C0 .. 0x820455 (InGameUI + 0x8BB .. 0x8C2; no retail binding)
-			case CMSG_META_CHAT_BUDDIES:
+			// lane CHAT-1: CHAT_ALLIES / CHAT_EVERYONE (RW 0x81FEE0 / 0x81FF34): the chat window opens (mode 0, or 1 / 4 for EVERYONE); the gates (a network
+			// game, not a replay, the local player active) and the window are the HUD's (GameClient/InGameChat.h); the meta is destroyed either way
 			case CMSG_META_CHAT_ALLIES:
+				m_ctx.ui.requestChat(false);
+				return MessageDisposition::Destroy;
 			case CMSG_META_CHAT_EVERYONE:
+				m_ctx.ui.requestChat(true);
+				return MessageDisposition::Destroy;
+			// lane CHAT-1: PLACE_BEACON (Ctrl+B, RW 0x81F8D8 case 0x90): in a network game (RW 0x441B7C) that is not a replay, for an active local player
+			// (RW 0x6AAC52) with fewer beacons than MaxBeaconsPerPlayer (RW 0x6ABAF7 against MultiplayerSettings + 0x18), the GUI command becomes
+			// Command_PlaceBeacon (TheControlBar->findCommandButton RW 0x71D6EA, InGameUI vslot 0xBC): the next left click on the ground sends MSG_PLACE_BEACON
+			// (GUICommandTranslator). At the limit the key does nothing. The meta is destroyed either way (it falls into DELETE_BEACON's case)
+			case CMSG_META_PLACE_BEACON:
+			{
+				Player *local = m_ctx.localPlayer();
+				if (m_ctx.ui.networkGame() && local && !local->isObserver() && !local->isDefeated() && m_ctx.commands)
+				{
+					const ThingTemplate *beacon = BeaconCommands::beaconTemplate(m_ctx.logic, *local);
+					const int count = beacon ? BeaconCommands::countBeacons(m_ctx.logic, *local, *beacon) : 0;
+					if (count < m_ctx.logic.settings().maxBeaconsPerPlayer)
+					{
+						if (const CommandButton *b = m_ctx.commands->findCommandButton("Command_PlaceBeacon"))
+						{
+							m_ctx.ui.setGUICommand(b);
+						}
+					}
+				}
+				return MessageDisposition::Destroy;
+			}
+			case CMSG_META_CHAT_BUDDIES:
 			case CMSG_META_TOGGLE_CONTROL_BAR:
 			case CMSG_META_ALL_CHEER:
-			case CMSG_META_PLACE_BEACON:
 			case CMSG_META_ORDER_SYNCHRONIZE:
 			case CMSG_META_TOGGLE_PLANNING_MODE:
 			case CMSG_META_TOGGLE_FAST_FORWARD_MODE:

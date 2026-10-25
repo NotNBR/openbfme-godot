@@ -139,6 +139,17 @@ public:
 	}
 	void snapToLockTarget() { m_snapImmediate = true; }
 
+	// ---- lane FX-4: the camera shake (FXList ViewShake, RW TheTacticalView vslot 0x1AC = W3DView::shake RW 0x486D86) ----
+	// `angle` is the caller's GameClientRandomValueReal(0, 6.2831855f) (RW 0x6D33AB, drawn first in RW 0x486D86: the FX player draws it from the client stream).
+	// The intensity of `type` (0 SUBTLE .. 5 CINE_INSANE; another value adds 0) falls off with the 2D distance of `epicenter` from the view's position (View +
+	// 0xC) over MaxShakeRange and adds to the current one, capped at MaxShakeIntensity; beyond the range nothing changes. Without the GameData fields nothing
+	// happens (counted in shakesWithoutData)
+	void shake(const Coord3D &epicenter, int type, float angle);
+	float shakeIntensity() const { return m_shakeIntensity; }
+	float shakeOffsetX() const { return m_shakeOffsetX; }
+	float shakeOffsetY() const { return m_shakeOffsetY; }
+	unsigned long long shakesWithoutData() const { return m_shakesWithoutData; }
+
 	// One client frame (RW updates the camera once per displayed frame; retail runs at FramesPerSecondLimit 30). `uiScrolling` is InGameUI::isScrolling.
 	void update(bool uiScrolling, bool gamePaused = false);
 
@@ -258,6 +269,9 @@ private:
 	float m_zoomOutFactor = 1.0f; ///< lane ZOOM-1 (retail: 1)
 	Coord3D m_eye{ 0, -400, 300 }, m_target{ 0, 0, 0 }, m_prevEye{ 0, -400, 300 }, m_prevTarget{ 0, 0, 0 }, m_committedEye{ 0, -400, 300 }, m_committedTarget{ 0, 0, 0 };
 	unsigned long long m_frame = 0;
+	// lane FX-4: W3DView + 0x118 / + 0x11C (the shake offset), + 0x120 / + 0x124 (cos / sin of the shake angle), + 0x128 (the intensity)
+	float m_shakeOffsetX = 0.0f, m_shakeOffsetY = 0.0f, m_shakeCos = 0.0f, m_shakeSin = 0.0f, m_shakeIntensity = 0.0f;
+	unsigned long long m_shakesWithoutData = 0;
 };
 
 // lane BUILD-5 r3 (moved here from GodotInGameHud.cpp so the tests project through it too): the view the HUD picks, projects and places the placement ghost

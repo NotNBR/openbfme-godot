@@ -4,6 +4,8 @@
 #include "Common/BuildVersion.h"
 
 #include <cstddef>
+#include <cstdio>
+#include <string>
 
 namespace
 {
@@ -43,6 +45,26 @@ std::string BuildVersion::displayVersion(const std::string &version)
 		i += alpha.size();
 		if (number(version, i, pre) && i == version.size())
 			return "v" + core + " Alpha " + pre;
+		return version;
+	}
+	// lane NIGHTLY-1 (owner, 2026-10-21): "v0.4.13-nightly.20261022" is "Nightly 0.4.13 (2026-10-22)" ("Nightly 0.4.13 build <n>" when the
+	// number is not a YYYYMMDD date), as Semver.display in launcher/scripts/core/semver.gd
+	const std::string nightly = "-nightly.";
+	if (version.compare(i, nightly.size(), nightly) == 0)
+	{
+		i += nightly.size();
+		if (number(version, i, pre) && i == version.size())
+		{
+			const long n = std::stol(pre);
+			const long month = (n / 100) % 100, day = n % 100;
+			if (n >= 10000000 && month >= 1 && month <= 12 && day >= 1 && day <= 31)
+			{
+				char date[32];
+				std::snprintf(date, sizeof date, "%04ld-%02ld-%02ld", n / 10000, month, day);
+				return "Nightly " + core + " (" + date + ")";
+			}
+			return "Nightly " + core + " build " + pre;
+		}
 	}
 	return version;
 }

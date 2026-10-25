@@ -38,7 +38,12 @@ struct FXEvent
 		OBJECT_FX,      ///< FXList::doFXObj(fx, primary, secondary) (RW 0x4B1B5A -> 0x5E2282)
 		POSITION_FX,    ///< FXList::doFXPos(fx, position, transform or null, 0, null) (RW 0x494615)
 		WEAPON_FIRE_FX, ///< the fire FX block of RW 0x6CC915: the client applies the visibility tests, then handleWeaponFireFX / doFXObj
-		OBJECT_SOUND    ///< an audio event played on the primary object (`fxList` holds the audio event name): SlowDeathBehavior's Sound (RW 0x8609A8)
+		OBJECT_SOUND,   ///< an audio event played on the primary object (`fxList` holds the audio event name): SlowDeathBehavior's Sound (RW 0x8609A8)
+		// lane FX-4, TransitionDamageFX (RW 0x8BE077): `fxList` holds the FXParticleSystem template name. ATTACH: createParticleSystem (RW 0x5F526A), the
+		// system at `position` in the primary's model space (RW 0x5F2F2D) attached to the primary object (RW 0x5F32D7), kept under (primary, slot).
+		// DESTROY: the system kept under (primary, slot), if any, is destroyed (RW 0x5F5379) and forgotten
+		ATTACH_PARTICLE_SYSTEM,
+		DESTROY_PARTICLE_SYSTEM
 	};
 	Kind kind = OBJECT_FX;
 	const char *site = "";          ///< the call site ("FireFX", "FXListDie", "SlowDeath INITIAL", ...)
@@ -58,6 +63,7 @@ struct FXEvent
 	float weaponSpeed = 0.0f;       ///< WEAPON_FIRE_FX: WeaponTemplate + 0x68
 	bool playWhenStealthed = false; ///< WEAPON_FIRE_FX: WeaponTemplate + 0x135
 	const std::string *bone = nullptr; ///< OBJECT_FX of a LevelUpFx entry with a bone (lane INTEG-1, RW 0x8211EC): doFXPos at the bone; template data
+	std::uint32_t slot = 0;         ///< ATTACH / DESTROY_PARTICLE_SYSTEM: the key of the system among the primary's (lane FX-4)
 };
 
 class FXEventSink

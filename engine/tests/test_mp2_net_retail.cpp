@@ -268,8 +268,8 @@ TEST_CASE("mp2 net retail: on a slow link (200 ms each way, jitter) the peers me
 		CHECK(r.rcs[i] == 0);
 		CHECK(field(r.reports[i], "desyncs") == "0");
 		CHECK(field(r.reports[i], "crc_checks_passed") == "3");
-		// "run_ahead N changes C worst_latency_ms L": the router measured a round trip of 400+ ms (plus four times its variation): about 215 ms each way
-		// + 10 % + half a period is 1 frame, + 1: 2 at least (lane NETLAG-1's target, S-4530; from the lobby's 1); every peer took the router's RUNAHEAD
+		// "run_ahead N changes C worst_latency_ms L": the router planned for a round trip of 400+ ms (lane NETLAG-2: the 80th percentile of its samples):
+		// about 215 ms each way + 10 % + 25 ms is 1 frame, + 1: 2 at least (S-4530; from the lobby's 1); every peer took the router's RUNAHEAD
 		// (one change at least)
 		const std::string ra = field(r.reports[i], "run_ahead");
 		INFO(ra);
