@@ -62,7 +62,9 @@
 //     + 0x38 = the average of the team centres), the origin + 0x44 (the first position), vslot 0x20, RW 0x8F144C, vslot 0x2C (RW 0x8F2784: the retreat on a
 //     negative threat); SimpleAttack's started update RW 0x9B4DE7 ends the tactic with success when every team is idle for TeamTimeUntilConsideredIdle seconds
 //     (RW 0x8F175A / 0x8F1725) or the target is inactive.
-// What is not ported (stops S-417 / S-418, reported at runtime): the other 8 offensive tactics (the pick draws among the 2 SimpleAttack prototypes only), the
+//   * FlagCaptureSquad: applicability RW 0x9BC39F, setup RW 0x9BC1A0, nearest registered flag RW 0x9BC213, update RW 0x9BC3F4,
+//     cleanup RW 0x9BBFDC. The pending recruitment prototypes (+4) survive until handover into the active team list (+0x14).
+// Historical initial-lane limitations (the current S-417 / S-418 runtime reports and docs/FEATURE-MAP.md track subsequent ports): the other 8 offensive tactics, the
 // DEFENSIVE / OPPORTUNITY / EXPANSION heuristics and tactics, the targetless tactics (RW 0x90C5E2: FarmBuilder, StructureCreep, ...), the AIThreatFinder (threat
 // taken as 0: no draw at RW 0x90B2A0), RW 0x6C7344, RW 0x90CCCB, RW 0x8F144C (the teams' AIGroup step) and RW 0x8F2784's retreat (no threat finder), the other tactics'
 // launch / update bodies, the end's merge of the teams, the AI team objects (members stay in the player's team), the pathfinder check of RW 0x9EF9AF (taken as reachable), the filters
@@ -144,7 +146,7 @@ struct AITactic
 	Coord3D origin;                  ///< + 0x44: the first such centre after the start (RW 0x8F2955), where a retreat goes (RW 0x8F243A)
 	bool retreated = false;          ///< + 0x50
 	bool targetless = false;         ///< lane AI-2 r3: a clone of a targetless prototype (generator list + 0x58)
-	ObjectID squadTarget = INVALID_ID; ///< FarmKillSquad + 0x58: the object the squad attacks
+	ObjectID squadTarget = INVALID_ID; ///< FarmKillSquad / FlagCaptureSquad + 0x58: the attack or capture target
 	// lane AI-2 r5: the offensive bodies' own state (the tactic's + 0x58 object / fields)
 	int step = 0;                    ///< FormationAttack state (+ 0x58 -> + 0); FlankAttack waypoint index; PincerAttack team 0's waypoint index
 	int step2 = 0;                   ///< PincerAttack team 1's waypoint index
