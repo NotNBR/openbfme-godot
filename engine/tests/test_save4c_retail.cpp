@@ -449,8 +449,8 @@ TEST_CASE("save4c retail T5: each block's version window (RW 0xA1F5B9's two mess
 		late.logic().gameState().saveBlocks({ t }, one);
 		const size_t at = payloadOffset(t);
 		REQUIRE(one.size() > at); // tolerance: an index precondition (the version byte must exist before it is read)
-		// every SAVE-4c block starts with its version: 1, except obfme:SkirmishAI's (2, 2) since lane AI5 (the upgrade builders and the money reserve)
-		const std::uint8_t version = t == "obfme:SkirmishAI" ? 2 : 1;
+		// SkirmishAI version 3 includes capture-flag registration history; the other SAVE-4c blocks are version 1.
+		const std::uint8_t version = t == "obfme:SkirmishAI" ? 3 : 1;
 		REQUIRE(one[at] == version);
 		std::vector<std::uint8_t> above = one, below = one;
 		above[at] = (std::uint8_t)(version + 1);
