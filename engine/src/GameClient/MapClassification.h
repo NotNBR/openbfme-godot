@@ -37,5 +37,5 @@ struct Result
 // everything from `classified`). false + *error when the map cannot be parsed; problems inside it are in classified.report.
 bool run(const std::vector<std::uint8_t> &bytes, const std::string &sourceName, const std::string &lowerName, RetailObjectWorld &world,
 	const MapObjectOptions &options, LoadedMap &map, TerrainLogic &terrain, MapObjectDrawables &classified, MapObjectDrawables *clientOnly,
-	Result &result, std::string *error, const std::string &mapsFolder = "maps");
+	Result &result, std::string *error, const std::string &mapsFolder = "maps", bool profilingMovementField = false);
 } // namespace MapClassification

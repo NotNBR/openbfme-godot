@@ -13,12 +13,25 @@ extends "res://scripts/scenario_player.gd"
 var game: Node
 var hud: Node
 var world: Node
+var _profile_log := "" # optional buffered battle-only diagnostics; written after the timed window
+var _action := "battle" # --uber1-action=move with allied lobby slots: mass movement, no warm-up
+var _move_pattern := "crossing"
+var _move_spacing := 75.0
+var _move_field := "retail"
+var _move_warmup := 20
 
 const HORDES := ["GondorFighterHorde", "GondorFighterHorde", "GondorTowerShieldGuardHorde", "GondorArcherHorde"]
 const FOES := ["MordorFighterHorde", "MordorFighterHorde", "MordorFighterHorde", "MordorArcherHorde"]
 const SPACING := 75.0
 const GAP := 160.0
 const MARGIN := 200.0
+
+
+func _logic_steps(frames: int) -> void:
+	# game._step counts render frames; preparation here needs actual logic ticks.
+	var target: int = world.get_presented_frame() + frames
+	while world.get_presented_frame() < target:
+		await game.get_tree().process_frame
 
 
 func _run(p_game: Node, troops: int) -> void:
@@ -29,6 +42,18 @@ func _run(p_game: Node, troops: int) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--uber1-seconds="):
 			seconds = a.substr(16).to_float()
+		elif a.begins_with("--uber1-profile-log="):
+			_profile_log = a.trim_prefix("--uber1-profile-log=")
+		elif a.begins_with("--uber1-action="):
+			_action = a.trim_prefix("--uber1-action=")
+		elif a.begins_with("--uber1-move-pattern="):
+			_move_pattern = a.trim_prefix("--uber1-move-pattern=")
+		elif a.begins_with("--uber1-move-spacing="):
+			_move_spacing = a.trim_prefix("--uber1-move-spacing=").to_float()
+		elif a.begins_with("--uber1-move-field="):
+			_move_field = a.trim_prefix("--uber1-move-field=")
+		elif a.begins_with("--uber1-move-warmup="):
+			_move_warmup = a.trim_prefix("--uber1-move-warmup=").to_int()
 	await _run_scenarios(PackedStringArray(["battle %d" % troops]), [_battle.bind(troops, seconds)])
 
 
@@ -51,6 +76,8 @@ func _enemy_index() -> int:
 
 
 func _battle(troops: int, seconds: float) -> String:
+	if _action not in ["battle", "move"]:
+		return "unknown workload: " + _action
 	var me := _local_index()
 	var foe := _enemy_index()
 	if me < 0 or foe < 0:
@@ -60,53 +87,117 @@ func _battle(troops: int, seconds: float) -> String:
 		return "no census / extent (no game)"
 	var cx: float = float(census.extent_x) * 0.5
 	var cy: float = float(census.extent_y) * 0.5
-	var rows := int((float(census.extent_y) - 2.0 * MARGIN) / SPACING)
+	if _action == "move" and _move_spacing <= 0.0:
+		return "movement spacing must be positive"
+	var spacing := _move_spacing if _action == "move" else SPACING
+	var rows := maxi(1, int((float(census.extent_y) - 2.0 * MARGIN) / spacing))
 	var base_troops: int = int(census.troops)
+	var base_hordes: int = int(census.battalions)
 	var west: Array = []
 	var east: Array = []
+	var west_goals: Array[Vector2] = []
+	var east_goals: Array[Vector2] = []
 	var t0 := Time.get_ticks_msec()
 	var column := 0
 	var made := 0
 	while made < troops:
-		var dx := GAP + SPACING * column
+		var dx := GAP + spacing * column
 		if cx - dx < MARGIN:
 			return "%d troops do not fit the map (%d made)" % [troops, made]
 		for r in range(rows):
-			var y := MARGIN + SPACING * r + float(column % 2) * SPACING * 0.5
-			var a: int = world.create_object(HORDES[(r + column) % 4], me, cx - dx, y, 0.0)
-			var b: int = world.create_object(FOES[(r + column) % 4], foe, cx + dx, y, PI)
+			var y := MARGIN + spacing * r + float(column % 2) * spacing * 0.5
+			var a: int = world.create_object(HORDES[0] if _move_field == "open" else HORDES[(r + column) % 4], me, cx - dx, y, 0.0)
+			var facing := 0.0 if _action == "move" and _move_pattern == "parallel" else PI
+			var b: int = world.create_object(HORDES[0] if _move_field == "open" else FOES[(r + column) % 4], foe, cx + dx, y, facing)
 			if a <= 0 or b <= 0:
 				return "create_object failed: %s" % [str(world.get_command_errors()) if world.has_method("get_command_errors") else "?"]
 			west.append(a)
 			east.append(b)
+			west_goals.append(Vector2(cx + dx, y))
+			east_goals.append(Vector2(cx - dx, y))
 			if west.size() % 16 == 0:
-				made = int(world.get_census().troops) - base_troops
+				var population: Dictionary = world.get_census()
+				made = int(population.troops) - base_troops
+				if _action == "move":
+					made -= int(population.battalions) - base_hordes # HORDE controllers inherit INFANTRY
 				if made >= troops:
 					break
-		made = int(world.get_census().troops) - base_troops
+		var population: Dictionary = world.get_census()
+		made = int(population.troops) - base_troops
+		if _action == "move":
+			made -= int(population.battalions) - base_hordes
 		column += 1
 	var spawn_s := (Time.get_ticks_msec() - t0) / 1000.0
+	if _action == "move" and _move_pattern == "parallel":
+		var distance := 2000.0
+		for goal in west_goals:
+			distance = minf(distance, float(census.extent_x) - MARGIN - goal.x)
+		if distance <= 100.0:
+			return "no room for parallel movement"
+		for i in range(west_goals.size()):
+			var west_x := east_goals[i].x
+			var east_x := west_goals[i].x
+			west_goals[i].x = west_x + distance
+			east_goals[i].x = east_x + distance
 	await game._step(4)
-	for i in range(west.size()):
-		world.order_attack([west[i]], east[i])
-		world.order_attack([east[i]], west[i])
+	if _action == "move" and _move_field == "open":
+		await _logic_steps(2)
 	hud.camera_look_at(Vector2(cx, cy))
-	await game._step(2)
-	var settle := Time.get_ticks_msec()
-	while Time.get_ticks_msec() - settle < 3000:
-		await game.get_tree().process_frame
+	var start_census: Dictionary = {}
+	var f0 := 0
+	var waits0: Dictionary = {}
+	var win0: Dictionary = {}
+	var move_w0 := 0
+	if _action == "move":
+		# Observe before orders; do not let settling or a blocking census hide the burst.
+		start_census = world.get_census()
+		f0 = world.get_presented_frame()
+		world.reset_logic_wait_sites()
+		waits0 = world.get_frame_timings()
+		win0 = world.get_client_window_stats()
+		move_w0 = Time.get_ticks_usec()
+	var command_start := Time.get_ticks_usec()
+	for i in range(west.size()):
+		if _action == "move":
+			var a: Dictionary = world.order_move([west[i]], west_goals[i].x, west_goals[i].y)
+			var b: Dictionary = world.order_move([east[i]], east_goals[i].x, east_goals[i].y)
+			if not a.get("ok", false) or not b.get("ok", false):
+				return "move command refused: %s / %s" % [a, b]
+		else:
+			world.order_attack([west[i]], east[i])
+			world.order_attack([east[i]], west[i])
+	var command_ms := (Time.get_ticks_usec() - command_start) / 1000.0
+	var motion_begin: Dictionary = {}
+	var motion_rows: Array = []
+	if _action == "move" and _move_field == "open":
+		await _logic_steps(_move_warmup)
+		motion_begin = world.profile_army_motion(west + east)
+		if int(motion_begin.get("tracked_troops", 0)) < troops:
+			return "motion probe did not register the requested soldiers: %s" % motion_begin
+		start_census = world.get_census()
+		f0 = world.get_presented_frame()
+		world.reset_logic_wait_sites()
+		waits0 = world.get_frame_timings()
+		win0 = world.get_client_window_stats()
+		move_w0 = Time.get_ticks_usec()
+	if _action == "battle":
+		await game._step(2)
+		var settle := Time.get_ticks_msec()
+		while Time.get_ticks_msec() - settle < 3000:
+			await game.get_tree().process_frame
 	# the window
-	var start_census: Dictionary = world.get_census()
-	var f0: int = world.get_presented_frame()
+		start_census = world.get_census()
+		f0 = world.get_presented_frame()
+		world.reset_logic_wait_sites()
+		waits0 = world.get_frame_timings()
+		win0 = world.get_client_window_stats()
 	var times: Array = []
+	var profile_rows: Array = []
 	# lane RENDERWAIT-1: the render's waits on the logic worker in the window (by site), and per second of the window the render frames against the
 	# logic frames (non-blocking reads only: get_frame_timings, get_presented_frame)
-	world.reset_logic_wait_sites()
-	var waits0: Dictionary = world.get_frame_timings()
-	var win0: Dictionary = world.get_client_window_stats()
 	var seconds_rows: Array = []
 	var row := {"frames": 0, "worst_render": 0.0, "logic0": world.get_presented_frame(), "worst_worker": 0.0}
-	var w0 := Time.get_ticks_usec()
+	var w0 := move_w0 if _action == "move" else Time.get_ticks_usec()
 	var last := w0
 	var row_start := w0
 	while Time.get_ticks_usec() - w0 < int(seconds * 1000000.0):
@@ -116,6 +207,27 @@ func _battle(troops: int, seconds: float) -> String:
 		times.append(ms)
 		last = now
 		var ft: Dictionary = world.get_frame_timings()
+		if not motion_begin.is_empty():
+			var motion: Dictionary = world.profile_army_motion()
+			if motion.get("sampled", false):
+				motion_rows.append(motion)
+		if not _profile_log.is_empty():
+			# get_frame_timings/get_presented_frame are non-blocking snapshots. A worker's
+			# last completed frame may repeat across render frames; these are not new ticks.
+			var detail := {"elapsed_us": now - w0, "interval_ms": ms,
+				"logic_frame": world.get_presented_frame(), "timings": ft}
+			if hud.has_method("get_frame_timings"):
+				detail["hud"] = hud.get_frame_timings()
+			if _action == "move":
+				var poses: Array = []
+				# Fixed population, non-blocking render-side reads; never select the most active objects anew.
+				for k in range(8):
+					var id: int = west[mini(west.size() - 1, int(k * west.size() / 8))]
+					var pose: Dictionary = world.get_render_pose(id)
+					pose["id"] = id
+					poses.append(pose)
+				detail["poses"] = poses
+			profile_rows.append(detail)
 		row.frames += 1
 		row.worst_render = maxf(row.worst_render, ms)
 		row.worst_worker = maxf(row.worst_worker, float(ft.get("worker_frame_ms", 0.0)))
@@ -124,6 +236,11 @@ func _battle(troops: int, seconds: float) -> String:
 			seconds_rows.append(row)
 			row = {"frames": 0, "worst_render": 0.0, "logic0": world.get_presented_frame(), "worst_worker": 0.0}
 			row_start = now
+	var motion_end: Dictionary = {}
+	if not motion_begin.is_empty():
+		motion_end = world.profile_army_motion()
+		if motion_end.get("sampled", false):
+			motion_rows.append(motion_end)
 	var wall := (Time.get_ticks_usec() - w0) / 1000000.0
 	var waits1: Dictionary = world.get_frame_timings()
 	var win1: Dictionary = world.get_client_window_stats()
@@ -142,6 +259,19 @@ func _battle(troops: int, seconds: float) -> String:
 		var r: Dictionary = seconds_rows[i]
 		print("UBER1 second %d | %d | %.1f | %d | %.1f" % [i + 1, r.frames, r.worst_render, r.logic, r.worst_worker])
 	var end_census: Dictionary = world.get_census()
+	print("UBER1 workload: %s; commands %.3f ms; %d hordes ordered; pattern %s" % [_action, command_ms, west.size() + east.size(), _move_pattern])
+	if not _profile_log.is_empty():
+		var output := FileAccess.open(_profile_log, FileAccess.WRITE)
+		if output == null:
+			return "cannot write battle profiling log: %s" % _profile_log
+		output.store_string(JSON.stringify({"schema": 1, "profile": world.simulation_profile(), "scenario": _action,
+			"move_pattern": _move_pattern, "move_spacing": spacing, "move_field": _move_field, "command_ms": command_ms,
+			"motion_begin": motion_begin, "motion_rows": motion_rows, "motion_end": motion_end,
+			"requested_troops": troops, "wall_seconds": wall, "logic_frames": logic_frames,
+			"census_start": start_census, "census_end": end_census, "waits_before": waits0,
+			"waits_after": waits1, "client_before": win0, "client_after": win1,
+			"rows": profile_rows}))
+		output.close()
 	if times.is_empty():
 		return "no frames in the window"
 	var sorted := times.duplicate()

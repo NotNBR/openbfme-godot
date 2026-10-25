@@ -4,6 +4,7 @@
 #include "Common/BfmeGame.h"
 #include "GameClient/MapClassification.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -27,7 +28,7 @@ std::string MapClassification::mapPath(const std::string &lowerName, const std::
 
 bool MapClassification::run(const std::vector<std::uint8_t> &bytes, const std::string &sourceName, const std::string &lowerName, RetailObjectWorld &world,
 	const MapObjectOptions &options, LoadedMap &map, TerrainLogic &terrain, MapObjectDrawables &classified, MapObjectDrawables *clientOnly,
-	Result &result, std::string *error, const std::string &mapsFolder)
+	Result &result, std::string *error, const std::string &mapsFolder, bool profilingMovementField)
 {
 	auto t0 = std::chrono::steady_clock::now();
 	const auto worldContext = world.enterContext(); // this world's stores and audio validator for the map.ini parse and the classification
@@ -38,6 +39,22 @@ bool MapClassification::run(const std::vector<std::uint8_t> &bytes, const std::s
 		return false;
 	}
 	result.secondsLoad = secondsSince(t0);
+	// Explicit profiling fixture, never used by ordinary map loads. Preserve the
+	// map's dimensions, textures, sides and start waypoints, but provide unobstructed
+	// ground for a sustained marching workload. No movement rules are bypassed.
+	if (profilingMovementField)
+	{
+		std::fill(map.heightMap.m_data.begin(), map.heightMap.m_data.end(), (std::uint16_t)256);
+		for (auto *plane : { &map.heightMap.m_planeA, &map.heightMap.m_planeB, &map.heightMap.m_planeTaint,
+			&map.heightMap.m_planeExtraPass, &map.heightMap.m_cellCliffState })
+			std::fill(plane->begin(), plane->end(), (std::uint8_t)0);
+		std::fill(map.heightMap.m_cliffInfoNdxes.begin(), map.heightMap.m_cliffInfoNdxes.end(), 0);
+		map.chunks.standingWaterAreas.clear();
+		map.chunks.riverAreas.clear();
+		map.chunks.polygonTriggers.clear();
+		auto &objects = map.chunks.objects;
+		objects.erase(std::remove_if(objects.begin(), objects.end(), [](const MapObject &obj) { return !obj.isWaypoint(); }), objects.end());
+	}
 
 	t0 = std::chrono::steady_clock::now();
 	terrain.init(map.heightMap, map.chunks, nullptr);

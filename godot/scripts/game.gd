@@ -2100,6 +2100,8 @@ func _begin_game(message: Dictionary) -> void:
 	var opts := {"progress": Callable(self, "_on_load_progress"), "test_hooks": _end or not _zoom1.is_empty() or _rules_shot > 0 or not _gamemodes.is_empty() or _uber1 > 0 or _play_script.ends_with("spell3_player.gd") or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") or _play_script.ends_with("ownerfix2_player.gd")} # lane ZOOM-1: the bars scenario hurts some units (logged)
 	if _record and _net_state.is_empty():
 		opts["record"] = _last_replay_path() # lane MP-2: every skirmish is recorded
+	if _uber1 > 0 and "--uber1-action=move" in OS.get_cmdline_user_args() and "--uber1-move-field=open" in OS.get_cmdline_user_args():
+		opts["profiling_movement_field"] = true
 	if _pingwheel.has("hash"):
 		opts["hash_every_frame"] = true # the ping wheel's check: every logic frame's state hash, compared with a run without pings
 	var rep: Dictionary = _world.start_new_game(opts)

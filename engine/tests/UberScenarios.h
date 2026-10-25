@@ -46,6 +46,12 @@ struct Run
 	double spawnMs = 0.0;              ///< the wall time of making the armies
 	double processCpuMs = 0.0;         ///< the process's CPU time over the frames (all threads): / wall = cores used
 	double framesWallMs = 0.0;
+	std::string scenario = "battle";
+	double commandMs = 0.0;
+	std::vector<std::string> workNames;
+	std::vector<std::vector<double>> workMs; // installed phase-work callbacks, inclusive elapsed wall time
+	std::vector<int> movedTroops; // fixed troop population: changed XY by > 0.01 units since the preceding tick
+	int trackedTroops = 0;
 };
 
 // a battle of at least `units` living troops with `profile`: `warmUp` logic frames after the order (each hashed like a recorded game's, not measured:

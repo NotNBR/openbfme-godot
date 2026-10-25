@@ -102,6 +102,9 @@ public:
 		double presentationDelaySeconds = 0.0;
 		// SMOOTH-2 diagnostic (tests): the worker sleeps this long before each frame it runs (a slow simulation; publication comes that much later)
 		int workerFrameDelayMs = 0;
+		// Explicit profiler fixture: flat marching ground, no neutral map actors or
+		// map scripts. Starting bases and all normal army simulation remain active.
+		bool profilingMovementField = false;
 		// SMOOTH-1: hash the state after every frame and keep it in the frame's snapshot (frameHashes(); false: no per-frame hash)
 		bool hashEveryFrame = false;
 		// lane SCRIPT-1: the map script engine. -1 (default): the scripts run in a started game (`start`) and a campaign mission (`campaign`), not in a bare

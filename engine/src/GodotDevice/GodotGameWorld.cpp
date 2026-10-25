@@ -383,6 +383,7 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("leave_lan_room_and_restore_profile"), &GameWorld::leave_lan_room_and_restore_profile); // lane UBERJOIN-1
 	ClassDB::bind_method(D_METHOD("switch_simulation_profile_for_game", "name"), &GameWorld::switch_simulation_profile_for_game); // lane UBERJOIN-1 (the lobby screens' switch, for the headless lifecycle test)
 	ClassDB::bind_method(D_METHOD("get_census"), &GameWorld::get_census);                                 // lane UBER-1
+	ClassDB::bind_method(D_METHOD("profile_army_motion", "hordes"), &GameWorld::profile_army_motion, DEFVAL(Array()));
 	ClassDB::bind_method(D_METHOD("lan_close"), &GameWorld::lan_close);
 	ClassDB::bind_method(D_METHOD("lan_begin"), &GameWorld::lan_begin);
 	ClassDB::bind_method(D_METHOD("lan_set_create_a_hero", "record"), &GameWorld::lan_set_create_a_hero);
@@ -1094,6 +1095,8 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 	m_textureAnimation = optBool(options, "texture_animation", true);
 
 	LiveGame::Options lo = loIn;
+	lo.profilingMovementField = optBool(options, "test_hooks", false) && optBool(options, "profiling_movement_field", false);
+	if (lo.profilingMovementField) UtilityFunctions::print("movement field: open (flat terrain, no neutral map actors/scripts; normal movement and collisions)");
 	lo.heroStatsProfile = m_heroStatsProfile;
 	lo.heroStatsMessage = [](const std::string &message) { UtilityFunctions::print(toGodot(message)); };
 	if (progress.is_valid())
@@ -4892,6 +4895,47 @@ Dictionary GameWorld::get_census() const
 		d["extent_x"] = maxX;
 		d["extent_y"] = maxY;
 	}
+	return d;
+}
+
+Dictionary GameWorld::profile_army_motion(const Array &hordes)
+{
+	Dictionary d;
+	if (!m_game || !m_testHooks || m_netStarted) { d["error"] = "motion profiling requires an offline test game"; return d; }
+	// Immutable snapshot only, including for registration. No wait on the worker.
+	const auto snap = m_game->latestSnapshot();
+	if (!snap) { d["error"] = "no completed snapshot"; return d; }
+	if (!hordes.is_empty())
+	{
+		std::set<::ObjectID> roots;
+		for (int64_t i = 0; i < hordes.size(); ++i) roots.insert((::ObjectID)(int64_t)hordes[i]);
+		m_profileArmyPositions.clear();
+		for (const ObjectSnapshot &o : snap->objects)
+			if (!o.effectivelyDead && roots.count(o.containedBy)) m_profileArmyPositions.emplace_back(o.id, o.position);
+		m_profileArmyFrame = snap->frame;
+		d["sampled"] = false;
+	}
+	else
+	{
+		d["sampled"] = snap->frame != m_profileArmyFrame;
+		if (snap->frame != m_profileArmyFrame)
+		{
+			int moved = 0;
+			for (auto &p : m_profileArmyPositions)
+			{
+				const ObjectSnapshot *o = snap->find(p.first);
+				if (!o || o->effectivelyDead) continue; // fixed denominator
+				const double dx = (double)o->position.x - p.second.x, dy = (double)o->position.y - p.second.y;
+				moved += dx * dx + dy * dy > 0.0001 ? 1 : 0;
+				p.second = o->position;
+			}
+			d["moved_troops"] = moved;
+			d["skipped_ticks"] = (int64_t)(snap->frame - m_profileArmyFrame - 1);
+			m_profileArmyFrame = snap->frame;
+		}
+	}
+	d["frame"] = (int64_t)snap->frame;
+	d["tracked_troops"] = (int64_t)m_profileArmyPositions.size();
 	return d;
 }
 

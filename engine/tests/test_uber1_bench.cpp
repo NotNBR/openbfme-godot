@@ -24,6 +24,8 @@
 #include "UberScenarios.h"
 
 #include "Common/JobSystem.h"
+#include "Common/Thing/ThingTemplate.h"
+#include "GameLogic/AI/AIWorld.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
@@ -36,6 +38,7 @@
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/NewGame/NewGame.h"
 #include "GameLogic/Object/Object.h"
+#include "GameLogic/ObjectTemplateInfo.h"
 #include "Libraries/WWVegas/WW3D2/assetmgr.h"
 
 #include <algorithm>
@@ -44,6 +47,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #ifndef _WIN32
 #include <time.h>
@@ -117,6 +121,11 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 	std::string error;
 	REQUIRE_MESSAGE(IniSkirmishSetupSource::loadMapCache(fs, cache, &error), error);
 	NewGameMessage m;
+	const char *scenario = std::getenv("OPENBFME_UBER_SCENARIO");
+	const bool moving = scenario && std::string(scenario) == "move";
+	const char *pattern = std::getenv("OPENBFME_UBER_MOVE_PATTERN");
+	const bool parallelMove = moving && pattern && std::string(pattern) == "parallel";
+	out.scenario = moving ? "move" : "battle";
 	m.game.mapName = "maps/map mp fall back 8p/map mp fall back 8p.map";
 	m.game.seed = 7;
 	m.game.startingCash = 1500;
@@ -130,7 +139,7 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 		REQUIRE(slot.playerTemplate >= 0);
 		slot.startPos = i;
 		slot.color = i;
-		slot.teamNumber = i < 4 ? 0 : 1;
+		slot.teamNumber = moving ? 0 : (i < 4 ? 0 : 1); // movement workload: allied armies, no deliberate combat
 	}
 	NewGameStart start(RandomAlgorithm::ZH_CarryChain);
 	REQUIRE_MESSAGE(NewGame::prepareNewGame(m, world.playerTemplates(), settings, cache, RandomAlgorithm::ZH_CarryChain, start, &error), error);
@@ -139,8 +148,43 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 	LiveGame game(world, fs, assets, options);
 	LiveGame::Options o;
 	o.start = &start;
+	const bool openField = moving && std::getenv("OPENBFME_UBER_MOVE_FIELD");
+	o.profilingMovementField = openField;
 	REQUIRE_MESSAGE(game.load(o, &error), error);
 	GameLogic &logic = game.logic();
+	if (openField) std::printf("  movement field: open (flat terrain, no neutral map actors/scripts; normal movement and collisions)\n");
+	// Test-only timers around the existing callbacks. Call order, arguments and
+	// implementation stay unchanged; restore before LiveGame destroys their owners.
+	struct WorkTimers
+	{
+		GameLogic &logic;
+		std::vector<std::pair<std::string, std::function<void()>>> originals;
+		std::vector<double> totals;
+		bool enabled = false;
+		~WorkTimers() { for (const auto &entry : originals) logic.installPhaseWork(entry.first, entry.second); }
+	} timers{ logic };
+	if (std::getenv("OPENBFME_SIM_DETAIL"))
+	{
+		for (const auto &work : logic.phaseWork())
+		{
+			if (work.installed && !work.builtin)
+			{
+				timers.originals.emplace_back(work.name, work.installed);
+				out.workNames.push_back(work.name);
+			}
+		}
+		timers.totals.resize(timers.originals.size());
+		for (size_t i = 0; i < timers.originals.size(); ++i)
+		{
+			const auto original = timers.originals[i].second;
+			REQUIRE(logic.installPhaseWork(timers.originals[i].first, [&, i, original]() {
+				if (!timers.enabled) { original(); return; }
+				const double t0 = wallMs();
+				original();
+				timers.totals[i] += wallMs() - t0;
+			}));
+		}
+	}
 	REQUIRE(logic.simulationProfile() == profile);
 	out.objectsBefore = countObjects(logic);
 
@@ -148,7 +192,8 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 	REQUIRE(logic.terrain() != nullptr);
 	REQUIRE(logic.terrain()->getExtent(0, maxX, maxY));
 	const float cx = maxX * 0.5f, cy = maxY * 0.5f;
-	const float spacing = 75.0f, gap = 160.0f, margin = 200.0f;
+	const float spacing = moving ? (float)perfbench::envInt("OPENBFME_UBER_MOVE_SPACING", 75) : 75.0f;
+	const float gap = 160.0f, margin = 200.0f;
 	const int rows = std::max(1, (int)((maxY - 2.0f * margin) / spacing));
 	std::vector<Player *> players;
 	for (int i = 0; i < 8; ++i)
@@ -160,6 +205,18 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 	const char *gondor[] = { "GondorFighterHorde", "GondorFighterHorde", "GondorTowerShieldGuardHorde", "GondorArcherHorde" };
 	const char *mordor[] = { "MordorFighterHorde", "MordorFighterHorde", "MordorFighterHorde", "MordorArcherHorde" };
 	std::vector<Object *> west, east; // by row-major slot: west[k] faces east[k]
+	std::unordered_set<ObjectID> armyRoots;
+	auto isArmySoldier = [&](const Object &obj) {
+		if (obj.isEffectivelyDead() || obj.isKindOfName("HORDE")) return false;
+		if (!obj.isKindOfName("INFANTRY") && !obj.isKindOfName("CAVALRY") && !obj.isKindOfName("MONSTER")) return false;
+		const Object *parent = obj.getContainedBy();
+		return parent && armyRoots.count(parent->getID()) != 0;
+	};
+	auto armySoldiers = [&]() {
+		int count = 0;
+		for (Object *obj = logic.getFirstObject(); obj; obj = obj->getNextObject()) count += isArmySoldier(*obj) ? 1 : 0;
+		return count;
+	};
 	const double spawnStart = wallMs();
 	int troops = 0;
 	for (int column = 0; troops < units; ++column)
@@ -172,23 +229,43 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 			const int k = column * rows + r;
 			// each column's rows belong to the four players of the team in turn
 			Player *pw = players[(size_t)(r % 4)], *pe = players[(size_t)(4 + r % 4)];
-			Object *a = game.createObject(gondor[(r + column) % 4], pw->getPlayerIndex(), Coord3D{ cx - dx, y, 0.0f }, 0.0f, &error);
+			Object *a = game.createObject(openField ? gondor[0] : gondor[(r + column) % 4], pw->getPlayerIndex(), Coord3D{ cx - dx, y, 0.0f }, 0.0f, &error);
 			REQUIRE_MESSAGE(a != nullptr, error);
-			Object *b = game.createObject(mordor[(r + column) % 4], pe->getPlayerIndex(), Coord3D{ cx + dx, y, 0.0f }, 3.14159265f, &error);
+			Object *b = game.createObject(openField ? gondor[0] : mordor[(r + column) % 4], pe->getPlayerIndex(), Coord3D{ cx + dx, y, 0.0f }, parallelMove ? 0.0f : 3.14159265f, &error);
 			REQUIRE_MESSAGE(b != nullptr, error);
 			west.push_back(a);
 			east.push_back(b);
+			armyRoots.insert(a->getID());
+			armyRoots.insert(b->getID());
 			(void)k;
 			if ((west.size() % 16) == 0)
 			{
-				troops = FrameCensus::count(logic).troops;
+				troops = moving ? armySoldiers() : FrameCensus::count(logic).troops;
 			}
 		}
-		troops = FrameCensus::count(logic).troops;
+		troops = moving ? armySoldiers() : FrameCensus::count(logic).troops;
 	}
 	out.units = countObjects(logic) - out.objectsBefore;
 	logic.runLogicFrame();
 	logic.runLogicFrame();
+	struct TrackedTroop { ObjectID id; Coord3D position; };
+	std::vector<TrackedTroop> tracked;
+	if (moving)
+	{
+		for (Object *obj = logic.getFirstObject(); obj; obj = obj->getNextObject())
+		{
+			if (isArmySoldier(*obj))
+				tracked.push_back({obj->getID(), *obj->getPosition()});
+		}
+		out.trackedTroops = (int)tracked.size();
+	}
+	const double commandStart = wallMs();
+	float moveDistance = 2000.0f;
+	if (parallelMove)
+	{
+		for (Object *obj : east) moveDistance = std::min(moveDistance, maxX - margin - obj->getPosition()->x);
+		REQUIRE(moveDistance > 100.0f);
+	}
 	for (size_t i = 0; i < west.size(); ++i)
 	{
 		if (west[i]->isDestroyed() || east[i]->isDestroyed())
@@ -197,15 +274,22 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 		}
 		if (AIUpdateInterface *ai = west[i]->getAIUpdateInterface())
 		{
-			ai->aiAttackObject(east[i], CMD_FROM_PLAYER);
+			if (parallelMove) { Coord3D goal = *west[i]->getPosition(); goal.x += moveDistance; ai->aiMoveToPosition(goal, CMD_FROM_PLAYER); }
+			else if (moving) ai->aiMoveToPosition(*east[i]->getPosition(), CMD_FROM_PLAYER);
+			else ai->aiAttackObject(east[i], CMD_FROM_PLAYER);
 		}
 		if (AIUpdateInterface *ai = east[i]->getAIUpdateInterface())
 		{
-			ai->aiAttackObject(west[i], CMD_FROM_PLAYER);
+			if (parallelMove) { Coord3D goal = *east[i]->getPosition(); goal.x += moveDistance; ai->aiMoveToPosition(goal, CMD_FROM_PLAYER); }
+			else if (moving) ai->aiMoveToPosition(*west[i]->getPosition(), CMD_FROM_PLAYER);
+			else ai->aiAttackObject(west[i], CMD_FROM_PLAYER);
 		}
 	}
+	out.commandMs = wallMs() - commandStart;
 	out.spawnMs = wallMs() - spawnStart;
 	out.troopsMade = FrameCensus::count(logic).troops;
+	if (moving) std::printf("path pool after orders: capacity %d free %d exhausted %d\n", logic.aiWorld()->pathfinder().pool().capacity(),
+		logic.aiWorld()->pathfinder().pool().freeCount(), logic.aiWorld()->pathfinder().pool().exhaustedOnce());
 	for (int f = 0; f < warmUp; ++f)
 	{
 		logic.runLogicFrame();
@@ -215,6 +299,8 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 		}
 	}
 	out.objectsStart = countObjects(logic);
+	if (moving) std::printf("path pool after warmup: capacity %d free %d exhausted %d\n", logic.aiWorld()->pathfinder().pool().capacity(),
+		logic.aiWorld()->pathfinder().pool().freeCount(), logic.aiWorld()->pathfinder().pool().exhaustedOnce());
 	{
 		const FrameCensus::Counts c = FrameCensus::count(logic);
 		out.troopsStart = out.troopsMin = c.troops;
@@ -231,8 +317,12 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 		}
 	}
 	const double cpu0 = processCpuMs(), wall0 = wallMs();
+	// Warm-up motion must not be charged to the first measured tick.
+	for (auto &troop : tracked) if (Object *obj = logic.findObjectByID(troop.id)) troop.position = *obj->getPosition();
 	for (int f = 0; f < frames; ++f)
 	{
+		std::fill(timers.totals.begin(), timers.totals.end(), 0.0);
+		timers.enabled = true;
 		const double t0 = wallMs(), c0 = perfbench::nowMs();
 		PhaseTimes ph;
 		for (int phase = 1; phase <= 6; ++phase)
@@ -244,6 +334,8 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 		out.wallMs.push_back(wallMs() - t0);
 		out.cpuMs.push_back(perfbench::nowMs() - c0);
 		out.phases.push_back(ph);
+		timers.enabled = false;
+		out.workMs.push_back(timers.totals);
 		double tick = out.wallMs.back();
 		if (hashEveryFrame)
 		{
@@ -257,6 +349,31 @@ void runBattle(ArchiveFileSystem &fs, RetailObjectWorld &world, const MapObjectO
 			tick += out.hashMs.back();
 		}
 		out.tickMs.push_back(tick);
+		if (moving)
+		{
+			int moved = 0;
+			int debugCount = 0;
+			for (auto &troop : tracked)
+			{
+				Object *obj = logic.findObjectByID(troop.id);
+				if (obj && !obj->isEffectivelyDead())
+				{
+					const Coord3D p = *obj->getPosition();
+					const double dx = (double)p.x - troop.position.x, dy = (double)p.y - troop.position.y;
+					moved += dx * dx + dy * dy > 0.0001 ? 1 : 0;
+					if (std::getenv("OPENBFME_MOVE_DIAG") && f == 0 && dx * dx + dy * dy <= 0.0001 && debugCount++ < 20)
+					{
+						AIUpdateInterface *ai = obj->getAIUpdateInterface();
+						const Coord3D goal = ai ? ai->mover().goalPosition() : p;
+						std::printf("stationary: %u %s pos %.1f %.1f parent %u goal %d %.1f %.1f moving %d\n", (unsigned)troop.id,
+							obj->getTemplate()->getName().c_str(), p.x, p.y, obj->getContainedBy() ? (unsigned)obj->getContainedBy()->getID() : 0,
+							ai ? (int)ai->mover().goalType() : -1, goal.x, goal.y, ai && ai->isMoving());
+					}
+					troop.position = p;
+				}
+			}
+			out.movedTroops.push_back(moved);
+		}
 		const int alive = FrameCensus::count(logic).troops; // between frames, outside the timing
 		out.troopsMin = std::min(out.troopsMin, alive);
 		out.troopsEnd = alive;
@@ -278,7 +395,9 @@ TEST_CASE("uber bench: 10k / 20k / 40k unit battles on map mp fall back 8p, fait
 {
 	OPENBFME_REQUIRE_START(s);
 	const int frames = perfbench::envInt("OPENBFME_BENCH_FRAMES", 50);
-	const int warmUp = perfbench::envInt("OPENBFME_UBER_WARMUP", 50); // 10 game seconds: the armies meet, the measured frames are the battle
+	// envInt clamps to >= 1; movement diagnostics must support a true zero warm-up.
+	const char *warmUpEnv = std::getenv("OPENBFME_UBER_WARMUP");
+	const int warmUp = warmUpEnv && std::string(warmUpEnv) == "0" ? 0 : perfbench::envInt("OPENBFME_UBER_WARMUP", 50);
 	const char *which = std::getenv("OPENBFME_UBER_PROFILE");
 	const std::string profiles = which && *which ? which : "both";
 	std::vector<SimulationProfile> run;
@@ -320,6 +439,8 @@ TEST_CASE("uber bench: 10k / 20k / 40k unit battles on map mp fall back 8p, fait
 				phase[2], phase[3], phase[4], phase[5], phase[6], h.mean, h.max, (unsigned long long)r.hashDispatches, (unsigned long long)r.hashWorkerChunks,
 				r.processCpuMs >= 0.0 && r.framesWallMs > 0.0 ? r.processCpuMs / r.framesWallMs : -1.0, over, r.tickMs.size(),
 				(unsigned)perfbench::chain(r.hashes));
+			std::printf("  workload: %s; commands %.3f ms; tracked troops %d\n", r.scenario.c_str(), r.commandMs, r.trackedTroops);
+			if (r.scenario == "move") std::printf("  motion population: fixed spawned troops; missing or dead count as stationary\n");
 			// OPENBFME_UBER_FRAMES_DUMP=1: every measured frame's logic wall time, its six phases and the state hash (the spikes behind the p99)
 			if (std::getenv("OPENBFME_UBER_FRAMES_DUMP"))
 			{
@@ -328,6 +449,9 @@ TEST_CASE("uber bench: 10k / 20k / 40k unit battles on map mp fall back 8p, fait
 					const uberbench::PhaseTimes &p = f < r.phases.size() ? r.phases[f] : uberbench::PhaseTimes();
 					std::printf("    frame %zu: logic %.1f ms (phases %.1f / %.1f / %.1f / %.1f / %.1f / %.1f) hash %.1f ms\n", f, r.wallMs[f], p.ms[1], p.ms[2],
 						p.ms[3], p.ms[4], p.ms[5], p.ms[6], f < r.hashMs.size() ? r.hashMs[f] : 0.0);
+					for (size_t i = 0; i < r.workNames.size(); ++i)
+						std::printf("    work %zu %s %.4f ms\n", f, r.workNames[i].c_str(), r.workMs[f][i]);
+					if (f < r.movedTroops.size()) std::printf("    motion %zu: %d of %d troops changed XY\n", f, r.movedTroops[f], r.trackedTroops);
 				}
 			}
 			std::fflush(stdout);

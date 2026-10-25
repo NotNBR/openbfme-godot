@@ -604,6 +604,8 @@ public:
 	// MONSTER: horde members one by one; living hordes; every object) and the playable extent { extent_x, extent_y } (TerrainLogic::getExtent(0)); {} without
 	// a game. Diagnostics only: reads the logic between frames
 	Dictionary get_census() const;
+	// Fixed army motion from completed snapshots; no live-state reads per sample.
+	Dictionary profile_army_motion(const Array &hordes);
 	String simulation_profile() const;
 	// lane UBERJOIN-1 (GameClient/GUI/ProfileSwitch.h): the lobby screens switch the profile for ONE game (a game list's Yes / No box: "Switch to Uber mode
 	// and join?"). The player's own setting (set_simulation_profile, the option) is kept in m_choice.own and never written; restore_simulation_profile
@@ -780,6 +782,8 @@ private:
 	std::vector<std::string> m_endGameErrors;
 	ScoreScreenData m_scoreScreen;
 	bool m_testHooks = false; ///< start option test_hooks: the debug_* end-game hooks may act on a started (non-network) game
+	std::vector<std::pair<::ObjectID, Coord3D>> m_profileArmyPositions;
+	UnsignedInt m_profileArmyFrame = 0;
 	void startEndGame();
 	void updateEndGame();
 	std::unique_ptr<MapObjectRuntime> m_clientRuntime;

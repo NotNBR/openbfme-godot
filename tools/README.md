@@ -1,5 +1,9 @@
 # Python tool tests
 
+For native simulation phases, state hashing, real-client render/HUD/animation
+costs and Faithful/Uber comparisons, see
+[simulation profiling](sim/profile_simulation.md).
+
 Use Python 3.13 (the release scanner requires Python 3.11 or newer):
 
 ```sh

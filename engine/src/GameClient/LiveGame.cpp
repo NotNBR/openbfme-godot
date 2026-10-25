@@ -150,7 +150,8 @@ bool LiveGame::load(const Options &options, std::string *error)
 	}
 	// the shared pipeline (GameClient/MapClassification, the static map path's too): map -> terrain -> map.ini -> classification -> client-only split
 	MapClassification::Result cr;
-	const bool classified = MapClassification::run(bytes, lowerName, lowerName, m_world, m_mapOptions, m_map, m_terrain, m_classified, &m_clientOnly, cr, error);
+	const bool classified = MapClassification::run(bytes, lowerName, lowerName, m_world, m_mapOptions, m_map, m_terrain, m_classified, &m_clientOnly, cr, error,
+		"maps", options.profilingMovementField);
 	if (!classified)
 	{
 		return false;
@@ -611,6 +612,19 @@ bool LiveGame::load(const Options &options, std::string *error)
 		HeroSystem::initPlayer(*m_logic, *m_players->getNthPlayer(i)); // HERO-1: the hero list (RW 0x6B16EC, from the same game start RW 0x6B183D)
 		m_players->getNthPlayer(i)->getScoreKeeper().setCounting(true); // lane END-1: RW 0x6B197E, the last step of the game start: the score counts from here on
 	}
+	if (options.profilingMovementField)
+	{
+		m_logic->skirmishAI().reset(); // controlled unit workload: no strategic AI issuing competing orders
+		// Keep ordinary starting bases (and victory checks) but reserve the marching
+		// area for the test army. This is fixture placement, before its first tick.
+		int index = 0;
+		for (Object *obj = m_logic->getFirstObject(); obj; obj = obj->getNextObject(), ++index)
+		{
+			Coord3D p{ 150.0f + 20.0f * (float)(index % 8), 150.0f + 20.0f * (float)(index / 8), 10.0f };
+			obj->setPosition(&p);
+		}
+		m_ai->newMap(*m_pathTerrain);
+	}
 	m_logic->runLogicFrame(); // frame 1: every object records its transform (phase 2) so the first render has something to interpolate from
 	if (options.hashEveryFrame)
 	{
@@ -705,7 +719,7 @@ private:
 
 bool LiveGame::mapScriptsWanted(const Options &options)
 {
-	return options.mapScripts == 1 || (options.mapScripts < 0 && (options.start || options.campaign));
+	return !options.profilingMovementField && (options.mapScripts == 1 || (options.mapScripts < 0 && (options.start || options.campaign)));
 }
 
 bool LiveGame::buildMapScriptSetup(const SidesList &sidesUsed, const std::set<std::string> &slotSides, std::string *error)
