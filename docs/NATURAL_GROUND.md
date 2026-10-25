@@ -78,14 +78,19 @@ visual enhancement, not a retail `.big` mod or simulation fix.
 Inspired by the camera-local approach shown in the Dinolords grass renderer:
 https://80.lv/articles/kacper-szwajka-s-custom-grass-renderer-for-unity-based-dinosaur-rts
 
-The field uses individual five-vertex, three-triangle opaque blades. A fixed
-two-ring pool follows the camera ground focus: 256 near patches of 32 units
-and 256 outer patches of 128 units, each with 4096 candidate slots. Allocation
-is fixed at 2,097,152 slots (about 96 MiB of instance transforms), independent
-of map area. The outer field uses a sparser population. Per-blade fades blend
-between rings at 140-220 units and fade the distant field at 640-880 units;
-zoom fades only at 1400-3000 units. The pool edges lie outside the visible
-fade boundary. Placement updates every frame to avoid stepping during pans.
+The field uses individual five-vertex, three-triangle blades. Reusable
+32-unit near tiles and 128-unit distant tiles cover the visible camera frustum,
+including shallow views. There is no circle or rectangle around the camera's
+ground focus that cuts the field off. Tiles share two 4096-slot instance buffers
+(about 384 KiB of transforms); the node pool grows to the largest visible view
+seen and is reused. Terrain and frustum bounds limit tile selection.
+
+Projected blade size controls population and a smooth near/far blend in
+perspective and orthographic cameras. Slightly wider medium-distance blades
+retain coverage. Below roughly 1.5 pixels, blades blend into terrain canopy
+shading using the same world-anchored density and palette. The terrain canopy
+has no camera-distance cutoff. The 0.325-pixel cutoff doubles the previous
+blade distance for a given camera projection. Tile selection updates when the camera moves.
 World-position hashing anchors blades when patches recycle. Wind runs on the
 GPU. Grass colour primarily follows the sampled terrain; broad density,
 height and dry patches break up the lawn appearance.
@@ -93,10 +98,16 @@ height and dry patches break up the lawn appearance.
 Map-load guide textures store height, triangle orientation, terrain colour and
 meadow eligibility. Placement follows the original terrain triangulation and
 material blends. Roads, rivers, standing water and steep ground are excluded.
-The canopy inherits part of the terrain palette with muted meadow green,
+Grass retains 65% of the sampled terrain colour with a 35% muted meadow tint.
+The canopy shares that palette, with
 darker roots and varied tips. Fog and shroud apply to the grass. Original
 map bushes and other objects remain untouched. MSAA 4x in graphics options
 helps fine blade edges; this feature does not override the user's AA choice.
+Grass uses alpha-to-coverage instead of screen-space noise, a minimum projected
+width (limited to 3x widening), and less wind on unresolved blades to reduce
+shimmer. The studio selects MSAA 8x while Grass is enabled and restores its
+previous setting afterward. Real-map grass outputs gamma-space colour for the
+map compositor; the standalone lab retains linear output.
 
 This version does not yet include unit trails, dynamic building footprints,
 interaction bending, or grass shadows. It uses a Godot MultiMesh/vertex-shader
@@ -105,7 +116,8 @@ The earlier experimental `grass_clumps.png` is retained but unused.
 
 Verify with `--path godot --script res://tests/ground_cover_test.gd` and optional
 `-- --ground-captures=ABSOLUTE_DIRECTORY`. It checks real-map rendering, F7,
-shroud, camera recycling, bounded allocation and far-distance culling, and
+shroud, camera recycling, continuous zoom/pan, orthographic LOD, bounded
+allocation, far canopy coverage and blade culling, and
 reports an off/on viewport GPU comparison. This is not a whole-match benchmark.
 
 
