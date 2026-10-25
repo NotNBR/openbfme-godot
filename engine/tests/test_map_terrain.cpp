@@ -74,6 +74,112 @@ TXTextureClass cls(const char *name, int first, int numTiles, int width)
 // TGA and terrain types
 // ------------------------------------------------------------------------------------------------
 
+TEST_CASE("Terrain art packs: HD pixels fill the entire class, wrap gutters, and keep map UVs unchanged")
+{
+    WorldHeightMap m = makeMap(2, 2);
+    m.m_textureClasses = {cls("A", 0, 4, 2)};
+    m.m_textureClasses[0].positionInTexture = {4, 4};
+    m.m_terrainTexHeight = 256;
+    TerrainTypeIndex types;
+    types.textureByName["a"] = "Grass.tga";
+    TerrainAtlasImages images;
+    images.width = images.height = 256;
+    images.base.assign(256 * 256 * 4, 7);
+    images.normal.assign(256 * 256 * 4, 128);
+    const Bytes normal = images.normal;
+    std::vector<std::string> replaced;
+    std::string error;
+    auto read = [](const std::string &name, TGAImage &out, std::string *) {
+        if (name != "Grass.tga") return false;
+        out.width = out.height = 256;
+        out.rgba.resize(256 * 256 * 4);
+        for (int y = 0; y < 256; ++y)
+            for (int x = 0; x < 256; ++x)
+            {
+                size_t p = ((size_t)y * 256 + x) * 4;
+                out.rgba[p] = x >= 128 ? 255 : 0;
+                out.rgba[p + 1] = y >= 128 ? 255 : 0;
+                out.rgba[p + 2] = x % 2 ? 255 : 0;
+                out.rgba[p + 3] = 255;
+            }
+        return true;
+    };
+    REQUIRE(TerrainAtlas::applyTexturePack(m, types, read, images, replaced, &error));
+    CHECK(images.width == 256);
+    CHECK(images.height == 256);
+    CHECK(images.baseScale == 2);
+    CHECK(images.normalScale == 1);
+    CHECK(images.normal == normal);
+    CHECK(m.m_terrainTexHeight == 256);
+    CHECK(m.m_textureClasses[0].positionInTexture.x == 4);
+    CHECK(m.m_textureClasses[0].positionInTexture.y == 4);
+    CHECK(replaced == std::vector<std::string>{"Grass.tga"});
+    auto pixel = [&](int x, int y, int c) { return images.base[((size_t)y * 512 + x) * 4 + c]; };
+    CHECK(pixel(8, 8, 0) == 0);
+    CHECK(pixel(8 + 255, 8, 0) == 255); // the right half was not cropped away
+    CHECK(pixel(8, 8, 1) == 255);       // retail's storage-row inversion
+    CHECK(pixel(8, 8 + 255, 1) == 0);
+    CHECK(pixel(8, 8, 2) == 0);
+    CHECK(pixel(9, 8, 2) == 255);       // HD texels remain distinct
+    CHECK(pixel(7, 8, 0) == pixel(8 + 255, 8, 0));
+    CHECK(pixel(8 + 256, 8, 0) == pixel(8, 8, 0));
+}
+
+TEST_CASE("Terrain art packs: missing replacements preserve retail bytes; malformed dimensions fail before publishing")
+{
+    WorldHeightMap m = makeMap(2, 2);
+    m.m_textureClasses = {cls("A", 0, 4, 2)};
+    m.m_textureClasses[0].positionInTexture = {4, 4};
+    TerrainTypeIndex types;
+    types.textureByName["a"] = "Grass.tga";
+    TerrainAtlasImages images;
+    images.width = images.height = 256;
+    images.base.assign(256 * 256 * 4, 7);
+    images.normal.assign(256 * 256 * 4, 128);
+    const Bytes base = images.base;
+    std::vector<std::string> replaced;
+    std::string error;
+    auto missing = [](const std::string &, TGAImage &, std::string *) { return false; };
+    REQUIRE(TerrainAtlas::applyTexturePack(m, types, missing, images, replaced, &error));
+    CHECK(images.base == base);
+    CHECK(replaced.empty());
+    auto malformed = [](const std::string &, TGAImage &out, std::string *) {
+        out.width = out.height = 320;
+        out.rgba.resize(320 * 320 * 4);
+        return true;
+    };
+    CHECK_FALSE(TerrainAtlas::applyTexturePack(m, types, malformed, images, replaced, &error));
+    CHECK(images.base == base);
+    CHECK(error.find("full source at 1x, 2x or 4x") != std::string::npos);
+}
+
+TEST_CASE("Terrain art packs: a partial tile class keeps its source crop instead of squeezing the whole file into it")
+{
+    WorldHeightMap m = makeMap(2, 2);
+    m.m_textureClasses = {cls("A", 0, 4, 2)};
+    m.m_textureClasses[0].positionInTexture = {4, 4};
+    TerrainTypeIndex types;
+    types.textureByName["a"] = "Grass.tga";
+    TerrainAtlasImages images;
+    images.width = images.height = 256;
+    images.base.assign(256 * 256 * 4, 7);
+    images.normal.assign(256 * 256 * 4, 128);
+    images.sourceDimensions["Grass.tga"] = {256, 256}; // the map uses only the first 128x128
+    std::vector<std::string> replaced;
+    std::string error;
+    auto read = [](const std::string &name, TGAImage &out, std::string *) {
+        if (name != "Grass.tga") return false;
+        out.width = out.height = 512;
+        out.rgba.assign(512 * 512 * 4, 0);
+        for (int y = 0; y < 512; ++y)
+            for (int x = 256; x < 512; ++x) out.rgba[((size_t)y * 512 + x) * 4] = 255;
+        return true;
+    };
+    REQUIRE(TerrainAtlas::applyTexturePack(m, types, read, images, replaced, &error));
+    CHECK(images.baseScale == 2);
+    CHECK(images.base[((size_t)8 * 512 + 8 + 255) * 4] == 0); // right half of full image remains outside the crop
+}
+
 TEST_CASE("TGA: 24-bit BGR becomes RGBA in storage row order; the top-down flag is reported but rows are NOT flipped")
 {
 	// 2x2, rows in storage order: (B,G,R) = row0: red-ish then green-ish; row1: blue-ish then white
