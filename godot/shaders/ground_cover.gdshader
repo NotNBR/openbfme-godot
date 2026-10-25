@@ -91,70 +91,76 @@ void vertex() {
   population*=mix(0.35,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
  }
  float visibility=smoothstep(rank,rank+0.045,population)*alive*fade;
- float tip=UV.y;
- litter_uv=vec2(0.0,tip);
- leaf_detail=leaf*litter;
- // Height has its own distribution, independent of curl and blade colour.
- // Local growth patches favour taller tufts, while each stem keeps its own height.
- float species=hash21(seed+vec2(72.1,16.8));
- float stature=hash21(seed+vec2(213.7,54.2));
- float tuft=smoothstep(0.38,0.70,noise(ground_xy*0.12+vec2(83.1,17.6)));
- float tall=step(mix(0.98,0.72,tuft),stature);
- float low=1.0-step(0.36,stature);
- float curled=step(0.62,species)*(1.0-step(0.86,species))*(1.0-tall);
- float droop=step(0.86,species)*(1.0-tall);
- float verge=grass_verge(ground_xy,guide.a);
- float height=mix(0.95,2.10,r2);
- height=mix(height,mix(0.30,0.85,r2),low);
- height=mix(height,mix(2.60,4.60,r2),tall);
- float growth=mix(0.72,1.18,noise(ground_xy*0.045+vec2(32.8,91.4)));
- float root_variation=mix(0.88,1.12,hash21(group_seed+61.3));
- height*=growth*root_variation*mix(0.28,1.0,verge)*blade_height_scale;
- float width=mix(0.10,0.23,hash21(seed+8.6))*(1.0+curled*0.35);
- if(field_fade_enabled) width*=mix(1.65,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
- float angle=hash21(seed+3.4)*6.283185;
- vec2 across=vec2(cos(angle),sin(angle)), bend=vec2(-across.y,across.x);
- if(field_fade_enabled) {
-  float projected_width=length((VIEW_MATRIX*vec4(across.x,0.0,across.y,0.0)).xy)*width*grass_pixels(depth)/1.8;
-  // Avoid needle-thin rasterization at medium range; retain the actual blade height.
-  width*=clamp(0.70/max(projected_width,0.001),1.0,3.0);
+ // Most candidates are absent or faded: collapse them to a point, which rasterizes nothing, without the blade work.
+ if(visibility<0.001) {
+  VERTEX=vec3(local.x,ground_height,local.y);
+  plant_alive=0.0;
+ } else {
+  float tip=UV.y;
+  litter_uv=vec2(0.0,tip);
+  leaf_detail=leaf*litter;
+  // Height has its own distribution, independent of curl and blade colour.
+  // Local growth patches favour taller tufts, while each stem keeps its own height.
+  float species=hash21(seed+vec2(72.1,16.8));
+  float stature=hash21(seed+vec2(213.7,54.2));
+  float tuft=smoothstep(0.38,0.70,noise(ground_xy*0.12+vec2(83.1,17.6)));
+  float tall=step(mix(0.98,0.72,tuft),stature);
+  float low=1.0-step(0.36,stature);
+  float curled=step(0.62,species)*(1.0-step(0.86,species))*(1.0-tall);
+  float droop=step(0.86,species)*(1.0-tall);
+  float verge=grass_verge(ground_xy,guide.a);
+  float height=mix(0.95,2.10,r2);
+  height=mix(height,mix(0.30,0.85,r2),low);
+  height=mix(height,mix(2.60,4.60,r2),tall);
+  float growth=mix(0.72,1.18,noise(ground_xy*0.045+vec2(32.8,91.4)));
+  float root_variation=mix(0.88,1.12,hash21(group_seed+61.3));
+  height*=growth*root_variation*mix(0.28,1.0,verge)*blade_height_scale;
+  float width=mix(0.10,0.23,hash21(seed+8.6))*(1.0+curled*0.35);
+  if(field_fade_enabled) width*=mix(1.65,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
+  float angle=hash21(seed+3.4)*6.283185;
+  vec2 across=vec2(cos(angle),sin(angle)), bend=vec2(-across.y,across.x);
+  if(field_fade_enabled) {
+   float projected_width=length((VIEW_MATRIX*vec4(across.x,0.0,across.y,0.0)).xy)*width*grass_pixels(depth)/1.8;
+   // Avoid needle-thin rasterization at medium range; retain the actual blade height.
+   width*=clamp(0.70/max(projected_width,0.001),1.0,3.0);
+  }
+  float lean=mix(0.10,0.48,hash21(seed+vec2(31.3,7.8)))+curled*0.75+droop*1.2+(1.0-verge)*1.4;
+  vec2 shape=across*VERTEX.x*width+bend*pow(tip,1.5+curled)*height*lean;
+  shape+=across*sin(tip*3.3)*height*0.10*(hash21(seed+6.1)-0.5)*curled;
+  float vertical=tip*height*(1.0-droop*0.72*tip);
+  float phase=dot(ground_xy,vec2(0.035,0.021))-TIME*1.35;
+  float gust=sin(phase)+sin(phase*0.47+meadow*3.0)*0.45;
+  float wind_lod=field_fade_enabled ? mix(0.15,1.0,smoothstep(1.5,6.0,grass_pixels(depth))) : 1.0;
+  shape+=vec2(1.0,0.45)*gust*wind_strength*height*tip*tip*wind_lod;
+  VERTEX=vec3(local.x,ground_height,local.y)+vec3(shape.x,vertical,shape.y)*alive;
+  if(litter>0.5) {
+   float length=mix(0.45,1.1,r2);
+   float breadth=mix(0.12,0.30,hash21(seed+33.1));
+   breadth=mix(breadth,0.06,dead);
+   float cross_section=tip<0.9 ? (VERTEX_ID==0 || VERTEX_ID==2 ? -1.0 : 1.0) : 0.0;
+   litter_uv.x=cross_section*(tip<0.1 ? 0.12 : 1.0);
+   vec2 offset=across*cross_section*breadth*(tip<0.1 ? mix(0.45,0.12,leaf) : 1.0)+bend*(tip-0.5)*length;
+   float arch=(1.0-abs(tip*2.0-1.0))*mix(0.05,0.32,stone);
+   vec2 surface_cell=(vec2(world.x+offset.x,-world.y-offset.y)-world_origin)/10.0;
+   VERTEX=vec3(local.x+offset.x,height_at(surface_cell)+0.035+arch,local.y+offset.y);
+  }
+  // Keep local brightness, but avoid printing orange soil texels onto green leaves.
+  vec3 base=grass_palette(regional,ground_xy);
+  if(litter>0.5) {
+   float luma=dot(regional,vec3(0.299,0.587,0.114));
+   vec3 litter_color=mix(vec3(1.04,0.80,0.48),vec3(0.84,0.84,0.78),stone)*luma;
+   base=mix(regional,litter_color,0.65)*mix(0.68,0.96,hash21(seed+2.3));
+  }
+  vec3 sun=overbright ? sun_color*0.5 : sun_color;
+  vec3 blade_normal=normalize(vec3(bend.x*0.55,bend.y*0.55,0.85));
+  float diffuse=0.70*max(normalize(sun_dir_sage).z,0.15)+0.30*abs(dot(normalize(sun_dir_sage),blade_normal));
+  vec3 lighting=(ambient_color+sun*diffuse)*(overbright ? 2.0 : 1.0);
+  float root_shade=mix(mix(0.57,0.75,1.0-density),1.0,smoothstep(0.0,0.70,tip));
+  leaf_color=base*lighting*mix(root_shade,0.88,litter)*mix(0.96,1.02,hash21(seed+25.3));
+  float dist=length(CAMERA_POSITION_WORLD-(MODEL_MATRIX*vec4(VERTEX,1)).xyz)-w3d_fog_shift;
+  plant_fog=1.0-fog_enabled*clamp((dist-fog_range_start)/max(fog_range_end-fog_range_start,0.001),0.0,1.0);
+  plant_alive=visibility;
  }
- float lean=mix(0.10,0.48,hash21(seed+vec2(31.3,7.8)))+curled*0.75+droop*1.2+(1.0-verge)*1.4;
- vec2 shape=across*VERTEX.x*width+bend*pow(tip,1.5+curled)*height*lean;
- shape+=across*sin(tip*3.3)*height*0.10*(hash21(seed+6.1)-0.5)*curled;
- float vertical=tip*height*(1.0-droop*0.72*tip);
- float phase=dot(ground_xy,vec2(0.035,0.021))-TIME*1.35;
- float gust=sin(phase)+sin(phase*0.47+meadow*3.0)*0.45;
- float wind_lod=field_fade_enabled ? mix(0.15,1.0,smoothstep(1.5,6.0,grass_pixels(depth))) : 1.0;
- shape+=vec2(1.0,0.45)*gust*wind_strength*height*tip*tip*wind_lod;
- VERTEX=vec3(local.x,ground_height,local.y)+vec3(shape.x,vertical,shape.y)*alive;
- if(litter>0.5) {
-  float length=mix(0.45,1.1,r2);
-  float breadth=mix(0.12,0.30,hash21(seed+33.1));
-  breadth=mix(breadth,0.06,dead);
-  float cross_section=tip<0.9 ? (VERTEX_ID==0 || VERTEX_ID==2 ? -1.0 : 1.0) : 0.0;
-  litter_uv.x=cross_section*(tip<0.1 ? 0.12 : 1.0);
-  vec2 offset=across*cross_section*breadth*(tip<0.1 ? mix(0.45,0.12,leaf) : 1.0)+bend*(tip-0.5)*length;
-  float arch=(1.0-abs(tip*2.0-1.0))*mix(0.05,0.32,stone);
-  vec2 surface_cell=(vec2(world.x+offset.x,-world.y-offset.y)-world_origin)/10.0;
-  VERTEX=vec3(local.x+offset.x,height_at(surface_cell)+0.035+arch,local.y+offset.y);
- }
- // Keep local brightness, but avoid printing orange soil texels onto green leaves.
- vec3 base=grass_palette(regional,ground_xy);
- if(litter>0.5) {
-  float luma=dot(regional,vec3(0.299,0.587,0.114));
-  vec3 litter_color=mix(vec3(1.04,0.80,0.48),vec3(0.84,0.84,0.78),stone)*luma;
-  base=mix(regional,litter_color,0.65)*mix(0.68,0.96,hash21(seed+2.3));
- }
- vec3 sun=overbright ? sun_color*0.5 : sun_color;
- vec3 blade_normal=normalize(vec3(bend.x*0.55,bend.y*0.55,0.85));
- float diffuse=0.70*max(normalize(sun_dir_sage).z,0.15)+0.30*abs(dot(normalize(sun_dir_sage),blade_normal));
- vec3 lighting=(ambient_color+sun*diffuse)*(overbright ? 2.0 : 1.0);
- float root_shade=mix(mix(0.57,0.75,1.0-density),1.0,smoothstep(0.0,0.70,tip));
- leaf_color=base*lighting*mix(root_shade,0.88,litter)*mix(0.96,1.02,hash21(seed+25.3));
- float dist=length(CAMERA_POSITION_WORLD-(MODEL_MATRIX*vec4(VERTEX,1)).xyz)-w3d_fog_shift;
- plant_fog=1.0-fog_enabled*clamp((dist-fog_range_start)/max(fog_range_end-fog_range_start,0.001),0.0,1.0);
- plant_alive=visibility;
 }
 void fragment() {
  // Continuous alpha replaces screen-space noise, which sparkled during pans.

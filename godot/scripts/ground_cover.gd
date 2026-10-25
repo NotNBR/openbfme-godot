@@ -14,6 +14,12 @@ var _near_batch: MultiMesh
 var _far_batch: MultiMesh
 var _last_view: Array = []
 var _material: ShaderMaterial
+var _occupancy := {}
+var _occupancy_key: Array = []
+var _guide := PackedByteArray()
+var _guide_size := Vector2i.ZERO
+var _habitat := PackedByteArray()
+var _habitat_size := Vector2i.ZERO
 func _ready() -> void:
  for child in get_children():
   if child is MultiMeshInstance3D: _patches.append(child)
@@ -48,6 +54,7 @@ func _process(_delta: float) -> void:
   mat.set_shader_parameter("grass_orthographic", ortho)
  if terrain_material != null:
   terrain_material.set_shader_parameter("grass_wind_strength", _material.get_shader_parameter("wind_strength"))
+ if _refresh_occupancy(): _last_view = []
  var view := [camera.global_transform,camera.get_camera_projection(),screen]
  if view == _last_view: return
  _last_view = view
@@ -87,6 +94,7 @@ func _process(_delta: float) -> void:
       outside = true
       break
     if outside: continue
+    if not _has_grass(span, x, y): continue
     if used == _patches.size():
      var extra := MultiMeshInstance3D.new()
      extra.material_override = _material
@@ -102,3 +110,56 @@ func _process(_delta: float) -> void:
     if not patch.visible: patch.visible = true
     used += 1
  for i in range(used,_patches.size()): _patches[i].visible = false
+
+# Patches where the terrain guide grows no grass and no litter draw only dead blades; skip them. Each patch is
+# examined once, on first view, against the guide texels its blades can sample (grass_density's step(0.012, mask),
+# the litter test guide.a + habitat.r >= 0.025, with bilinear filtering and the roots' reach past the patch edge).
+func _refresh_occupancy() -> bool:
+ var guide = _material.get_shader_parameter("terrain_guide")
+ var litter_param = _material.get_shader_parameter("ground_litter_enabled")      # unset: the shader's default, on
+ var litter: bool = (litter_param == null or bool(litter_param)) and _material.get_shader_parameter("habitat_enabled") == true
+ var habitat = _material.get_shader_parameter("habitat_guide") if litter else null
+ var key := [guide, habitat, _material.get_shader_parameter("world_origin"), _material.get_shader_parameter("grid_size")]
+ if key == _occupancy_key: return false
+ _occupancy_key = key
+ _occupancy.clear()
+ _guide = _texels(guide) if key[2] is Vector2 and key[3] is Vector2 else PackedByteArray()    # undecided: draw every patch
+ _guide_size = Vector2i(guide.get_width(), guide.get_height()) if guide != null else Vector2i.ZERO
+ _habitat = _texels(habitat)
+ _habitat_size = Vector2i(habitat.get_width(), habitat.get_height()) if habitat != null else Vector2i.ZERO
+ return true
+func _texels(texture: Texture2D) -> PackedByteArray:
+ if texture == null: return PackedByteArray()
+ var image := texture.get_image()
+ if image.is_compressed(): image.decompress()
+ image.clear_mipmaps()
+ if image.get_format() != Image.FORMAT_RGBA8: image.convert(Image.FORMAT_RGBA8)
+ return image.get_data()
+# The largest byte of `channel` among the texels bilinear sampling can read for ground points in [low, high].
+func _peak(data: PackedByteArray, size: Vector2i, channel: int, low: Vector2, high: Vector2) -> int:
+ var origin: Vector2 = _occupancy_key[2]
+ var grid: Vector2 = _occupancy_key[3]
+ var scale := Vector2(size)/(grid*10.0)
+ var a := Vector2i(((low-origin)*scale-Vector2(0.5,0.5)).floor()).clamp(Vector2i.ZERO,size-Vector2i.ONE)
+ var b := (Vector2i(((high-origin)*scale-Vector2(0.5,0.5)).floor())+Vector2i.ONE).clamp(Vector2i.ZERO,size-Vector2i.ONE)
+ var peak := 0
+ for row in range(a.y,b.y+1):
+  var i := (row*size.x+a.x)*4+channel
+  for column in range(a.x,b.x+1):
+   peak = maxi(peak,data[i])
+   i += 4
+ return peak
+func _has_grass(span: float, x: int, y: int) -> bool:
+ if _guide.is_empty(): return true
+ var key := Vector3i(x,y,int(span))
+ if _occupancy.has(key): return _occupancy[key]
+ # Roots reach span/75 outside their patch (cluster centre plus radius); godot z is -ground y.
+ var margin := span/64.0
+ var low := Vector2(x*span-margin,-(y*span+span+margin))
+ var high := Vector2(x*span+span+margin,-(y*span-margin))
+ var alpha := _peak(_guide,_guide_size,3,low,high)
+ var grows := alpha >= 4                                   # 3/255 < 0.012
+ if not grows and span < 64.0 and not _habitat.is_empty():
+  grows = alpha+_peak(_habitat,_habitat_size,0,low,high) >= 7    # 6/255 < 0.025
+ _occupancy[key] = grows
+ return grows
