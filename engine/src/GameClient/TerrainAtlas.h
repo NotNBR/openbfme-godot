@@ -24,9 +24,12 @@
 
 #include "Common/ArchiveFileSystem.h"
 #include "GameClient/TerrainTypes.h"
+#include "GameClient/TGAFile.h"
 #include "GameEngineDevice/W3DDevice/GameClient/WorldHeightMap.h"
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -64,6 +67,9 @@ struct TerrainAtlasImages
 {
 	int width = TERRAIN_TEXTURE_WIDTH;
 	int height = 0;
+	int baseScale = 1;   // physical texels per logical atlas texel; UVs and map data stay retail
+	int normalScale = 1;
+	std::map<std::string, std::pair<int, int>> sourceDimensions; // full retail files, including classes using only part of one
 	std::vector<std::uint8_t> base;   // RGBA8, width*height*4
 	std::vector<std::uint8_t> normal; // RGBA8, same layout
 };
@@ -81,4 +87,10 @@ int packTiles(WorldHeightMap &map, const std::vector<bool> &tilePresent);
 
 // ZH countTiles for an image of this size: the largest w (<= 16) with w*64 <= width and height, as w*w; else 0.
 int countTiles(int imageWidth, int imageHeight);
+
+// Render-only replacement images in TGA storage row order. Missing names return false with an empty error.
+// Keep the logical atlas, UVs and map untouched; grow only physical textures, at most 4x and 8192px per axis.
+bool applyTexturePack(const WorldHeightMap &map, const TerrainTypeIndex &types,
+    const std::function<bool(const std::string &, TGAImage &, std::string *)> &read,
+    TerrainAtlasImages &images, std::vector<std::string> &replaced, std::string *error, float normalStrength = 1.0f);
 } // namespace TerrainAtlas
