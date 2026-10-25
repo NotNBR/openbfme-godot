@@ -10,8 +10,8 @@ feat/natural-grass      # fork only: camera-local grass and natural ground
 feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
 
 # Available, not in this combo:
-# fix/ai-neutral-building-capture   # PR #113
-# fix/pro-camera-bokeh-smoothing    # PR #115
+fix/ai-neutral-building-capture   # PR #113
+fix/pro-camera-bokeh-smoothing    # PR #115
 # fix/adjust-destination-spiral     # PR #74
 # fix/horde-slot-centring           # PR #73
 # feat/client-weather               # PR #59
