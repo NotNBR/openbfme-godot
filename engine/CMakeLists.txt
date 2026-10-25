@@ -585,6 +585,7 @@ add_library(openbfme SHARED
     src/GodotDevice/GodotW3DInstancer.cpp
     src/GodotDevice/GodotLogicClock.cpp
     src/GodotDevice/GodotMapTerrain.cpp
+    src/GodotDevice/GodotGroundCover.cpp
     src/GodotDevice/GodotMapObjectBuilder.cpp
     # APT-3: the retail menus on screen
     src/GodotDevice/GodotAptPlayer.cpp
