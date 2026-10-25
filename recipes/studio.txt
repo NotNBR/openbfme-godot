@@ -1,0 +1,21 @@
+# combo/studio: the engine bfme2-map-studio runs (its submodule native/openbfme-godot follows this branch).
+#
+# The base is the upstream commit studio/siege is adapted to. Moving it to upstream/main needs studio/siege
+# brought forward first (or dropped once upstream merges #64).
+base 8926679a
+
+studio/siege            # PR #64 adapted to the base (drop when upstream merges #64)
+studio/extra-archives   # OPENBFME_EXTRA_ARCHIVES: the studio's map archives over retail
+studio/no-shroud        # --no-shroud
+studio/peer-battle-log  # openbfme_peer: headless battle log, studio maps
+studio/object-path      # GameWorld.get_object_path
+studio/map-profile      # honor the selected simulation profile when loading maps
+feat/natural-grass      # camera-local grass and natural ground
+feat/hd-terrain-packs   # HD terrain textures from asset packs (stacked on feat/natural-grass)
+
+# Available, not in this combo:
+# fix/ai-neutral-building-capture   # PR #113 (based on a newer upstream)
+# fix/pro-camera-bokeh-smoothing    # PR #115 (based on a newer upstream)
+# fix/adjust-destination-spiral     # PR #74
+# fix/horde-slot-centring           # PR #73
+# feat/client-weather               # PR #59
