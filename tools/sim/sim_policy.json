@@ -583,6 +583,10 @@
    "reason": "lane MP-3: the measurements' per-frame census (living battalions, troops, objects) counted on the simulation owner between frames when a frame driver asks for it; reads the logic, writes nothing, never read back by the game"
   },
   {
+   "glob": "src/GameClient/BattleLog.cpp",
+   "reason": "lane WALL-1: openbfme_peer --battle-log's observation line (troops per player and the raised ones, hurt gates and walls, siege deploy phases, script counters) read on the simulation owner between frames; reads the logic, writes nothing, never read back by the game"
+  },
+  {
    "glob": "src/GameNetwork/NetImpairment.cpp",
    "reason": "lane MP-3 (NET-4): the network test harness's fault injector inside the transport (latency, jitter, loss, duplication, reordering, blackouts by wall clock and a seeded per-link RNG): it decides WHEN and WHETHER a datagram arrives, never what a logic frame contains"
   },
