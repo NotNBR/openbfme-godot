@@ -99,8 +99,21 @@ Map-load guide textures store height, triangle orientation, terrain colour and
 meadow eligibility. Placement follows the original terrain triangulation and
 material blends. Roads, rivers, standing water and steep ground are excluded.
 Grass retains 65% of the sampled terrain colour with a 35% muted meadow tint.
-The canopy shares that palette, with
-darker roots and varied tips. Fog and shroud apply to the grass. Original
+Most stems are short and upright; smaller populations curl, droop or form tall
+tufts. Warped clump density leaves real bare gaps on dry and earthy textures.
+Green and olive terrain keeps a continuous understory, with much rarer bare
+patches; this uses unlit texture colour and is shared by near blades and the
+distant canopy. At transition masks, grass
+becomes shorter and leans along the verge; road centres and water remain
+excluded. Roots and the soil beneath dense clumps receive subtle contact
+darkening, not dynamic shadows.
+
+A small fraction of near-field slots becomes fallen leaves, dead stems and
+low pebbles, conforming to terrain height. Leaves follow a 45-unit falloff
+around visible map objects whose template name contains `tree` (a visual
+heuristic, not botanical classification). The guide excludes roads, water and
+steep slopes. Litter shares the Grass switch and the existing instance buffers.
+The canopy shares the grass palette, with darker roots and varied tips. Fog and shroud apply to the grass. Original
 map bushes and other objects remain untouched. MSAA 4x in graphics options
 helps fine blade edges; this feature does not override the user's AA choice.
 Grass uses alpha-to-coverage instead of screen-space noise, a minimum projected

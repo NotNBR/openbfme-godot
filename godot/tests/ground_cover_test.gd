@@ -54,6 +54,43 @@ func pan_variation(camera: Camera3D, center: Vector3) -> float:
 		previous = current
 	return variation
 
+func check_green_coverage() -> void:
+	var probe := SubViewport.new()
+	probe.size = Vector2i(256,256)
+	probe.disable_3d = true
+	probe.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(probe)
+	var rect := ColorRect.new()
+	rect.size = Vector2(256,256)
+	var shader := Shader.new()
+	shader.code = """shader_type canvas_item;
+#include "res://shaders/grass_field.gdshaderinc"
+void fragment() {
+ vec2 p=UV*512.0;
+ COLOR=vec4(grass_density(p,1.0,vec3(0.25,0.32,0.13)),
+            grass_density(p,1.0,vec3(0.38,0.25,0.13)),
+            grass_density(p,0.0,vec3(0.25,0.32,0.13)),1.0);
+}"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	rect.material = mat
+	probe.add_child(rect)
+	await settle()
+	var pixels := probe.get_texture().get_image()
+	var green_bare := 0
+	var earth_bare := 0
+	var excluded := 0
+	for y in 256:
+		for x in 256:
+			var value := pixels.get_pixel(x,y)
+			if value.r < 0.10: green_bare += 1
+			if value.g < 0.10: earth_bare += 1
+			if value.b > 0.0: excluded += 1
+	print("GREEN COVERAGE bare samples green=",green_bare," earth=",earth_bare)
+	check(earth_bare>100 and green_bare<earth_bare*0.25,"green ground has much rarer bald patches than earth")
+	check(excluded==0,"green colour never overrides path/water exclusions")
+	probe.queue_free()
+
 func _run() -> void:
 	if DisplayServer.get_name() == "headless":
 		print("SKIP: GPU required")
@@ -229,6 +266,29 @@ func _run() -> void:
 	var coverage_variation := await pan_variation(camera,center)
 	print("GRASS PAN VARIATION screen_noise=",noisy_variation," sample_coverage=",coverage_variation)
 	check(coverage_variation < noisy_variation, "sample coverage reduces subpixel-pan pixel variation")
+	# Check the baked exclusion guide and render litter near a real tree location.
+	var habitat: Image = material.get_shader_parameter("habitat_guide").get_image()
+	check(report.ground_cover.litter_tree_sources > 0, "tree templates seed leaf-fall regions")
+	var best := Vector2i.ZERO
+	var best_cover := 0.0
+	for y in range(0,habitat.get_height(),2):
+		for x in range(0,habitat.get_width(),2):
+			var value := habitat.get_pixel(x,y)
+			if value.g > 0.8 and value.r > best_cover:
+				best = Vector2i(x,y)
+				best_cover = value.r
+	check(best_cover>0.2,"leaf-fall regions include safe ground")
+	var tree_ground := Vector3(cover.world_origin.x+(best.x+0.5)*5.0,cover.height_image.get_pixel(best.x/2,best.y/2).r,-cover.world_origin.y-(best.y+0.5)*5.0)
+	camera.position = tree_ground+Vector3(0,9,12)
+	camera.look_at(tree_ground)
+	await settle()
+	var litter_on := capture("grass-litter-on")
+	material.set_shader_parameter("ground_litter_enabled",false)
+	await settle()
+	var litter_off := capture("grass-litter-off")
+	check(litter_on.get_data()!=litter_off.get_data(),"ground litter changes real geometry near trees")
+	material.set_shader_parameter("ground_litter_enabled",true)
+	await check_green_coverage()
 	print("GROUND COVER TEST ", "PASS" if failures == 0 else "FAIL")
 	node.free()
 	viewport.queue_free()
