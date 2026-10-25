@@ -15,6 +15,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 
 namespace godot {
 namespace {
@@ -29,7 +30,7 @@ struct Exclusions {
 	int width, height, border;
 	std::vector<uint8_t> pixels;
 	Exclusions(const WorldHeightMap &m) : width(m.m_width * 2), height(m.m_height * 2), border(m.m_borderSize), pixels((size_t)width * height) {}
-	void triangle(Vector2 a, Vector2 b, Vector2 c) {
+	void triangle(Vector2 a, Vector2 b, Vector2 c, float padding = 3.6f) {
 		float loX = std::min({a.x, b.x, c.x}) - 3, hiX = std::max({a.x, b.x, c.x}) + 3;
 		float loY = std::min({a.y, b.y, c.y}) - 3, hiY = std::max({a.y, b.y, c.y}) + 3;
 		int x0 = std::max(0, (int)std::floor(loX / 5) + border * 2);
@@ -40,7 +41,7 @@ struct Exclusions {
 			Vector2 p((x - border * 2 + 0.5f) * 5, (y - border * 2 + 0.5f) * 5);
 			float e0 = cross2(b - a, p - a), e1 = cross2(c - b, p - b), e2 = cross2(a - c, p - c);
 			bool inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
-			if (inside || std::min({segmentDistance(p, a, b), segmentDistance(p, b, c), segmentDistance(p, c, a)}) < 3.6f)
+			if (inside || std::min({segmentDistance(p, a, b), segmentDistance(p, b, c), segmentDistance(p, c, a)}) < padding)
 				pixels[(size_t)y * width + x] = 1;
 		}
 	}
@@ -97,7 +98,7 @@ Node3D *buildGroundCover(const WorldHeightMap &map, const MapChunks &chunks,
 	Exclusions exclusions(map);
 	for (const RoadStrip &road : roads) for (size_t i = 0; i + 2 < road.index.size(); i += 3) {
 		Vector2 p[3]; for (int k = 0; k < 3; ++k) { size_t j = road.index[i + k] * 3; p[k] = Vector2(road.position[j], road.position[j + 1]); }
-		exclusions.triangle(p[0], p[1], p[2]);
+		exclusions.triangle(p[0], p[1], p[2], 0.4f);
 	}
 	for (const RiverArea &river : chunks.riverAreas) for (size_t i = 1; i < river.lines.size(); ++i) {
 		const auto &a = river.lines[i - 1]; const auto &b = river.lines[i];
@@ -110,6 +111,23 @@ Node3D *buildGroundCover(const WorldHeightMap &map, const MapChunks &chunks,
 	Ref<Image> heights = Image::create_empty(map.m_width, map.m_height, false, Image::FORMAT_RF);
 	Ref<Image> flips = Image::create_empty(map.m_width, map.m_height, false, Image::FORMAT_R8);
 	Ref<Image> guide = Image::create_empty(map.m_width * 2, map.m_height * 2, false, Image::FORMAT_RGBA8);
+	Ref<Image> habitat = Image::create_empty(map.m_width * 2, map.m_height * 2, false, Image::FORMAT_RGBA8);
+	habitat->fill(Color(0, 0, 0, 0));
+	// Artistic leaf-fall guide from tree template names, independent of simulation.
+	int treeSources = 0;
+	for (const MapObject &o : chunks.objects) {
+		std::string name = o.m_objectName;
+		std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+		if (o.getFlag(FLAG_DONT_RENDER | FLAG_ROAD_FLAGS) || name.find("tree") == std::string::npos) continue;
+		++treeSources;
+		float tx = o.m_location.x / 5 + map.m_borderSize*2, ty = o.m_location.y / 5 + map.m_borderSize*2;
+		for (int y = std::max(0,(int)ty-9); y <= std::min(map.m_height*2-1,(int)ty+9); ++y)
+		for (int x = std::max(0,(int)tx-9); x <= std::min(map.m_width*2-1,(int)tx+9); ++x) {
+			float d = Vector2(x+0.5f-tx,y+0.5f-ty).length()/9.0f;
+			float cover = std::max(0.0f,1.0f-d); cover *= cover;
+			habitat->set_pixel(x,y,Color(std::max(habitat->get_pixel(x,y).r,cover),0,0));
+		}
+	}
 	guide->fill(Color(0, 0, 0, 0)); flips->fill(Color(0, 0, 0));
 	float minHeight = 1e9f, maxHeight = -1e9f;
 	for (int y = 0; y < map.m_height; ++y) for (int x = 0; x < map.m_width; ++x) {
@@ -148,12 +166,18 @@ Node3D *buildGroundCover(const WorldHeightMap &map, const MapChunks &chunks,
 			float wx = (x - map.m_borderSize + fx) * MAP_XY_FACTOR;
 			float wy = (y - map.m_borderSize + fy) * MAP_XY_FACTOR;
 			Coord3D normal; float z = terrain.getGroundHeight(wx, wy, &normal), water;
-			if (exclusions.blocked(wx, wy) || (terrain.getStandingWaterHeight(wx, wy, water) && water >= z - 0.5f)) { weight = 0; ++rejectedRoadWater; }
-			if (normal.z < 0.90f || map.getCliffState(x, y)) { weight = 0; ++rejectedSlope; }
+			bool safe = !exclusions.blocked(wx, wy) && !(terrain.getStandingWaterHeight(wx, wy, water) && water >= z - 0.5f);
+			if (!safe) { weight = 0; ++rejectedRoadWater; }
+			if (normal.z < 0.90f || map.getCliffState(x, y)) { weight = 0; safe = false; ++rejectedSlope; }
+			Color habitatPixel = habitat->get_pixel(x*2+sx,y*2+sy);
+			habitatPixel.g = safe ? 1.0f : 0.0f; habitat->set_pixel(x*2+sx,y*2+sy,habitatPixel);
 			color.a = weight; guide->set_pixel(x * 2 + sx, y * 2 + sy, color);
 		}
 	}
 	guide->generate_mipmaps();
+	habitat->generate_mipmaps();
+	material->set_shader_parameter("habitat_guide", ImageTexture::create_from_image(habitat));
+	material->set_shader_parameter("habitat_enabled", true);
 	Ref<ImageTexture> guideTexture = ImageTexture::create_from_image(guide);
 	material->set_shader_parameter("terrain_guide", guideTexture);
 	// Grass fades in the transparent pass, like roads and rivers on the map GammaCompositeHost.
@@ -189,6 +213,7 @@ Node3D *buildGroundCover(const WorldHeightMap &map, const MapChunks &chunks,
 		node->set_material_override(material); node->set_cast_shadows_setting(GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
 		node->set_name(String("GrassPatch_") + String::num_int64(i)); root->add_child(node);
 	}
+	report["litter_tree_sources"] = treeSources;
 	report["enabled"] = enabled; report["instances"] = side*side*2*count; report["patches"] = side*side*2;
 	report["shared_instance_slots"] = count*2; report["screen_size_lod"] = true;
 	report["camera_local"] = true; report["triangles_per_blade"] = 3;
