@@ -905,7 +905,7 @@ Array W3DInstancer::get_instance_rig(int64_t instance) const
 	Array result;
 	if (instance < 0 || instance >= (int64_t)Instances.size() || Instances[(size_t)instance].Removed) return result;
 	const Instance &inst = Instances[(size_t)instance];
-	ensure_pose(inst);
+	ensure_pose(instance);
 	const HTreeClass &tree = *Models[(size_t)inst.Model]->Proto->Tree;
 	for (int i = 0; i < tree.Num_Pivots(); ++i)
 	{
