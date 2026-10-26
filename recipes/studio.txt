@@ -9,6 +9,8 @@ feat/object-path        # fork only: GameWorld.get_object_path
 fix/map-profile         # fork only: honor the selected simulation profile when loading maps
 feat/natural-grass      # fork only: camera-local grass and natural ground
 feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
+feat/object-shadows          # fork only: directional shadow maps for world objects (Studio: Experimental > Shadows)
+feat/custom-unit-animation   # fork only: custom unit rig API, batched poses (stacked on feat/object-shadows; Studio: Experimental)
 fix/ai-neutral-building-capture   # PR #113
 
 # Available, not in this combo:
