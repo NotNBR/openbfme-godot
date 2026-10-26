@@ -36,6 +36,7 @@ textures/vram_compression/import_etc2_astc=true
 [openbfme]
 
 rendering/soft_particles=true
+rendering/ground_cover=false
 
 [editor]
 
