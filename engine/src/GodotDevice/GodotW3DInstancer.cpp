@@ -298,6 +298,10 @@ void W3DInstancer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("setup", "fs"), &W3DInstancer::setup);
 	ClassDB::bind_method(D_METHOD("add_model", "model_name"), &W3DInstancer::add_model);
 	ClassDB::bind_method(D_METHOD("get_model_report", "model"), &W3DInstancer::get_model_report);
+	ClassDB::bind_method(D_METHOD("get_instance_rig", "instance"), &W3DInstancer::get_instance_rig);
+	ClassDB::bind_method(D_METHOD("find_model_instances", "model_name"), &W3DInstancer::find_model_instances);
+	ClassDB::bind_method(D_METHOD("set_instance_rig_pose", "instance", "pose"), &W3DInstancer::set_instance_rig_pose);
+	ClassDB::bind_method(D_METHOD("set_instances_rig_pose", "instances", "pose"), &W3DInstancer::set_instances_rig_pose);
 	ClassDB::bind_method(D_METHOD("add_instance", "model", "transform", "clip", "start_time", "speed"), &W3DInstancer::add_instance, DEFVAL(String()), DEFVAL(0.0), DEFVAL(1.0));
 	ClassDB::bind_method(D_METHOD("set_instance_cast_shadow", "instance", "enabled"), &W3DInstancer::set_instance_cast_shadow);
 	ClassDB::bind_method(D_METHOD("set_shadow_receiving", "enabled"), &W3DInstancer::set_shadow_receiving);
@@ -882,6 +886,95 @@ Dictionary W3DInstancer::get_model_report(int64_t model) const
 {
 	if (model < 0 || model >= (int64_t)Models.size()) return Dictionary();
 	return Models[(size_t)model]->Report;
+}
+
+namespace
+{
+// Coordinate conjugation: W3D (x,y,z) -> Godot (x,z,-y), including the bone's local axes.
+const Basis RigAxes(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0));
+Transform3D rigTransform(const Matrix3D &m)
+{
+	Basis b;
+	for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) b[i][j] = m.Row[i][j];
+	return Transform3D(RigAxes * b * RigAxes.transposed(), RigAxes.xform(Vector3(m.Row[0][3], m.Row[1][3], m.Row[2][3])));
+}
+}
+
+Array W3DInstancer::get_instance_rig(int64_t instance) const
+{
+	Array result;
+	if (instance < 0 || instance >= (int64_t)Instances.size() || Instances[(size_t)instance].Removed) return result;
+	const Instance &inst = Instances[(size_t)instance];
+	ensure_pose(instance);
+	const HTreeClass &tree = *Models[(size_t)inst.Model]->Proto->Tree;
+	for (int i = 0; i < tree.Num_Pivots(); ++i)
+	{
+		const auto &pivot = tree.Get_Pivot(i);
+		Dictionary bone;
+		bone["name"] = toGodot(pivot.Name);
+		bone["parent"] = pivot.ParentIdx;
+		bone["rest"] = rigTransform(pivot.BaseTransform);
+		bone["pose"] = rigTransform(inst.Pose.Transform[(size_t)i]);
+		result.push_back(bone);
+	}
+	return result;
+}
+
+PackedInt64Array W3DInstancer::find_model_instances(const String &model_name) const
+{
+	PackedInt64Array result;
+	const std::string want = AsciiStringUtil::lowered(toNative(model_name));
+	for (size_t i = 0; i < Instances.size(); ++i)
+	{
+		const Instance &inst = Instances[i];
+		if (inst.Removed) continue;
+		const std::string &name = Models[(size_t)inst.Model]->Name;
+		if (AsciiStringUtil::lowered(name.substr(0, name.find('#'))) == want) result.push_back((int64_t)i);
+	}
+	return result;
+}
+
+bool W3DInstancer::set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose)
+{
+	PackedInt64Array ids;
+	ids.push_back(instance);
+	return set_instances_rig_pose(ids, pose);
+}
+
+bool W3DInstancer::set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose)
+{
+	// Validate the whole batch before touching any instance. All instances share one immutable pose.
+	for (int64_t i = 0; i < instances.size(); ++i)
+	{
+		const int64_t id = instances[i];
+		if (id < 0 || id >= (int64_t)Instances.size() || Instances[(size_t)id].Removed) return false;
+		if (!pose.is_empty() && pose.size() != Instances[(size_t)id].Pose.Num_Pivots()) return false;
+	}
+	std::vector<Matrix3D> converted;
+	for (int i = 0; i < pose.size(); ++i)
+	{
+		const Transform3D t = pose[i];
+		// W3D's skinning/shadow path assumes rigid bones. Reject scale, reflection and non-finite values atomically.
+		if (!t.is_finite() || !t.basis.is_equal_approx(t.basis.orthonormalized()) || !Math::is_equal_approx(t.basis.determinant(), (real_t)1.0)) return false;
+		const Basis b = RigAxes.transposed() * t.basis * RigAxes;
+		const Vector3 p = RigAxes.transposed().xform(t.origin);
+		Matrix3D m;
+		for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) m.Row[r][c] = b[r][c];
+		m.Row[0][3] = p.x; m.Row[1][3] = p.y; m.Row[2][3] = p.z;
+		converted.push_back(m);
+	}
+	std::shared_ptr<const std::vector<Matrix3D>> shared;
+	if (!converted.empty()) shared = std::make_shared<const std::vector<Matrix3D>>(std::move(converted));
+	for (int64_t i = 0; i < instances.size(); ++i)
+	{
+		Instance &inst = Instances[(size_t)instances[i]];
+		inst.RigPose = shared;
+		inst.PoseStale = true;
+		if (shared) adopt_animated_palette(inst);
+		mark_model(instances[i]);
+	}
+	PoseDirty = true;
+	return true;
 }
 
 // ---- clips / instances -----------------------------------------------------------------------------------------------
@@ -1532,6 +1625,11 @@ void W3DInstancer::rebuild_layout()
 void W3DInstancer::evaluate_pose(Instance &inst) const
 {
 	evaluate_animation_pose(inst);
+	if (inst.RigPose)
+	{
+		inst.Pose.Transform = *inst.RigPose;
+		return; // Keep evaluated visibility/fades, but the rig owns the final geometry pose.
+	}
 	if (!inst.BoneSpins.empty())
 	{
 		const HTreeClass &tree = *Models[(size_t)inst.Model]->Proto->Tree;
