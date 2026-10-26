@@ -40,6 +40,8 @@ uniform sampler2D macro_tex : filter_linear_mipmap, repeat_enable, hint_default_
 uniform sampler2D records : filter_nearest, repeat_disable, hint_default_black;
 
 uniform vec2 atlas_size = vec2(2048.0, 2048.0);
+uniform float base_atlas_scale = 1.0;
+uniform float normal_atlas_scale = 1.0;
 // ZH builds 3 mip levels (MIP_LEVELS_3) so mips never bleed past the 4-px class gutters; the level of
 // detail is computed here and clamped to the same range.
 uniform float max_atlas_lod = 2.0;
@@ -157,6 +159,14 @@ float atlas_lod(vec2 uv) {
 	return clamp(0.5 * log2(max(d, 0.00000001)), 0.0, max_atlas_lod);
 }
 
+float art_atlas_lod(vec2 uv, float scale, float retail_lod) {
+	if (scale <= 1.0) return retail_lod;
+	vec2 p = uv * atlas_size * scale;
+	vec2 dx = dFdx(p);
+	vec2 dy = dFdy(p);
+	return clamp(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 0.00000001)), 0.0, max_atlas_lod + log2(scale));
+}
+
 // Reference: TerrainUv::wrapIntoClass (WorldHeightMapUV.cpp). GLSL mod() takes the sign of the divisor.
 vec2 wrap_into_class(vec4 rect, vec2 uv) {
 	if (rect.z <= 0.0) {
@@ -196,11 +206,11 @@ vec4 record_texel(int rec, int k) {
 // One layer's lit colour in retail (gamma) space, before cloud / macro / fog.
 vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod, float meadow, vec3 pattern, vec4 detail) {
 	vec2 uv = wrap_into_class(rect, uv_unwrapped);
-	vec3 albedo = textureLod(base_atlas, uv, lod).rgb;
+	vec3 albedo = textureLod(base_atlas, uv, art_atlas_lod(uv_unwrapped, base_atlas_scale, lod)).rgb;
 	if (debug_mode == 7) {
 		return albedo;
 	}
-	vec4 nm = textureLod(normal_atlas, uv, lod);
+	vec4 nm = textureLod(normal_atlas, uv, art_atlas_lod(uv_unwrapped, normal_atlas_scale, lod));
 	vec2 nxy = 2.0 * nm.xy - 1.0;
 	float nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
 	vec3 N = normalize(vec3(nxy, nz));
