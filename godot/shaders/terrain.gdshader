@@ -7,11 +7,12 @@
 // Vertex inputs: UV = base layer atlas UV, UV2 = cell-local coordinates of the corner, CUSTOM0 = base layer
 // class wrap rect (x0, y0, w, h), CUSTOM1.x = record index of the cell's blend layers (-1: none).
 shader_type spatial;
-render_mode unshaded, cull_back;
+render_mode ambient_light_disabled, specular_disabled, cull_back;
 
 #include "res://shaders/terrain_common.gdshaderinc"
 #include "res://shaders/selection_decals.gdshaderinc"
 #include "res://shaders/radius_cursor.gdshaderinc"
+#include "res://shaders/object_shadow.gdshaderinc"
 
 varying vec2 v_sage_xy; // lane SELPERF-1: the world point of the pixel (SAGE x, y) for the selection's merge decals
 
@@ -39,16 +40,29 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = terrain_output(UV, COLOR);
+	vec3 ground = ALBEDO;
+	float ground_weight = 1.0;
 	// lane SELPERF-1: the selection's merge decals over the terrain, as RotWK's stencil passes draw them after it (selection_decals.gdshaderinc)
 	vec4 sel = sel_merge(v_sage_xy);
 	if (sel.a > 0.0) {
 		ALBEDO = mix(ALBEDO, retail_output(sel.rgb), sel.a);
+		ground_weight *= 1.0 - sel.a;
 	}
 	// Composite the retail radius texture with the terrain, as with selection decals.
 	vec4 cursor = radius_cursor_sample(v_sage_xy);
 	if (radius_cursor_params.y > 0.5) {
 		ALBEDO = mix(ALBEDO, retail_output(cursor.rgb), cursor.a);
+		ground_weight *= 1.0 - cursor.a;
 	} else {
 		ALBEDO += retail_output(cursor.rgb) * cursor.a;
 	}
+	// Keep selection and placement overlays above shadows, as before.
+	v_shadow_color = shadow_to_gamma(ground);
+	float enabled = debug_mode == 0 ? w3d_shadow.w : 0.0;
+	EMISSION = ALBEDO - ground * ground_weight * enabled;
+	ALBEDO = vec3(ground_weight * enabled);
+}
+
+void light() {
+	if (LIGHT_IS_DIRECTIONAL) DIFFUSE_LIGHT += object_shadow_light(ATTENUATION);
 }

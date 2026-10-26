@@ -5,7 +5,9 @@
 // segments and degree-two corners are generated (Y/H junctions and cross-type stacking remain S-036). Colour: texture * vertex colour where
 // the vertex colour is the static terrain light at the segment's position (ZH RoadSegment::updateSegLighting).
 shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
+render_mode ambient_light_disabled, specular_disabled, blend_mix, depth_draw_never, cull_disabled;
+
+#include "res://shaders/object_shadow.gdshaderinc"
 
 uniform sampler2D road_tex : filter_linear_mipmap, repeat_enable, hint_default_white;
 uniform float output_gamma = 2.2;
@@ -43,4 +45,13 @@ void fragment() {
 	}
 	ALBEDO = retail_output(col);
 	ALPHA = t.a;
+	v_shadow_color = col;
+	EMISSION = ALBEDO * (1.0 - w3d_shadow.w);
+	ALBEDO = vec3(w3d_shadow.w);
+}
+
+void light() {
+	if (LIGHT_IS_DIRECTIONAL) {
+		DIFFUSE_LIGHT += retail_output(v_shadow_color * mix(w3d_shadow.rgb, vec3(1.0), ATTENUATION));
+	}
 }

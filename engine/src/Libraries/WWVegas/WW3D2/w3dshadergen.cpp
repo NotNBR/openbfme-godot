@@ -132,12 +132,24 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	}
 	if (k.DepthTestDisabled) mode("depth_test_disabled");
 	mode(k.CullDisabled ? "cull_disabled" : "cull_back");
-	// RENDER-1: every W3D surface is drawn unshaded: the lighting of the retail effects (defaultw3d.fxo for classic materials,
+	// RENDER-1: the lighting of the retail effects (defaultw3d.fxo for classic materials,
 	// normalmapped.fxo for FX materials) is computed here from the map's light environment (W3DObjectLighting, globals below), in
-	// the gamma space D3D9 works in, and converted to linear once at the end (Godot sRGB-encodes the output again).
-	mode("unshaded");
-	mode("shadows_disabled");
+	// the gamma space D3D9 works in. Opaque world surfaces use light() only for shadow-map coverage (S-3304),
+	// without applying Godot's lighting a second time. Other surfaces keep the unshaded path.
+	const bool shadowReceiver = k.Blend == W3D_GODOT_BLEND_OPAQUE && !alphaOverride;
+	if (shadowReceiver)
+	{
+		mode("ambient_light_disabled");
+		mode("specular_disabled");
+	}
+	else
+	{
+		mode("unshaded");
+		mode("shadows_disabled");
+	}
 	line("render_mode " + modes + ";");
+	if (shadowReceiver) line("#include \"res://shaders/object_shadow.gdshaderinc\"");
+	if (shadowReceiver) line("instance uniform bool w3d_receive_shadows : instance_index(1) = false;");
 
 	// ---- uniforms ----
 	line("uniform sampler2D w3d_palette : filter_nearest, repeat_disable;");
@@ -154,7 +166,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	// doubled when the map asks for it); columns of the matrices = lights 0..2, directions toward the light in Godot world space
 	// lane BUILD-5 r2: Drawable::colorTint (RW 0x6757BB; DONOR ZH W3DScene.cpp:662-698, RTS3DScene::Customized_Render): the drawable's tint colour is added to every
 	// global light's diffuse and to the equivalent ambient while it is lit. Per node (a W3DInstancer per tinted drawable: the placement ghost), 0 elsewhere
-	line("instance uniform vec3 w3d_tint = vec3(0.0);");
+	line("instance uniform vec3 w3d_tint : instance_index(0) = vec3(0.0);");
 	line("global uniform vec3 w3d_amb_obj;");
 	line("global uniform mat3 w3d_lcol_obj;");
 	line("global uniform mat3 w3d_ldir_obj;");
@@ -194,7 +206,6 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	// Varyings each take a location; Intel Arc (Mesa ANV) offers Forward+ 29 for normal-mapped buildings, Metal 31. The two UV sets
 	// share one vec4 (the same interpolation), and the world position stays a vertex() local: only the vertex lighting reads it.
 	line("varying vec4 v_uv;"); // xy UV, zw UV2
-	line("varying vec4 v_col;");
 	line("varying float v_fade;");
 	line("varying vec3 v_vpos;");
 	line("varying vec3 v_vnrm;");
@@ -288,7 +299,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 			// ZH dx8renderer.cpp:1818-1847: only the mesh position is kept; the orientation faces the camera.
 			// ORIENTED: Obj_Look_At(pos, cameraPos); ALIGNED: Obj_Look_At(pos, pos + cameraZ). Roll 0, W3D Z up.
 			line("\tvec3 pos = w3d_point(base, b, vec3(0.0));");
-			line("\tvec3 camg = (inverse(MODEL_MATRIX) * (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0))).xyz;");
+			line("\tvec3 camg = (inverse(MODEL_MATRIX) * (MAIN_CAM_INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0))).xyz;");
 			line("\tvec3 camw = vec3(camg.x, -camg.z, camg.y);");
 			if (k.Camera == MESH_CAMERA_ORIENTED)
 			{
@@ -296,7 +307,7 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 			}
 			else
 			{
-				line("\tvec3 zg = (inverse(MODEL_MATRIX) * (INV_VIEW_MATRIX * vec4(0.0, 0.0, 1.0, 0.0))).xyz;");
+				line("\tvec3 zg = (inverse(MODEL_MATRIX) * (MAIN_CAM_INV_VIEW_MATRIX * vec4(0.0, 0.0, 1.0, 0.0))).xyz;");
 				line("\tvec3 fx = normalize(vec3(zg.x, -zg.z, zg.y));");
 			}
 			line("\tvec3 zz = normalize(vec3(0.0, 0.0, 1.0) - fx * fx.z);");
@@ -334,7 +345,6 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 		line("\tBINORMAL = normalize(w3d_to_godot(bn));");
 	}
 	line(k.Uv2 ? "\tv_uv = vec4(UV, UV2);" : "\tv_uv = vec4(UV, UV);");
-	line("\tv_col = COLOR;");
 	line("\tv_fade = INSTANCE_CUSTOM.y;");
 	if (k.HouseColor)
 	{
@@ -573,6 +583,19 @@ std::string Generate_W3D_Shader_Code(const W3DShaderKey &k, W3DSamplerPolicy sam
 	case W3D_GODOT_BLEND_PREMUL: line("\tALPHA = a * v_fade;"); break;
 	case W3D_GODOT_BLEND_NONE: break;
 	}
+	if (shadowReceiver)
+	{
+		line("\tv_shadow_color = clamp(cur.rgb, 0.0, 1.0);");
+		line("\tfloat shadow_enabled = w3d_receive_shadows ? w3d_shadow.w : 0.0;");
+		line("\tEMISSION = ALBEDO * (1.0 - shadow_enabled);");
+		line("\tALBEDO = vec3(shadow_enabled);");
+	}
 	line("}");
+	if (shadowReceiver)
+	{
+		line("void light() {");
+		line("\tif (LIGHT_IS_DIRECTIONAL) DIFFUSE_LIGHT += object_shadow_light(ATTENUATION);");
+		line("}");
+	}
 	return c;
 }
