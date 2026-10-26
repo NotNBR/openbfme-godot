@@ -298,6 +298,12 @@ void W3DInstancer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("setup", "fs"), &W3DInstancer::setup);
 	ClassDB::bind_method(D_METHOD("add_model", "model_name"), &W3DInstancer::add_model);
 	ClassDB::bind_method(D_METHOD("get_model_report", "model"), &W3DInstancer::get_model_report);
+	ClassDB::bind_method(D_METHOD("get_instance_rig", "instance"), &W3DInstancer::get_instance_rig);
+	ClassDB::bind_method(D_METHOD("find_model_instances", "model_name"), &W3DInstancer::find_model_instances);
+	ClassDB::bind_method(D_METHOD("get_instance_transform", "instance"), &W3DInstancer::get_instance_transform);
+	ClassDB::bind_method(D_METHOD("set_instance_hidden_bones", "instance", "names"), &W3DInstancer::set_instance_hidden_bones);
+	ClassDB::bind_method(D_METHOD("set_instance_rig_pose", "instance", "pose"), &W3DInstancer::set_instance_rig_pose);
+	ClassDB::bind_method(D_METHOD("set_instances_rig_pose", "instances", "pose"), &W3DInstancer::set_instances_rig_pose);
 	ClassDB::bind_method(D_METHOD("add_instance", "model", "transform", "clip", "start_time", "speed"), &W3DInstancer::add_instance, DEFVAL(String()), DEFVAL(0.0), DEFVAL(1.0));
 	ClassDB::bind_method(D_METHOD("set_instance_cast_shadow", "instance", "enabled"), &W3DInstancer::set_instance_cast_shadow);
 	ClassDB::bind_method(D_METHOD("set_shadow_receiving", "enabled"), &W3DInstancer::set_shadow_receiving);
@@ -824,6 +830,44 @@ int64_t W3DInstancer::build_model(const String &model_name)
 		}
 		subs.push_back(s);
 	}
+	// get_instance_rig's skin data: each drawn vertex counts for the pivot that carries most of it, where the bind pose puts it
+	if (proto->Tree)
+	{
+		const HTreeClass &tree = *proto->Tree;
+		std::vector<Matrix3D> bind((size_t)tree.Num_Pivots());
+		for (int i = 0; i < tree.Num_Pivots(); ++i)
+		{
+			const auto &pivot = tree.Get_Pivot(i);
+			if (pivot.ParentIdx >= 0) Matrix3D::Multiply(bind[(size_t)pivot.ParentIdx], pivot.BaseTransform, &bind[(size_t)i]);
+			else bind[(size_t)i] = pivot.BaseTransform;
+		}
+		model->Skin.assign(bind.size(), Model::BoneSkin());
+		for (const DrawItem &item : model->Draws)
+		{
+			const MeshRenderData &d = item.Mesh->Data;
+			for (size_t v = 0; v < d.NumVertices; ++v)
+			{
+				int bone = item.Sub->BoneIndex;
+				const float *at = &d.Position[v * 3]; // bone space, for skins and rigid meshes alike
+				if (d.Skin)
+				{
+					const bool second = d.DualBone && d.Weight1[v] > d.Weight0[v];
+					bone = second ? d.Bone1[v] : d.Bone0[v];
+					if (second) at = &d.Position1[v * 3];
+				}
+				if (bone < 0 || bone >= (int)bind.size()) continue;
+				const ::Vector3 q = bind[(size_t)bone].Transform_Point(::Vector3(at[0], at[1], at[2]));
+				Model::BoneSkin &b = model->Skin[(size_t)bone];
+				if (b.Vertices++ == 0)
+				{
+					b.Min = b.Max = q;
+					continue;
+				}
+				b.Min.X = std::min(b.Min.X, q.X); b.Min.Y = std::min(b.Min.Y, q.Y); b.Min.Z = std::min(b.Min.Z, q.Z);
+				b.Max.X = std::max(b.Max.X, q.X); b.Max.Y = std::max(b.Max.Y, q.Y); b.Max.Z = std::max(b.Max.Z, q.Z);
+			}
+		}
+	}
 	report["name"] = toGodot(name);
 	report["type"] = proto->Type == RenderObjPrototype::PROTO_HLOD ? "hlod" : "mesh";
 	report["hierarchy"] = toGodot(proto->HierarchyName);
@@ -882,6 +926,117 @@ Dictionary W3DInstancer::get_model_report(int64_t model) const
 {
 	if (model < 0 || model >= (int64_t)Models.size()) return Dictionary();
 	return Models[(size_t)model]->Report;
+}
+
+namespace
+{
+// Coordinate conjugation: W3D (x,y,z) -> Godot (x,z,-y), including the bone's local axes.
+const Basis RigAxes(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0));
+Transform3D rigTransform(const Matrix3D &m)
+{
+	Basis b;
+	for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) b[i][j] = m.Row[i][j];
+	return Transform3D(RigAxes * b * RigAxes.transposed(), RigAxes.xform(Vector3(m.Row[0][3], m.Row[1][3], m.Row[2][3])));
+}
+}
+
+Array W3DInstancer::get_instance_rig(int64_t instance) const
+{
+	Array result;
+	if (instance < 0 || instance >= (int64_t)Instances.size() || Instances[(size_t)instance].Removed) return result;
+	const Instance &inst = Instances[(size_t)instance];
+	ensure_pose(instance);
+	if (!PoseCulling && inst.PoseStale)
+	{
+		evaluate_pose(const_cast<Instance &>(inst)); // the pose of what was set since the last update, not the one before it
+	}
+	const Model &m = *Models[(size_t)inst.Model];
+	const HTreeClass &tree = *m.Proto->Tree;
+	for (int i = 0; i < tree.Num_Pivots(); ++i)
+	{
+		const auto &pivot = tree.Get_Pivot(i);
+		Dictionary bone;
+		bone["name"] = toGodot(pivot.Name);
+		bone["parent"] = pivot.ParentIdx;
+		bone["rest"] = rigTransform(pivot.BaseTransform);
+		bone["pose"] = rigTransform(inst.Pose.Transform[(size_t)i]);
+		const Model::BoneSkin skin = (size_t)i < m.Skin.size() ? m.Skin[(size_t)i] : Model::BoneSkin();
+		bone["vertices"] = skin.Vertices;
+		AABB bounds;
+		if (skin.Vertices > 0)
+		{
+			const Vector3 a = RigAxes.xform(Vector3(skin.Min.X, skin.Min.Y, skin.Min.Z));
+			const Vector3 b = RigAxes.xform(Vector3(skin.Max.X, skin.Max.Y, skin.Max.Z));
+			const Vector3 low(std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z));
+			bounds = AABB(low, Vector3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)) - low);
+		}
+		bone["bounds"] = bounds;
+		result.push_back(bone);
+	}
+	return result;
+}
+
+Transform3D W3DInstancer::get_instance_transform(int64_t instance) const
+{
+	if (instance < 0 || instance >= (int64_t)Instances.size() || Instances[(size_t)instance].Removed) return Transform3D();
+	return Instances[(size_t)instance].Xf;
+}
+
+PackedInt64Array W3DInstancer::find_model_instances(const String &model_name) const
+{
+	PackedInt64Array result;
+	const std::string want = AsciiStringUtil::lowered(toNative(model_name));
+	for (size_t i = 0; i < Instances.size(); ++i)
+	{
+		const Instance &inst = Instances[i];
+		if (inst.Removed) continue;
+		const std::string &name = Models[(size_t)inst.Model]->Name;
+		if (AsciiStringUtil::lowered(name.substr(0, name.find('#'))) == want) result.push_back((int64_t)i);
+	}
+	return result;
+}
+
+bool W3DInstancer::set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose)
+{
+	PackedInt64Array ids;
+	ids.push_back(instance);
+	return set_instances_rig_pose(ids, pose);
+}
+
+bool W3DInstancer::set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose)
+{
+	// Validate the whole batch before touching any instance. All instances share one immutable pose.
+	for (int64_t i = 0; i < instances.size(); ++i)
+	{
+		const int64_t id = instances[i];
+		if (id < 0 || id >= (int64_t)Instances.size() || Instances[(size_t)id].Removed) return false;
+		if (!pose.is_empty() && pose.size() != Instances[(size_t)id].Pose.Num_Pivots()) return false;
+	}
+	std::vector<Matrix3D> converted;
+	for (int i = 0; i < pose.size(); ++i)
+	{
+		const Transform3D t = pose[i];
+		// W3D's skinning/shadow path assumes rigid bones. Reject scale, reflection and non-finite values atomically.
+		if (!t.is_finite() || !t.basis.is_equal_approx(t.basis.orthonormalized()) || !Math::is_equal_approx(t.basis.determinant(), (real_t)1.0)) return false;
+		const Basis b = RigAxes.transposed() * t.basis * RigAxes;
+		const Vector3 p = RigAxes.transposed().xform(t.origin);
+		Matrix3D m;
+		for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) m.Row[r][c] = b[r][c];
+		m.Row[0][3] = p.x; m.Row[1][3] = p.y; m.Row[2][3] = p.z;
+		converted.push_back(m);
+	}
+	std::shared_ptr<const std::vector<Matrix3D>> shared;
+	if (!converted.empty()) shared = std::make_shared<const std::vector<Matrix3D>>(std::move(converted));
+	for (int64_t i = 0; i < instances.size(); ++i)
+	{
+		Instance &inst = Instances[(size_t)instances[i]];
+		inst.RigPose = shared;
+		inst.PoseStale = true;
+		if (shared) adopt_animated_palette(inst);
+		mark_model(instances[i]);
+	}
+	PoseDirty = true;
+	return true;
 }
 
 // ---- clips / instances -----------------------------------------------------------------------------------------------
@@ -989,6 +1144,8 @@ bool W3DInstancer::remove_instance(int64_t instance)
 
 		inst.PaletteSize = 0;
 		inst.PaletteAnimated = false;
+		inst.RigPose.reset();
+		inst.HiddenBones.clear();
 		inst.Pose = HTreePose();
 		decltype(inst.DrawPoseState)().swap(inst.DrawPoseState);
 	}
@@ -1491,6 +1648,30 @@ bool W3DInstancer::set_instance_hidden_subobjects(int64_t instance, const Packed
 	return true;
 }
 
+bool W3DInstancer::set_instance_hidden_bones(int64_t instance, const PackedStringArray &names)
+{
+	if (instance < 0 || instance >= (int64_t)Instances.size() || Instances[(size_t)instance].Removed) return false;
+	Instance &inst = Instances[(size_t)instance];
+	const Model &m = *Models[(size_t)inst.Model];
+	std::vector<std::uint8_t> hidden;
+	if (!names.is_empty()) hidden.assign((size_t)inst.Pose.Num_Pivots(), 0);
+	for (int64_t i = 0; i < names.size(); ++i)
+	{
+		const int pivot = get_bone_index_native(inst.Model, toNative(names[i]));
+		if (pivot < 0 || (size_t)pivot >= hidden.size())
+		{
+			Errors.push_back("model " + m.Name + " has no bone " + toNative(names[i]));
+			return false;
+		}
+		hidden[(size_t)pivot] = 1;
+	}
+	inst.HiddenBones.swap(hidden);
+	inst.PoseStale = true; // the palette carries the collapse
+	PoseDirty = true;
+	mark_model(instance);
+	return true;
+}
+
 // ---- per frame -------------------------------------------------------------------------------------------------------
 
 void W3DInstancer::rebuild_layout()
@@ -1532,6 +1713,11 @@ void W3DInstancer::rebuild_layout()
 void W3DInstancer::evaluate_pose(Instance &inst) const
 {
 	evaluate_animation_pose(inst);
+	if (inst.RigPose)
+	{
+		inst.Pose.Transform = *inst.RigPose;
+		return; // Keep evaluated visibility/fades, but the rig owns the final geometry pose.
+	}
 	if (!inst.BoneSpins.empty())
 	{
 		const HTreeClass &tree = *Models[(size_t)inst.Model]->Proto->Tree;
@@ -1650,7 +1836,12 @@ void W3DInstancer::write_palette(const Instance &inst)
 	for (int p = 0; p < pivots; ++p)
 	{
 		const Matrix3D &m = inst.Pose.Transform[(size_t)p];
-		std::memcpy(out + (size_t)p * 12, &m.Row[0][0], sizeof(float) * 12); // three rows of (x, y, z, translation)
+		float *row = out + (size_t)p * 12;
+		std::memcpy(row, &m.Row[0][0], sizeof(float) * 12); // three rows of (x, y, z, translation)
+		if (!inst.HiddenBones.empty() && inst.HiddenBones[(size_t)p])
+		{
+			for (int r = 0; r < 3; ++r) row[r * 4] = row[r * 4 + 1] = row[r * 4 + 2] = 0.0f; // what it carries collapses onto the bone
+		}
 	}
 }
 
@@ -1743,6 +1934,7 @@ void W3DInstancer::write_buffers()
 					inst.DrawPoseState[drawIndex] = std::make_pair(inst.Pose.IsVisible[(size_t)bone], inst.Pose.PivotFade[(size_t)bone]);
 				}
 				if (!inst.HiddenSubs.empty() && inst.HiddenSubs[(size_t)d.SubIndex]) continue;
+				if (rigid && !inst.HiddenBones.empty() && inst.HiddenBones[(size_t)bone]) continue;
 				if (!inst.Pose.IsVisible[(size_t)bone]) continue;
 				if (inst.Pose.PivotFade[(size_t)bone] * inst.Opacity <= 0.0f) continue;
 				ids.push_back(id);
