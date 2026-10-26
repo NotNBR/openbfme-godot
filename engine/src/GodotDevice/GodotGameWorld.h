@@ -100,6 +100,7 @@ public:
 	//   presentation_delay: float seconds (0.03 threaded, 0)
 	//   hash_every_frame: bool (false; get_frame_hashes)
 	//   terrain: bool (false; lane CAH-1: the map's terrain under this node, as start_new_game builds it)
+	// Uses the profile chosen with set_simulation_profile (Faithful unless changed).
 	// Returns the report ({ ok, errors, stops, map, objects, drawables, players, loop, instancing, timings_ms, lighting, focus, ... }).
 	Dictionary load_map(const String &map_name, const Dictionary &options);
 
