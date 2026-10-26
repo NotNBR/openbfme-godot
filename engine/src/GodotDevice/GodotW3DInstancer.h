@@ -72,6 +72,12 @@ public:
 	// Builds the model (meshes, materials, MultiMeshes). Returns the model id, or -1; the report says why either way.
 	int64_t add_model(const String &model_name);
 	Dictionary get_model_report(int64_t model) const;
+	// Opt-in authoring bridge in Godot model coordinates (Y up), excluding the instance transform.
+	Array get_instance_rig(int64_t instance) const;
+	PackedInt64Array find_model_instances(const String &model_name) const;
+	// Model-space rigid bone transforms; an empty array releases the override. Invalid input leaves the pose intact.
+	bool set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose);
+	bool set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose);
 
 	// clip: "HIERARCHY.CLIP" or a clip name of the model's hierarchy; empty = bind pose. Returns the instance id or -1.
 	int64_t add_instance(int64_t model, const Transform3D &transform, const String &clip, double start_time, double speed);
@@ -264,6 +270,7 @@ private:
 		int Sway = 0;                         // lane VISUAL-2: set_instance_sway (INSTANCE_CUSTOM.w += 1024 * Sway)
 		bool Fogged = false;                  // lane VISUAL-2: set_instance_fogged (INSTANCE_CUSTOM.w += 16384)
 		bool CastShadow = false;
+		std::shared_ptr<const std::vector<Matrix3D>> RigPose;
 		std::vector<std::uint8_t> HiddenSubs; // by sub object index; empty = none hidden (set_instance_hidden_subobjects)
 		bool Removed = false;                 // remove_instance: skipped by the pose and buffer passes
 		float Opacity = 1.0f;                 // set_instance_opacity (lane PROJ-2)
