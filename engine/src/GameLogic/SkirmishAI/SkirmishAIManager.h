@@ -124,6 +124,8 @@ public:
 
 	const std::vector<std::unique_ptr<AISkirmishGroup>> &groups() const { return m_groups; }
 	const AISkirmishPlayer *findAI(int playerIndex) const;
+	// RW 0x6A9D9C: historical registration order; dead and captured flags stay listed.
+	const std::vector<ObjectID> &captureFlags() const { return m_captureFlags; }
 	const AISkirmishGroup *findGroup(int playerIndex) const;
 	// manager + 0xA3C: the players with a player info record (every playable player of a started game), in index order
 	const std::vector<int> &infoPlayers() const { return m_infoPlayers; }
@@ -193,6 +195,7 @@ private:
 	const SkirmishAIStore *m_store = nullptr;
 	std::vector<std::unique_ptr<AISkirmishGroup>> m_groups;
 	std::vector<int> m_infoPlayers;
+	std::vector<ObjectID> m_captureFlags;
 	std::map<int, std::unique_ptr<AIStatCollector>> m_records; ///< manager + 0xA3C: the player info records by player index (lane DECOMP-3)
 	void makeRecord(const Player &player);
 	std::vector<std::shared_ptr<AIBuildRequest>> m_farmSites; ///< RW 0xDE9EEC (made by the first economy builder, RW 0x8EEBAC)
