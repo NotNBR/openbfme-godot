@@ -798,16 +798,13 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		};
 		Ref<ImageTexture> baseTex = makeTexture(images.base, images.width, images.height);
 		Ref<ImageTexture> normalTex = makeTexture(images.normal, images.width, images.height);
-		// Optional artistic meadow profile. Explicit name rules are editable data; no colour-based
-		// guessing, no change to the retail atlas or simulation. Build the mask even when disabled
-		// so F8 can compare the same map without rebuilding it. Gutters match TerrainAtlas's 4 px.
-		Dictionary groundReport;
-		const String profilePath = "res://assets/natural_ground/profiles.json";
+		// Grass eligibility by terrain class; atlas gutters match TerrainAtlas.
+		const String profilePath = "res://assets/ground_cover/profiles.json";
 		const Variant parsedProfiles = JSON::parse_string(FileAccess::get_file_as_string(profilePath));
 		if (parsedProfiles.get_type() != Variant::DICTIONARY)
 		{
 			memdelete(root);
-			return fail("natural ground profiles must be a JSON dictionary: " + std::string(profilePath.utf8().get_data()));
+			return fail("grass profiles must be a JSON dictionary: " + std::string(profilePath.utf8().get_data()));
 		}
 		const Dictionary profiles = parsedProfiles;
 		const Array include = profiles.get("include", Array());
@@ -815,7 +812,6 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		const Dictionary overrides = profiles.get("overrides", Dictionary());
 		Ref<Image> meadowImage = Image::create_empty(images.width, images.height, false, Image::FORMAT_R8);
 		meadowImage->fill(Color(0, 0, 0));
-		Array meadowClasses;
 		for (const TXTextureClass &c : hm.m_textureClasses)
 		{
 			const String name = toGodot(c.name).to_lower();
@@ -833,22 +829,8 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 			if (!tilesWide) continue;
 			meadowImage->fill_rect(Rect2i(c.positionInTexture.x - 4, c.positionInTexture.y - 4,
 				tilesWide * TILE_PIXEL_EXTENT + 8, tilesWide * TILE_PIXEL_EXTENT + 8), Color(1, 1, 1));
-			meadowClasses.push_back(toGodot(c.name));
 		}
 		meadowImage->generate_mipmaps();
-		Ref<ImageTexture> meadowTex = ImageTexture::create_from_image(meadowImage);
-		Ref<Texture2D> turfTex = ResourceLoader::get_singleton()->load("res://assets/natural_ground/turf_detail.png");
-		if (turfTex.is_null())
-		{
-			memdelete(root);
-			return fail("natural ground detail texture is missing: res://assets/natural_ground/turf_detail.png");
-		}
-		const bool naturalGround = optBool(options, "natural_ground",
-			(bool)ProjectSettings::get_singleton()->get_setting("openbfme/rendering/natural_ground", false));
-		groundReport["enabled"] = naturalGround;
-		groundReport["meadow_classes"] = meadowClasses;
-		groundReport["profiles"] = profilePath;
-		m_report["natural_ground"] = groundReport;
 		// the layers are composited per pixel in one opaque pass (TerrainComposite.h): a single shader, a single material
 		TerrainComposite::Stats cstats;
 		std::vector<TerrainComposite::Chunk> composite;
@@ -928,10 +910,6 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		};
 		Ref<ShaderMaterial> terrainMat = makeMat(terrainShader, TERRAIN_RENDER_PRIORITY);
 		terrainMat->set_shader_parameter("records", recordsTex);
-		terrainMat->set_shader_parameter("natural_ground_enabled", naturalGround);
-		terrainMat->set_shader_parameter("meadow_mask", meadowTex);
-		terrainMat->set_shader_parameter("turf_detail", turfTex);
-		terrainMat->set_meta("natural_ground", true);
 		if (wantGroundCover) {
 			groundCoverMask = meadowImage;
 			groundCoverTerrainMaterial = terrainMat;

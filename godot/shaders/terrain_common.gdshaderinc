@@ -95,7 +95,7 @@ varying vec2 v_local;        // cell-local coordinates (0..1) of the pixel
 varying flat vec4 v_wrap;    // base layer class wrap rect (x0, y0, w, h); w == 0: none
 varying flat float v_rec;    // record index of the cell's blend layers, or -1
 
-#include "res://shaders/natural_ground.gdshaderinc"
+varying vec2 v_ground_xy;
 #include "res://shaders/grass_field.gdshaderinc"
 uniform bool grass_surface_enabled = false;
 uniform sampler2D terrain_guide : filter_linear_mipmap, repeat_disable, hint_default_black;
@@ -194,7 +194,7 @@ vec4 record_texel(int rec, int k) {
 }
 
 // One layer's lit colour in retail (gamma) space, before cloud / macro / fog.
-vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod, float meadow, vec3 pattern, vec4 detail) {
+vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod) {
 	vec2 uv = wrap_into_class(rect, uv_unwrapped);
 	vec3 albedo = textureLod(base_atlas, uv, lod).rgb;
 	if (debug_mode == 7) {
@@ -204,9 +204,6 @@ vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod, float meado
 	vec2 nxy = 2.0 * nm.xy - 1.0;
 	float nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
 	vec3 N = normalize(vec3(nxy, nz));
-	if (natural_ground_enabled && debug_mode == 0 && meadow > 0.0) {
-		ground_surface(meadow, pattern, detail, albedo, N, nm.b);
-	}
 	vec3 Lt = normalize(v_lts);
 	vec3 Ht = normalize(v_hts);
 	float NdL = dot(N, Lt);
@@ -248,33 +245,12 @@ vec3 terrain_output(vec2 uv0, vec4 vcol) {
 	float lod1 = atlas_lod(uv1);
 	float lod2 = atlas_lod(uv2);
 
-	vec3 pattern = vec3(0.0);
-	vec4 detail = vec4(0.5);
-	float meadow0 = 0.0;
-	float meadow1 = 0.0;
-	float meadow2 = 0.0;
-	if (natural_ground_enabled && debug_mode == 0) {
-		meadow0 = textureLod(meadow_mask, wrap_into_class(v_wrap, uv0), lod0).r;
-		meadow1 = has1 ? textureLod(meadow_mask, wrap_into_class(rect1, uv1), lod1).r : 0.0;
-		meadow2 = has2 ? textureLod(meadow_mask, wrap_into_class(rect2, uv2), lod2).r : 0.0;
-		// Explicit derivatives keep mip selection valid at divergent material boundaries.
-		vec2 ground_uv = v_ground_xy / 16.0;
-		vec2 ground_dx = dFdx(ground_uv);
-		vec2 ground_dy = dFdy(ground_uv);
-		if (max(meadow0, max(meadow1, meadow2)) > 0.0) {
-			pattern = ground_pattern(v_ground_xy, max(length(ground_dx), length(ground_dy)) * 16.0);
-			// A single shared detail sample for all three layers, with full mip filtering.
-			detail = textureGrad(turf_detail, ground_uv, ground_dx, ground_dy);
-		}
-		if (has1) { alpha1 = ground_blend(alpha1, meadow0, meadow1, pattern, detail); }
-		if (has2) { alpha2 = ground_blend(alpha2, mix(meadow0, meadow1, has1 ? alpha1 : 0.0), meadow2, pattern, detail); }
-	}
-	vec3 comp = shade_layer(uv0, v_wrap, vcol, lod0, meadow0, pattern, detail);
+	vec3 comp = shade_layer(uv0, v_wrap, vcol, lod0);
 	if (has1) {
-		comp = mix(comp, shade_layer(uv1, rect1, vcol, lod1, meadow1, pattern, detail), alpha1);
+		comp = mix(comp, shade_layer(uv1, rect1, vcol, lod1), alpha1);
 	}
 	if (has2) {
-		comp = mix(comp, shade_layer(uv2, rect2, vcol, lod2, meadow2, pattern, detail), alpha2);
+		comp = mix(comp, shade_layer(uv2, rect2, vcol, lod2), alpha2);
 	}
 	if (debug_mode == 4) { return vec3(fract(uv0 * 16.0), 0.0); }
 	if (debug_mode == 7) { return retail_output(clamp(comp, 0.0, 1.0)); }
