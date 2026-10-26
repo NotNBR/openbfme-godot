@@ -18,6 +18,7 @@ run/max_fps=0
 [autoload]
 
 Release="*res://scripts/release/release.gd"
+NaturalGround="*res://scripts/natural_ground.gd"
 
 [debug]
 
@@ -36,6 +37,8 @@ textures/vram_compression/import_etc2_astc=true
 [openbfme]
 
 rendering/soft_particles=true
+rendering/natural_ground=false
+rendering/ground_cover=false
 
 [editor]
 
