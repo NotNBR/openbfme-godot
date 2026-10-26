@@ -1,6 +1,6 @@
 # combo/studio: the engine bfme2-map-studio runs (its submodule native/openbfme-godot follows this branch).
 base upstream/main
-# Upstream now includes #64 (siege), #73 (horde centring), #74 (destination spiral), and #115 (bokeh smoothing).
+# Upstream now includes #64 (siege), #73 (horde centring), #74 (destination spiral), #115 (bokeh smoothing), and #123 (flag recapture).
 
 feat/extra-archives     # fork only: OPENBFME_EXTRA_ARCHIVES, the studio's map archives over retail (until games on user maps, S-5160)
 feat/no-shroud          # fork only: --no-shroud
@@ -10,7 +10,6 @@ fix/map-profile         # fork only: honor the selected simulation profile when 
 feat/natural-grass      # fork only: camera-local grass and natural ground
 feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
 fix/ai-neutral-building-capture   # PR #113
-fix/recapture-enemy-flags         # PR #123: enemy-held capture flags are recaptured, not attacked
 
 # Available, not in this combo:
 # feat/client-weather               # PR #59
