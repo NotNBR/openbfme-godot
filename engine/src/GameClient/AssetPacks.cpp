@@ -38,7 +38,7 @@ std::string stemOf(const std::string &fileName)
 
 const char *AssetPacks::notCovered()
 {
-	return "asset packs replace W3D model files and the textures of W3D model surfaces; particle, terrain, UI (Apt) and decal textures and "
+	return "asset packs replace W3D models, model textures and terrain albedo/normal textures (up to 4x resolution); particle, UI (Apt) and decal textures and "
 		   "non-W3D model formats are not replaced yet (lane SDK-0)";
 }
 

@@ -14,6 +14,7 @@
 #include "GameClient/TerrainAtlas.h"
 #include "GameClient/TerrainRoads.h"
 #include "GameClient/TerrainTypes.h"
+#include "GameClient/TGAFile.h"
 #include "GameClient/UserDataFolder.h"
 #include "GameClient/WaterGeometry.h"
 #include "GameEngineDevice/W3DDevice/GameClient/HeightMapMesh.h"
@@ -713,6 +714,48 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 			memdelete(root);
 			return fail(error);
 		}
+		std::vector<std::string> terrainReplacements;
+		auto readReplacement = [&](const std::string &name, TGAImage &out, std::string *why) -> bool {
+			const AssetPackFile *file = rfs.assetPacks().texture(name);
+			if (!file) return false;
+			std::vector<std::uint8_t> bytes;
+			if (!AssetPacks::read(*file, bytes, why)) return false;
+			if (file->extension == "tga" && TGAFile::decode(bytes.data(), bytes.size(), out, nullptr, 4096)) return true;
+			PackedByteArray buffer;
+			buffer.resize((int64_t)bytes.size());
+			memcpy(buffer.ptrw(), bytes.data(), bytes.size());
+			Ref<Image> image;
+			image.instantiate();
+			Error code = file->extension == "dds" ? image->load_dds_from_buffer(buffer)
+				: file->extension == "png" ? image->load_png_from_buffer(buffer)
+				: file->extension == "jpg" ? image->load_jpg_from_buffer(buffer)
+				: image->load_tga_from_buffer(buffer);
+			if (code != OK || image->is_empty() || image->get_width() > 4096 || image->get_height() > 4096)
+			{
+				if (why) *why = "cannot decode terrain art (maximum 4096px)";
+				return false;
+			}
+			if (image->is_compressed() && image->decompress() != OK)
+			{
+				if (why) *why = "cannot decompress terrain art";
+				return false;
+			}
+			image->convert(Image::FORMAT_RGBA8);
+			image->clear_mipmaps();
+			// Canonical images are top-down. The retail terrain atlas consumes storage rows.
+			if (!(file->extension == "tga" && bytes.size() >= 18 && (bytes[17] & 0x20))) image->flip_y();
+			out.width = image->get_width();
+			out.height = image->get_height();
+			PackedByteArray rgba = image->get_data();
+			out.rgba.assign(rgba.ptr(), rgba.ptr() + rgba.size());
+			return true;
+		};
+		const float packNormalStrength = (float)(double)ProjectSettings::get_singleton()->get_setting("openbfme/rendering/terrain_pack_normal_strength", 0.25);
+		if (!TerrainAtlas::applyTexturePack(hm, types, readReplacement, images, terrainReplacements, &error, packNormalStrength))
+		{
+			memdelete(root);
+			return fail("terrain asset pack: " + error);
+		}
 		timings["atlas"] = nowMs() - t1;
 		auto strArray = [](const std::vector<std::string> &v) {
 			Array a;
@@ -725,6 +768,10 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		Dictionary atlas;
 		atlas["width"] = images.width;
 		atlas["height"] = images.height;
+		atlas["base_scale"] = images.baseScale;
+		atlas["normal_scale"] = images.normalScale;
+		atlas["pack_normal_strength"] = packNormalStrength;
+		atlas["pack_textures"] = strArray(terrainReplacements);
 		atlas["classes"] = arep.classes;
 		atlas["classes_placed"] = arep.classesPlaced;
 		atlas["tiles_placed"] = arep.tilesPlaced;
@@ -796,8 +843,8 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 			img->generate_mipmaps();
 			return ImageTexture::create_from_image(img);
 		};
-		Ref<ImageTexture> baseTex = makeTexture(images.base, images.width, images.height);
-		Ref<ImageTexture> normalTex = makeTexture(images.normal, images.width, images.height);
+		Ref<ImageTexture> baseTex = makeTexture(images.base, images.width * images.baseScale, images.height * images.baseScale);
+		Ref<ImageTexture> normalTex = makeTexture(images.normal, images.width * images.normalScale, images.height * images.normalScale);
 		// Grass eligibility by terrain class; atlas gutters match TerrainAtlas.
 		const String profilePath = "res://assets/ground_cover/profiles.json";
 		const Variant parsedProfiles = JSON::parse_string(FileAccess::get_file_as_string(profilePath));
@@ -880,6 +927,8 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 			m->set_render_priority(priority);
 			m->set_shader_parameter("base_atlas", baseTex);
 			m->set_shader_parameter("normal_atlas", normalTex);
+			m->set_shader_parameter("base_atlas_scale", (float)images.baseScale);
+			m->set_shader_parameter("normal_atlas_scale", (float)images.normalScale);
 			if (cloudTex.is_valid()) m->set_shader_parameter("cloud_tex", cloudTex);
 			if (macroTex.is_valid()) m->set_shader_parameter("macro_tex", macroTex);
 			m->set_shader_parameter("atlas_size", Vector2((float)images.width, (float)images.height));
