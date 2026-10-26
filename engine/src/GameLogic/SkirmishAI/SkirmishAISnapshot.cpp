@@ -427,9 +427,8 @@ void AIStatCollector::xfer(Xfer &x)
 
 void SkirmishAIManager::xferState(Xfer &x, bool hooksInstalled)
 {
-	// version 2 (lane AI5): the upgrade / expansion requests and the unit upgrader / upgrade builder states. A version 1 snapshot has neither: loaded here its
-	// AIs would never buy an upgrade (their records are made when objects register), so it is refused rather than loaded with empty builders
-	XferVersion v{ 2, 2 };
+	// Version 2 added upgrade-builder state; version 3 adds capture-flag history, which cannot be recovered from current KindOf flags.
+	XferVersion v{ 3, 3 };
 	x.xferVersion(v);
 	const bool loading = x.isLoading();
 	bool started = loading ? false : m_started;
@@ -636,6 +635,7 @@ void SkirmishAIManager::xferState(Xfer &x, bool hooksInstalled)
 	{
 		AIXfer::u64(x, *c);
 	}
+	AIXfer::ids(x, m_captureFlags);
 }
 
 // rule 4 (validate before linking): every player index and every reference between the loaded AIs (the info records, the groups' members, the enemies,
@@ -644,6 +644,13 @@ void SkirmishAIManager::checkLoaded() const
 {
 	const int players = m_logic.players().getPlayerCount();
 	AIXfer::IssuedIdScope issuedIds(m_logic.getNextObjectID());
+	std::set<ObjectID> flags;
+	for (ObjectID id : m_captureFlags)
+	{
+		if (id == INVALID_ID) { throw XferException("skirmish ai: an invalid registered capture flag"); }
+		AIXfer::issued(id, "skirmish ai: a registered capture flag");
+		if (!flags.insert(id).second) { throw XferException("skirmish ai: repeated registered capture flag"); }
+	}
 	auto player = [&](int i, const char *what) { AIXfer::inRange(i, 0, players - 1, what); };
 	std::set<int> info(m_infoPlayers.begin(), m_infoPlayers.end());
 	if (info.size() != m_infoPlayers.size())
@@ -944,6 +951,7 @@ void SkirmishAIManager::xfer(Xfer &x)
 	m_assistTimers = std::move(loaded.m_assistTimers);
 	m_groups = std::move(loaded.m_groups);
 	m_infoPlayers = std::move(loaded.m_infoPlayers);
+	m_captureFlags = std::move(loaded.m_captureFlags);
 	m_records = std::move(loaded.m_records);
 	m_farmSites = std::move(loaded.m_farmSites);
 	m_errors = std::move(loaded.m_errors);
