@@ -373,6 +373,7 @@ add_library(openbfme_core STATIC
     src/Libraries/WWVegas/WW3D2/mapper.cpp
     src/Libraries/WWVegas/WW3D2/meshrender.cpp
     src/Libraries/WWVegas/WW3D2/w3dstops.cpp
+    src/Libraries/WWVegas/WW3D2/w3drig.cpp
     src/Libraries/WWVegas/WW3D2/w3dshadergen.cpp
     src/Libraries/WWVegas/WW3D2/textureloader.cpp
     src/GameEngineDevice/W3DDevice/GameClient/HouseColor.cpp
@@ -806,6 +807,7 @@ add_executable(openbfme_tests
     tests/test_w3d_emitter_shdmesh.cpp
     tests/test_w3d_anim.cpp
     tests/test_w3d_pose.cpp
+    tests/test_w3d_rig.cpp
     tests/test_workerpool.cpp
     tests/test_w3d_mapper.cpp
     tests/test_w3d_shader.cpp
