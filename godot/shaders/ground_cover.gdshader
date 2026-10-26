@@ -88,7 +88,7 @@ void vertex() {
  float population=patch_density;
  if(field_fade_enabled) {
   fade=(patch_span>64.0 ? grass_far(world,depth) : grass_near(world,depth))*field_zoom;
-  population*=mix(0.35,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
+  population*=mix(0.50,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
  }
  float visibility=smoothstep(rank,rank+0.045,population)*alive*fade;
  // Most candidates are absent or faded: collapse them to a point, which rasterizes nothing, without the blade work.
@@ -114,7 +114,7 @@ void vertex() {
   height=mix(height,mix(2.60,4.60,r2),tall);
   float growth=mix(0.72,1.18,noise(ground_xy*0.045+vec2(32.8,91.4)));
   float root_variation=mix(0.88,1.12,hash21(group_seed+61.3));
-  height*=growth*root_variation*mix(0.28,1.0,verge)*blade_height_scale;
+  height*=growth*root_variation*mix(0.28,1.0,verge)*mix(1.0,1.30,grass_lush(regional))*blade_height_scale;
   float width=mix(0.10,0.23,hash21(seed+8.6))*(1.0+curled*0.35);
   if(field_fade_enabled) width*=mix(1.65,1.0,smoothstep(3.0,9.0,grass_pixels(depth)));
   float angle=hash21(seed+3.4)*6.283185;
@@ -122,7 +122,7 @@ void vertex() {
   if(field_fade_enabled) {
    float projected_width=length((VIEW_MATRIX*vec4(across.x,0.0,across.y,0.0)).xy)*width*grass_pixels(depth)/1.8;
    // Avoid needle-thin rasterization at medium range; retain the actual blade height.
-   width*=clamp(0.70/max(projected_width,0.001),1.0,3.0);
+   width*=clamp(0.85/max(projected_width,0.001),1.0,3.5);
   }
   float lean=mix(0.10,0.48,hash21(seed+vec2(31.3,7.8)))+curled*0.75+droop*1.2+(1.0-verge)*1.4;
   vec2 shape=across*VERTEX.x*width+bend*pow(tip,1.5+curled)*height*lean;

@@ -9,6 +9,8 @@ var enabled := false:
   visible = value
   set_process(value)
   if terrain_material != null: terrain_material.set_shader_parameter("grass_surface_enabled", value)
+# The sparse far pool draws this share of its 4096 candidates (rank order): enough to read as grass from afar.
+const FAR_DENSITY := 0.80
 var _patches: Array[MultiMeshInstance3D] = []
 var _near_batch: MultiMesh
 var _far_batch: MultiMesh
@@ -25,11 +27,11 @@ func _ready() -> void:
   if child is MultiMeshInstance3D: _patches.append(child)
  for i in _patches.size():
   _patches[i].set_instance_shader_parameter("patch_span", 128.0 if i >= 256 else 32.0)
-  _patches[i].set_instance_shader_parameter("patch_density", 0.65 if i >= 256 else 1.0)
+  _patches[i].set_instance_shader_parameter("patch_density", FAR_DENSITY if i >= 256 else 1.0)
  _near_batch = _patches[0].multimesh
  _far_batch = _patches[256].multimesh
  _near_batch.visible_instance_count = 4096
- _far_batch.visible_instance_count = 2663
+ _far_batch.visible_instance_count = int(ceil(4096 * FAR_DENSITY))
  if not _patches.is_empty():
   _material = _patches[0].material_override
   _material.set_shader_parameter("field_fade_enabled", true)
@@ -105,7 +107,7 @@ func _process(_delta: float) -> void:
     if patch.multimesh != batch:
      patch.multimesh = batch
      patch.set_instance_shader_parameter("patch_span",span)
-     patch.set_instance_shader_parameter("patch_density",1.0 if layer == 0 else 0.65)
+     patch.set_instance_shader_parameter("patch_density",1.0 if layer == 0 else FAR_DENSITY)
     if patch.position != position: patch.position = position
     if not patch.visible: patch.visible = true
     used += 1

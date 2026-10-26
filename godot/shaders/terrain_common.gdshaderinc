@@ -119,7 +119,9 @@ vec3 grass_canopy(vec3 original, vec4 vcol) {
  float ripple=gust*min(grass_wind_strength,0.6)*0.035;
  vec3 sun=overbright ? sun_color*0.5 : sun_color;
  vec3 light=(vcol.rgb+0.5*lightning_color+sun*max(normalize(sun_dir_sage).z,0.15))*(overbright ? 2.0 : 1.0);
- vec3 canopy=base*light*(0.94+fine*0.12+ripple);
+ // The blades' own clumps, as light and shade, keep a meadow readable once single blades are subpixel.
+ float clumps=(grass_colony(v_ground_xy)-0.5)*0.40;
+ vec3 canopy=base*light*(0.94+fine*0.12+ripple+clumps);
  // Restrained contact darkening ties roots to the soil, strongest under dense nearby clumps.
  float contact=1.0-0.13*coverage*(1.0-amount);
  return mix(original*contact,canopy,clamp(amount*coverage*0.90,0.0,0.90));
