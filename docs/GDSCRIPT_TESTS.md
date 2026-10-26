@@ -134,6 +134,7 @@ runner is claimed. All paths below are relative to the repository root.
 | `godot/tests/controller_menu_test.gd` | `tools/test_gdscript.py::test_game_script` | Allowlisted: controller menu mapping against a stub shell; headless, 20 s timeout. |
 | `godot/tests/controller_routing_test.gd` | `tools/test_gdscript.py::test_game_script` | Allowlisted: controller input routing rules only; headless, 20 s timeout. |
 | `godot/tests/crash_log_test.gd` | `tools/release/test_launcher.py` | Existing argument-aware fixture runner; its prerequisites still apply. |
+| `godot/tests/custom_rig_test.gd` | Manual only; no generic pytest runner | Denied here: needs private RotWK/BFME2 assets (W3D models and clips). |
 | `godot/tests/end_test.gd` | Existing CI Godot gate | Denied here: already scheduled by CI; use its existing asset/window setup. |
 | `godot/tests/external_open_test.gd` | `tools/release/test_external_open.py` | Existing argument-aware fixture runner; its prerequisites still apply. |
 | `godot/tests/floating_money_text_test.gd` | Manual only; no generic pytest runner | Denied here: needs private RotWK/BFME2 assets and game/frame setup. |

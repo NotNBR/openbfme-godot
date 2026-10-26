@@ -124,6 +124,7 @@ DENYLIST = {
         apt_canvas_pixel building_render fx_render gamma_composite hud_image_mode_pixel
         online_branding pro_camera pro_camera_bokeh radial_background render4 shader
     """), "manual: GPU/window/render readback required (some also need retail assets)"),
+    "custom_rig_test.gd": "manual: needs private RotWK/BFME2 assets (W3D models and clips)",
     "pingwheel_test.gd": "manual: mixed UI/timer checks and retail skirmish/hash runs; not wholly asset-free",
     "replay_refusal_test.gd": "manual: mixed stub checks and retail replay subprocess; not wholly asset-free",
     "windows_crash_test.gd": "manual: destructive Windows debug crash/minidump probe; explicit opt-in required",
