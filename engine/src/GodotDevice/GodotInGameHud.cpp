@@ -9,6 +9,7 @@
 #include "Common/SpecialPower.h"
 #include "GameClient/GameText.h"
 #include "GameClient/GUI/GameTextSource.h"
+#include "GameClient/GUI/PlacementTextStyle.h"
 #include "GameClient/GlobalLanguage.h"
 #include "GameLogic/BeaconCommands.h"
 #include "GameClient/GameTextTableSource.h"
@@ -1666,7 +1667,8 @@ void HudDevice::drawPlacementText(const Ref<Font> &font, float k)
 		return;
 	}
 	const TerrainResourceUiSettings &ui = hud->radiusCursorTemplates().resourceUi();
-	const int size = std::max(1, (int)std::lround((float)(ui.fontSize > 0 ? ui.fontSize : 14) * k));
+	const PlacementTextStyle style = PlacementTextStyle::forViewport(ui.fontSize, hud->windowHeight(), k);
+	const int size = style.fontSize;
 	String text;
 	for (char16_t c : rp.text)
 	{
@@ -1675,12 +1677,12 @@ void HudDevice::drawPlacementText(const Ref<Font> &font, float k)
 	const Vector2 sz = font->get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size);
 	const int w = (int)sz.x, h = (int)std::ceil(sz.y);
 	int x = rp.pointerX + w / -2;
-	int y = rp.pointerY - 20 - h;
+	int y = rp.pointerY - style.pointerGap - h;
 	x = std::max(0, std::min(x, hud->windowWidth() - w));
 	y = std::max(0, std::min(y, hud->windowHeight() - h));
 	auto col = [](std::uint32_t argb) { return Color(((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f, ((argb >> 24) & 0xFF) / 255.0f); };
 	const Vector2 at((float)x, (float)y + font->get_ascent(size));
-	font->draw_string(iconItem, at + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0, 0, 0, 1));
+	font->draw_string(iconItem, at + Vector2(style.shadowOffset, style.shadowOffset), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0, 0, 0, 1));
 	font->draw_string(iconItem, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, col(rp.color));
 	placeTextRect = Rect2((float)x, (float)y, (float)w, (float)h);
 	placeTextDrawn = true;

@@ -12,6 +12,7 @@
 #include "GameLogic/ActionManager.h"
 #include "GameLogic/Damage.h"
 #include "GameClient/GUI/Skirmish/IniSkirmishSetupSource.h"
+#include "GameClient/HudObjects.h"
 #include "GameClient/MapCache.h"
 #include "GameLogic/Module/HordeDispatchSpecialPower.h"
 #include "GameLogic/Module/ObjectCreationUpgrade.h"
@@ -1621,6 +1622,81 @@ TEST_CASE("factc neutral: Goblin and Angmar parties capture the flags of an inn,
 		std::printf("factc neutral %s inn unit %s (command set %s): %s\n", faction.c_str(), tt->getName().c_str(), h.hud->controlBar().commandSetName().c_str(), made ? "ok" : "never came");
 	}
 	}
+}
+
+TEST_CASE("factc recapture: an outpost flag an enemy holds shows the capture cursor, not the attack cursor, and a right click takes it back (UNATTACKABLE, RW 0x6C91FA)")
+{
+	if (!haveWorld("factc recapture"))
+	{
+		return;
+	}
+	SharedWorld &s = shared();
+	std::string map, outpost;
+	REQUIRE_MESSAGE(findInnMap(s, "Outpost", map, outpost), "no multiplayer map has an Outpost by a capture flag");
+	MESSAGE("map " << map);
+	HudRig h(s, "FactionWild", map.c_str());
+	const auto ctx = h.hud->enterContext();
+	GameLogic &logic = h.logic();
+	creeptest::removeCreeps(logic);
+	Object *flag = nullptr, *building = nullptr;
+	for (Object *f = logic.getFirstObject(); f && !building; f = f->getNextObject())
+	{
+		if (!f->isKindOfName("CAPTURABLE") || f->getControllingPlayer() == h.rig.local)
+		{
+			continue;
+		}
+		for (Object *b = logic.getFirstObject(); b; b = b->getNextObject())
+		{
+			const float dx = b->getPosition()->x - f->getPosition()->x, dy = b->getPosition()->y - f->getPosition()->y;
+			if (b->getTemplate()->getName() == outpost && dx * dx + dy * dy <= 150.0f * 150.0f)
+			{
+				flag = f;
+				building = b;
+			}
+		}
+	}
+	REQUIRE(flag != nullptr);
+	CHECK(flag->isKindOfName("UNATTACKABLE")); // retail data: CaptureFlag's KindOf
+	// the enemy took them: the flag and its outpost on the enemy's default team, as SpecialAbilityUpdate's capture leaves them (RW 0x8546F6 / 0x854719)
+	Player *enemy = h.rig.game->players().findPlayerWithName("Player_2");
+	REQUIRE(enemy != nullptr);
+	flag->setCapturedTeam(enemy->getDefaultTeam());
+	building->setCapturedTeam(enemy->getDefaultTeam());
+	REQUIRE(h.rig.local->getRelationship(flag->getTeam()) == ENEMIES);
+	const Coord3D c = h.rig.freeSpot(flag->getPosition()->x, flag->getPosition()->y - 220.0f, 80.0f);
+	Object *horde = h.rig.make("GoblinFighterHorde", c.x, c.y);
+	h.frames(10);
+	REQUIRE(h.select(horde));
+	const Coord3D aim{ flag->getPosition()->x, flag->getPosition()->y, flag->getPosition()->z + 8.0f };
+	h.rig.lookAt(*flag->getPosition());
+	const ICoord2D px = h.rig.screenOf(aim);
+	REQUIRE(HudObjects::pickObject(h.hud->input().context(), px) == flag);
+	// the hover: the attack test refuses the UNATTACKABLE flag, the capture test answers (RW 0x81E60B)
+	h.hud->mouseMove(px.x, px.y, 0);
+	h.hud->update(0.034);
+	CHECK(h.hud->input().ui().cursor() == "CaptureBuilding");
+	// the order: a right click sends the capture power at the flag, no attack
+	const size_t log0 = h.hud->input().messageLog().size();
+	h.clickAt(aim, true);
+	h.frames(2);
+	int captures = 0, attacks = 0;
+	for (size_t i = log0; i < h.hud->input().messageLog().size(); ++i)
+	{
+		captures += h.hud->input().messageLog()[i].find("MSG_DO_SPECIAL_POWER_AT_OBJECT") != std::string::npos ? 1 : 0;
+		attacks += h.hud->input().messageLog()[i].find("MSG_DO_ATTACK_OBJECT") != std::string::npos ? 1 : 0;
+	}
+	CHECK(captures == 1);
+	CHECK(attacks == 0);
+	int frames = 0;
+	for (; frames < 600 && flag->getControllingPlayer() != h.rig.local; ++frames)
+	{
+		h.frames(1);
+	}
+	CHECK_MESSAGE(flag->getControllingPlayer() == h.rig.local, "the flag was not recaptured in 600 frames");
+	h.frames(20);
+	CHECK_MESSAGE(building->getControllingPlayer() == h.rig.local, "the " << outpost << " did not follow its flag");
+	std::printf("factc recapture %s: the enemy's flag recaptured after %d frames, %s owned by the player: %d\n", map.c_str(), frames, outpost.c_str(),
+	            building->getControllingPlayer() == h.rig.local ? 1 : 0);
 }
 
 TEST_CASE("factc neutral lairs: every creep lair of the skirmish maps spawns its creeps, and they fight a Goblin party that comes near")

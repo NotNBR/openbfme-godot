@@ -15,6 +15,7 @@
 #include "GameClient/HudObjects.h"
 #include "GameLogic/GameMessage.h"
 #include "GameLogic/BeaconCommands.h"
+#include "GameLogic/Combat/CombatNames.h"
 #include "GameLogic/ObjectTemplateInfo.h"
 #include "GameLogic/Module/SpecialPowerModules.h"
 #include "GameLogic/Module/BehaviorModule.h"
@@ -93,6 +94,14 @@ bool isSystemMessage(const ClientMessage &m)
 const char *metaNameOf(int type)
 {
 	return ClientMessageMetaName(type);
+}
+
+// TARGET FACTS: every attacker path of Object::getAbleToAttackSpecificObject (RW 0x68D6A6, the object itself or a rider) ends in
+// WeaponSet::getAbleToAttackSpecificObject (RW 0x6C9147), which answers ATTACKRESULT_NOT_POSSIBLE (RW 0x6C9496) for a victim with KindOf UNATTACKABLE
+// (template + 0x10E & 0x40, KindOf 54, RW 0x6C91FA) or the status UNATTACKABLE (0x3C, RW 0x6C9207), whoever attacks
+bool isUnattackableTarget(const Object &obj)
+{
+	return obj.isKindOf((unsigned)CombatNames::kinds().unattackable) || obj.testStatus((unsigned)CombatNames::statuses().unattackable);
 }
 } // namespace
 
@@ -387,7 +396,8 @@ int CommandTranslator::evaluateContextCommand(Object *obj, const Coord3D *pos, E
 			return msgType;
 		}
 	}
-	if (obj && !m_ctx.ui.isInForceAttackMode() && HudObjects::relationshipToLocal(m_ctx, *obj) == ENEMIES && selectionCanAttack())
+	// an UNATTACKABLE enemy fails the attack test and reaches the capture test below: a capture flag an enemy took is recaptured, not attacked
+	if (obj && !m_ctx.ui.isInForceAttackMode() && HudObjects::relationshipToLocal(m_ctx, *obj) == ENEMIES && !isUnattackableTarget(*obj) && selectionCanAttack())
 	{
 		msgType = MSG_DO_ATTACK_OBJECT;
 		if (type == EvaluateType::DoCommand)
