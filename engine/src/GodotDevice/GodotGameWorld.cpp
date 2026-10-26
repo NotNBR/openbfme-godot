@@ -274,6 +274,7 @@ void GameWorld::_bind_methods()
 	ClassDB::bind_method(D_METHOD("get_object_count"), &GameWorld::get_object_count);
 	ClassDB::bind_method(D_METHOD("get_object_ids"), &GameWorld::get_object_ids);
 	ClassDB::bind_method(D_METHOD("get_object", "id"), &GameWorld::get_object);
+	ClassDB::bind_method(D_METHOD("get_object_path", "id"), &GameWorld::get_object_path);
 	ClassDB::bind_method(D_METHOD("get_combat_report"), &GameWorld::get_combat_report);
 	ClassDB::bind_method(D_METHOD("get_shroud_report"), &GameWorld::get_shroud_report);
 	ClassDB::bind_method(D_METHOD("get_ai_report"), &GameWorld::get_ai_report);
@@ -2788,6 +2789,49 @@ Array GameWorld::get_projectiles() const
 		out.push_back(d);
 	}
 	return out;
+}
+
+Dictionary GameWorld::get_object_path(int64_t id) const
+{
+	Dictionary r;
+	r["ok"] = false;
+	if (!m_game || id <= 0)
+	{
+		return r;
+	}
+	const ::Object *o = m_game->logic().findObjectByID((::ObjectID)id);
+	const AIUpdateInterface *ai = o ? o->getAIUpdateInterface() : nullptr;
+	if (!ai)
+	{
+		return r;
+	}
+	const AIMover &mover = ai->mover();
+	Array points;
+	int64_t current = -1;
+	if (const Path *path = mover.path())
+	{
+		const bool optimised = path->isOptimized();
+		const PathNode *at = path->currentNode();
+		for (const PathNode *n = path->getFirstNode(); n; n = optimised ? n->getNextOptimized() : n->getNext())
+		{
+			if (n == at)
+			{
+				current = points.size();
+			}
+			const Coord3D *p = n->getPosition();
+			points.push_back(Vector3(p->x, p->y, p->z));
+		}
+	}
+	const Coord3D &goal = mover.goalPosition();
+	r["ok"] = true;
+	r["points"] = points;
+	r["current"] = current;
+	r["goal"] = Vector3(goal.x, goal.y, goal.z);
+	r["goal_type"] = (int64_t)mover.goalType();
+	r["waiting"] = mover.isWaitingForPath();
+	r["blocked"] = mover.isBlocked();
+	r["moving"] = mover.isMoving();
+	return r;
 }
 
 Dictionary GameWorld::get_object(int64_t id) const
