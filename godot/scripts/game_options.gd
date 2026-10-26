@@ -333,6 +333,8 @@ func apply_detail() -> Dictionary:
 		problems.append("detail: " + str(_detail.get("error", "no level")))
 		return _detail
 	ClassDB.class_call_static("GameWorld", "set_texture_reduction", _detail.texture_reduction)
+	if game != null and game.has_method("set_shadow_lod"):
+		game.set_shadow_lod(int(_detail.get("shadow_lod", 3)))
 	if _world != null and _world.has_method("get_fx_player"):
 		var fx = _world.get_fx_player()
 		if fx != null:

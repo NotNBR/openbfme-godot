@@ -12,7 +12,7 @@
 //
 // Scope limits (reported by get_model_report): no model condition states of its own (the draw module runtime,
 // GameEngineDevice/W3DDevice/GameClient/Drawable/Draw/W3DScriptedModelDraw.h, chooses model and clips and hands a clip pair to
-// set_instance_pose), no turrets / captured bones, no house colour, no shadows, no emitters. See GodotW3DMaterial.h for the shading divergences.
+// set_instance_pose), no turrets / captured bones, no projected/decal shadows, no emitters. See GodotW3DMaterial.h for the shading divergences.
 
 #pragma once
 
@@ -127,6 +127,10 @@ public:
 	void set_instance_sway(int64_t instance, int type);
 	// lane VISUAL-2: the instance is lit by the fogged light (a last-seen object in the fog: lights and ambient times w3d_fogged_frac), INSTANCE_CUSTOM.w += 16384
 	void set_instance_fogged(int64_t instance, bool fogged);
+	// Presentation only. Shadow-only batches share the posed mesh and palette, but contain only eligible instances.
+	void set_instance_cast_shadow(int64_t instance, bool enabled);
+	// Set before adding models. UI / standalone model viewers default to no shadow reception.
+	void set_shadow_receiving(bool enabled) { ShadowReceiving = enabled; }
 	// lane PROJ-2: the drawable's opacity (RW Drawable +0xB0, the fade of DrawableFade): multiplies every pivot's fade of the instance; 0 draws nothing
 	void set_instance_opacity(int64_t instance, double opacity);
 	// A scene that needs no per-frame work (every instance static) turns the automatic update off and calls update_now() itself after
@@ -219,6 +223,8 @@ private:
 		MultiMeshInstance3D *Node = nullptr;
 		Ref<MultiMesh> MM;
 		PackedFloat32Array Buffer;
+		Ref<MultiMesh> ShadowMM;
+		PackedFloat32Array ShadowBuffer;
 		int Allocated = 0;
 		std::vector<int> Order;          // instance ids as written by the last write_buffers
 		W3DSortBatch Batch;              // SMOOTH-1: the depths of the last write (sorted items), kept for the S-029 check of frames that skip this model
@@ -257,6 +263,7 @@ private:
 		bool InfantryLight = false;           // set_instance_infantry_light (INSTANCE_CUSTOM.x < 0)
 		int Sway = 0;                         // lane VISUAL-2: set_instance_sway (INSTANCE_CUSTOM.w += 1024 * Sway)
 		bool Fogged = false;                  // lane VISUAL-2: set_instance_fogged (INSTANCE_CUSTOM.w += 16384)
+		bool CastShadow = false;
 		std::vector<std::uint8_t> HiddenSubs; // by sub object index; empty = none hidden (set_instance_hidden_subobjects)
 		bool Removed = false;                 // remove_instance: skipped by the pose and buffer passes
 		float Opacity = 1.0f;                 // set_instance_opacity (lane PROJ-2)
@@ -305,6 +312,7 @@ private:
 	std::vector<std::pair<std::string, std::string>> PendingSwaps; // stop S-5015: Set_Build_Texture_Swaps, taken by the next add_model
 	std::vector<std::unique_ptr<Model>> Models;
 	std::vector<Instance> Instances;
+	bool ShadowReceiving = false;
 	std::vector<Ref<ShaderMaterial>> AllMaterials;
 	std::vector<W3DMapperBinding> Mappers;
 

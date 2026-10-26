@@ -145,6 +145,7 @@ void W3D_Ensure_Light_Globals()
 		return;
 	}
 	registered = true;
+	rs->global_shader_parameter_add(StringName("w3d_shadow"), RenderingServer::GLOBAL_VAR_TYPE_VEC4, Vector4(1.0f, 1.0f, 1.0f, 0.0f));
 	if (samplerPolicy() == W3DSamplerPolicy::Metal16)
 	{
 		UtilityFunctions::print("W3D [MAC-10 Metal16 limitation]: repeating mipmapped textures use linear-mipmap filtering instead of anisotropy (Godot 4.7.2 binds anisotropic-repeat at Metal slot 17; limit 15). Clamped textures retain anisotropy; simulation unchanged.");

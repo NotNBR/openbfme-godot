@@ -8,6 +8,7 @@
 #include "GameClient/MapClassification.h"
 #include "GameClient/MapObjectDrawables.h"
 #include "GameClient/MapObjectRuntime.h"
+#include "GameClient/ObjectShadow.h"
 #include "GameClient/MapUtil.h"
 #include "GameClient/UserDataFolder.h"
 #include "GameLogic/Map/TerrainLogic.h"
@@ -310,8 +311,10 @@ Node3D *MapObjectBuilder::build_objects(const Ref<RetailFileSystem> &fsRef, cons
 	Node3D *root = memnew(Node3D);
 	root->set_name("MapObjects");
 	W3DInstancer *staticInst = memnew(W3DInstancer);
+	staticInst->set_shadow_receiving(true);
 	staticInst->set_name("StaticObjects");
 	W3DInstancer *dynamicInst = memnew(W3DInstancer);
+	dynamicInst->set_shadow_receiving(true);
 	dynamicInst->set_name("AnimatedObjects");
 	root->add_child(staticInst);
 	root->add_child(dynamicInst);
@@ -398,6 +401,12 @@ Node3D *MapObjectBuilder::build_objects(const Ref<RetailFileSystem> &fsRef, cons
 			continue;
 		}
 		(animatedPlay ? instancesDynamic : instancesStatic) += 1;
+		if (p.kind != W3D_DRAWKIND_FLOOR)
+		{
+			const auto *module = p.module < d.draws.size() ? dynamic_cast<const W3DModelDrawModuleData *>(d.draws[p.module].data) : nullptr;
+			target->set_instance_cast_shadow(instance, ObjectShadow::castsMap(d.info ? d.info->tmpl : nullptr, module,
+				p.draw ? p.draw->currentModelState() : nullptr));
+		}
 		if (infantryLightBit >= 0 && d.info && d.info->kindOf_test(infantryLightBit))
 		{
 			target->set_instance_infantry_light(instance, true); // RENDER-1: the infantry light set (S-390)
@@ -490,6 +499,7 @@ Node3D *MapObjectBuilder::build_objects(const Ref<RetailFileSystem> &fsRef, cons
 		const GlobalLight &L = tod.objects[0];
 		Dictionary lit;
 		lit["time_of_day"] = gl.timeOfDay;
+		lit["shadow_color"] = (int64_t)gl.shadowColor;
 		lit["ambient"] = Color(L.ambient[0], L.ambient[1], L.ambient[2]);
 		lit["diffuse"] = Color(L.diffuse[0], L.diffuse[1], L.diffuse[2]);
 		lit["direction"] = Vector3(L.lightPos[0], L.lightPos[2], -L.lightPos[1]);

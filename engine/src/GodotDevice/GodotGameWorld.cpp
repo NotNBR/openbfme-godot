@@ -9,6 +9,7 @@
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include "GodotDevice/GodotGameWorld.h"
+#include "GameClient/ObjectShadow.h"
 #include "GameClient/InGameChat.h"
 
 #include "GameClient/FrameCensus.h"
@@ -761,6 +762,7 @@ static std::vector<std::pair<std::string, std::string>> floorWeatherSwaps(const 
 void GameWorld::build_static_layer(const Ref<RetailFileSystem> &fs, Dictionary &report, Array &errors, Array &stops)
 {
 	W3DInstancer *staticInst = memnew(W3DInstancer);
+	staticInst->set_shadow_receiving(true);
 	staticInst->set_name("StaticObjects");
 	add_child(staticInst);
 	m_staticId = staticInst->get_instance_id();
@@ -826,6 +828,12 @@ void GameWorld::build_static_layer(const Ref<RetailFileSystem> &fs, Dictionary &
 		}
 		++instances;
 		// lane TREES1: a shrub or prop a construction or a felled tree may remove
+		if (p.kind != W3D_DRAWKIND_FLOOR)
+		{
+			const auto *module = p.module < d.draws.size() ? dynamic_cast<const W3DModelDrawModuleData *>(d.draws[p.module].data) : nullptr;
+			staticInst->set_instance_cast_shadow(instance, ObjectShadow::castsMap(d.info ? d.info->tmpl : nullptr, module,
+				p.draw ? p.draw->currentModelState() : nullptr));
+		}
 		if (d.fate == MAPOBJ_CLIENT_SHRUB || d.fate == MAPOBJ_CLIENT_PROP)
 		{
 			FootprintView f;
@@ -1222,6 +1230,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 	t0 = nowMs();
 	build_static_layer(m_fs, report, errors, stops);
 	W3DInstancer *dyn = memnew(W3DInstancer);
+	dyn->set_shadow_receiving(true);
 	dyn->set_name("LiveObjects");
 	add_child(dyn);
 	m_dynamicId = dyn->get_instance_id();
@@ -1409,6 +1418,7 @@ Dictionary GameWorld::load_internal(const LiveGame::Options &loIn, const String 
 		const GlobalLight &L = tod.objects[0];
 		Dictionary lit;
 		lit["time_of_day"] = gl.timeOfDay;
+		lit["shadow_color"] = (int64_t)gl.shadowColor;
 		lit["ambient"] = Color(L.ambient[0], L.ambient[1], L.ambient[2]);
 		lit["diffuse"] = Color(L.diffuse[0], L.diffuse[1], L.diffuse[2]);
 		lit["direction"] = Vector3(L.lightPos[0], L.lightPos[2], -L.lightPos[1]);
@@ -1775,6 +1785,8 @@ void GameWorld::refresh_views(double deltaMs)
 					{
 						dyn->set_instance_transform(ev.instance, entryXf);
 					}
+					dyn->set_instance_cast_shadow(ev.instance, ObjectShadow::castsMap(d->getTemplate(),
+						dynamic_cast<const W3DModelDrawModuleData *>(e.data), e.draw->currentModelState()));
 					if (!ev.posed || animatedNow || flagsChanged) // RENDER-2: a MANUAL track (the build-up) changes its frame without being "animated"
 					{
 						// SMOOTH-1: the native call (no Godot String round trip per animated drawable per frame; the instancer caches the clip lookups)
@@ -1888,6 +1900,8 @@ void GameWorld::refresh_views(double deltaMs)
 						ev.instance = dyn->add_instance(mid, entryXf, String(), 0.0, 1.0);
 						ev.model = model;
 						ev.opacity = 1.0f; // a new instance starts opaque
+							dyn->set_instance_cast_shadow(ev.instance, e.kind != W3D_DRAWKIND_FLOOR &&
+								ObjectShadow::castsMap(d->getTemplate(), nullptr, nullptr));
 					}
 				}
 				else if (entryXfChanged && ev.instance >= 0)
