@@ -298,6 +298,14 @@ void W3DInstancer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("setup", "fs"), &W3DInstancer::setup);
 	ClassDB::bind_method(D_METHOD("add_model", "model_name"), &W3DInstancer::add_model);
 	ClassDB::bind_method(D_METHOD("get_model_report", "model"), &W3DInstancer::get_model_report);
+	ClassDB::bind_method(D_METHOD("get_model_rig", "model"), &W3DInstancer::get_model_rig);
+	ClassDB::bind_method(D_METHOD("get_clip_rig_pose", "model", "clip", "frame"), &W3DInstancer::get_clip_rig_pose);
+	ClassDB::bind_method(D_METHOD("get_instance_model", "instance"), &W3DInstancer::get_instance_model);
+	ClassDB::bind_method(D_METHOD("get_instance_transform", "instance"), &W3DInstancer::get_instance_transform);
+	ClassDB::bind_method(D_METHOD("find_model_instances", "model_name"), &W3DInstancer::find_model_instances);
+	ClassDB::bind_method(D_METHOD("get_instance_rig_pose", "instance"), &W3DInstancer::get_instance_rig_pose);
+	ClassDB::bind_method(D_METHOD("set_instance_rig_pose", "instance", "pose"), &W3DInstancer::set_instance_rig_pose);
+	ClassDB::bind_method(D_METHOD("set_instances_rig_pose", "instances", "pose"), &W3DInstancer::set_instances_rig_pose);
 	ClassDB::bind_method(D_METHOD("add_instance", "model", "transform", "clip", "start_time", "speed"), &W3DInstancer::add_instance, DEFVAL(String()), DEFVAL(0.0), DEFVAL(1.0));
 	ClassDB::bind_method(D_METHOD("set_instance_transform", "instance", "transform"), &W3DInstancer::set_instance_transform);
 	ClassDB::bind_method(D_METHOD("remove_instance", "instance"), &W3DInstancer::remove_instance);
@@ -871,6 +879,227 @@ Dictionary W3DInstancer::get_model_report(int64_t model) const
 	return Models[(size_t)model]->Report;
 }
 
+// ---- custom unit rigs (OpenBFME addition, not retail; docs/CUSTOM_ANIMATION.md) -------------------------------------------------------------------
+
+namespace
+{
+
+Transform3D toRig(const Matrix3D &w3d)
+{
+	const Matrix3D m = W3D_Rig_To_Godot(w3d);
+	return Transform3D(m.Row[0][0], m.Row[0][1], m.Row[0][2], m.Row[1][0], m.Row[1][1], m.Row[1][2], m.Row[2][0], m.Row[2][1], m.Row[2][2], m.Row[0][3], m.Row[1][3],
+		m.Row[2][3]);
+}
+
+Matrix3D fromRig(const Transform3D &t)
+{
+	Matrix3D m;
+	for (int r = 0; r < 3; ++r)
+	{
+		for (int c = 0; c < 3; ++c)
+		{
+			m.Row[r][c] = (float)t.basis[r][c];
+		}
+		m.Row[r][3] = (float)t.origin[r];
+	}
+	return W3D_Rig_From_Godot(m);
+}
+
+TypedArray<Transform3D> toRigPose(const HTreePose &pose)
+{
+	TypedArray<Transform3D> out;
+	out.resize(pose.Num_Pivots());
+	for (int i = 0; i < pose.Num_Pivots(); ++i)
+	{
+		out[i] = toRig(pose.Transform[(size_t)i]);
+	}
+	return out;
+}
+
+} // namespace
+
+bool W3DInstancer::rig_error(const std::string &message)
+{
+	Errors.push_back(message);
+	return false;
+}
+
+bool W3DInstancer::rig_instance(int64_t instance, const char *call)
+{
+	if (instance < 0 || instance >= (int64_t)Instances.size()) return rig_error(std::string(call) + ": no instance " + std::to_string(instance));
+	if (Instances[(size_t)instance].Removed) return rig_error(std::string(call) + ": instance " + std::to_string(instance) + " was removed");
+	return true;
+}
+
+Array W3DInstancer::get_model_rig(int64_t model)
+{
+	Array out;
+	if (model < 0 || model >= (int64_t)Models.size())
+	{
+		rig_error("get_model_rig: no model " + std::to_string(model));
+		return out;
+	}
+	Model &m = *Models[(size_t)model];
+	const HTreeClass &tree = *m.Proto->Tree;
+	if (!m.SkinReady)
+	{
+		std::vector<W3DBoneSkin> skin((size_t)tree.Num_Pivots());
+		for (const DrawItem &d : m.Draws)
+		{
+			std::string error;
+			if (!W3D_Add_Bone_Skin(d.Mesh->Data, d.Sub->BoneIndex, skin, &error))
+			{
+				rig_error("get_model_rig: model " + m.Name + ": " + error);
+				return out;
+			}
+		}
+		m.Skin = std::move(skin);
+		m.SkinReady = true;
+	}
+	for (int i = 0; i < tree.Num_Pivots(); ++i)
+	{
+		const PivotClass &pivot = tree.Get_Pivot(i);
+		const W3DBoneSkin &skin = m.Skin[(size_t)i];
+		Dictionary bone;
+		bone["name"] = toGodot(pivot.Name);
+		bone["parent"] = pivot.ParentIdx;
+		bone["rest"] = toRig(pivot.BaseTransform);
+		bone["vertices"] = skin.Vertices;
+		AABB bounds;
+		if (skin.Vertices > 0)
+		{
+			// the box's corners in Godot axes: y and z swap, and the new z is the old -y, so its range flips
+			const ::Vector3 lo = W3D_Rig_Point_To_Godot(::Vector3(skin.Min.X, skin.Max.Y, skin.Min.Z));
+			const ::Vector3 hi = W3D_Rig_Point_To_Godot(::Vector3(skin.Max.X, skin.Min.Y, skin.Max.Z));
+			bounds = AABB(Vector3(lo.X, lo.Y, lo.Z), Vector3(hi.X - lo.X, hi.Y - lo.Y, hi.Z - lo.Z));
+		}
+		bone["bounds"] = bounds;
+		out.push_back(bone);
+	}
+	return out;
+}
+
+TypedArray<Transform3D> W3DInstancer::get_clip_rig_pose(int64_t model, const String &clip, double frame)
+{
+	if (model < 0 || model >= (int64_t)Models.size())
+	{
+		rig_error("get_clip_rig_pose: no model " + std::to_string(model));
+		return TypedArray<Transform3D>();
+	}
+	if (!Assets)
+	{
+		rig_error("get_clip_rig_pose before setup");
+		return TypedArray<Transform3D>();
+	}
+	Model &m = *Models[(size_t)model];
+	const HAnimClass *anim = resolve_clip_cached(m, toNative(clip)); // records why it does not resolve
+	if (!anim) return TypedArray<Transform3D>();
+	const int last = anim->Get_Num_Frames() - 1;
+	if (!std::isfinite(frame) || frame < 0.0 || frame > (double)last)
+	{
+		rig_error("get_clip_rig_pose: frame " + std::to_string(frame) + " is outside " + anim->Get_Name() + " (0 .. " + std::to_string(last) + ")");
+		return TypedArray<Transform3D>();
+	}
+	HTreePose pose;
+	m.Proto->Tree->Anim_Pose(Matrix3D(), anim, (float)frame, pose);
+	return toRigPose(pose);
+}
+
+int64_t W3DInstancer::get_instance_model(int64_t instance)
+{
+	if (!rig_instance(instance, "get_instance_model")) return -1;
+	return Instances[(size_t)instance].Model;
+}
+
+Transform3D W3DInstancer::get_instance_transform(int64_t instance)
+{
+	if (!rig_instance(instance, "get_instance_transform")) return Transform3D();
+	return Instances[(size_t)instance].Xf;
+}
+
+PackedInt64Array W3DInstancer::find_model_instances(const String &model_name) const
+{
+	PackedInt64Array out;
+	const std::string want = AsciiStringUtil::lowered(toNative(model_name));
+	for (size_t i = 0; i < Instances.size(); ++i)
+	{
+		const Instance &inst = Instances[i];
+		if (!inst.Removed && AsciiStringUtil::lowered(Models[(size_t)inst.Model]->Name) == want) out.push_back((int64_t)i);
+	}
+	return out;
+}
+
+TypedArray<Transform3D> W3DInstancer::get_instance_rig_pose(int64_t instance)
+{
+	if (!rig_instance(instance, "get_instance_rig_pose")) return TypedArray<Transform3D>();
+	ensure_pose(instance);
+	return toRigPose(Instances[(size_t)instance].Pose);
+}
+
+bool W3DInstancer::set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose)
+{
+	PackedInt64Array one;
+	one.push_back(instance);
+	return set_instances_rig_pose(one, pose);
+}
+
+bool W3DInstancer::set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose)
+{
+	// everything is checked before any instance changes
+	const HTreeClass *tree = nullptr;
+	int64_t first = -1;
+	for (int64_t k = 0; k < instances.size(); ++k)
+	{
+		const int64_t id = instances[k];
+		if (pose.is_empty() && id >= 0 && id < (int64_t)Instances.size() && Instances[(size_t)id].Removed) continue; // removal released it: nothing to clear
+		if (!rig_instance(id, "set_instance_rig_pose")) return false;
+		const RenderObjPrototype &proto = *Models[(size_t)Instances[(size_t)id].Model]->Proto;
+		if (tree == nullptr)
+		{
+			tree = proto.Tree;
+			first = id;
+		}
+		else if (AsciiStringUtil::lowered(proto.Tree->Get_Name()) != AsciiStringUtil::lowered(tree->Get_Name()))
+		{
+			return rig_error("set_instance_rig_pose: instances " + std::to_string(first) + " and " + std::to_string(id) + " have different hierarchies (" + tree->Get_Name() +
+				", " + proto.Tree->Get_Name() + ")");
+		}
+	}
+	if (tree == nullptr) return true; // an empty batch
+	if (!pose.is_empty() && pose.size() != tree->Num_Pivots())
+	{
+		return rig_error("set_instance_rig_pose: hierarchy " + tree->Get_Name() + " has " + std::to_string(tree->Num_Pivots()) + " pivots, the pose has " +
+			std::to_string(pose.size()));
+	}
+	std::shared_ptr<const std::vector<Matrix3D>> shared;
+	if (!pose.is_empty())
+	{
+		std::vector<Matrix3D> converted;
+		converted.reserve((size_t)pose.size());
+		for (int64_t i = 0; i < pose.size(); ++i)
+		{
+			const Matrix3D m = fromRig(pose[i]);
+			std::string why;
+			if (!W3D_Rig_Is_Rigid(m, &why))
+			{
+				return rig_error("set_instance_rig_pose: pose[" + std::to_string(i) + "] (" + tree->Get_Pivot((int)i).Name + ") is " + why);
+			}
+			converted.push_back(m);
+		}
+		shared = std::make_shared<const std::vector<Matrix3D>>(std::move(converted));
+	}
+	for (int64_t k = 0; k < instances.size(); ++k)
+	{
+		Instance &inst = Instances[(size_t)instances[k]];
+		if (inst.Removed) continue;
+		inst.RigPose = shared;
+		inst.PoseStale = true;
+		if (shared) adopt_animated_palette(inst);
+	}
+	PoseDirty = true;
+	return true;
+}
+
 // ---- clips / instances -----------------------------------------------------------------------------------------------
 
 Dictionary W3DInstancer::get_clip_info(int64_t model, const String &clip)
@@ -976,6 +1205,7 @@ bool W3DInstancer::remove_instance(int64_t instance)
 
 		inst.PaletteSize = 0;
 		inst.PaletteAnimated = false;
+		inst.RigPose.reset();
 		inst.Pose = HTreePose();
 		decltype(inst.DrawPoseState)().swap(inst.DrawPoseState);
 	}
@@ -1519,6 +1749,11 @@ void W3DInstancer::rebuild_layout()
 void W3DInstancer::evaluate_pose(Instance &inst) const
 {
 	evaluate_animation_pose(inst);
+	if (inst.RigPose)
+	{
+		inst.Pose.Transform = *inst.RigPose; // custom unit rig: the script's transforms replace the clip's (and the bone spins); its visibility and fade stay
+		return;
+	}
 	if (!inst.BoneSpins.empty())
 	{
 		const HTreeClass &tree = *Models[(size_t)inst.Model]->Proto->Tree;
@@ -1918,7 +2153,7 @@ void W3DInstancer::update_now()
 	for (size_t i = 0; i < Instances.size(); ++i)
 	{
 		Instance &inst = Instances[i];
-		if (!inst.Removed && (inst.PoseStale || (timeMoved && inst.Anim != nullptr && !inst.Explicit)))
+		if (!inst.Removed && (inst.PoseStale || (timeMoved && inst.Anim != nullptr && !inst.Explicit && !inst.RigPose)))
 		{
 			if (cull)
 			{

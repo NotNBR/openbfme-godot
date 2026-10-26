@@ -21,6 +21,7 @@
 #include "Libraries/WWVegas/WW3D2/assetmgr.h"
 #include "Libraries/WWVegas/WW3D2/htree.h"
 #include "Libraries/WWVegas/WW3D2/meshrender.h"
+#include "Libraries/WWVegas/WW3D2/w3drig.h"
 #include "GameEngineDevice/W3DDevice/GameClient/HouseColor.h"
 #include "Libraries/WWVegas/WW3D2/w3dstops.h"
 #include "Libraries/WWVegas/WW3D2/w3dsort.h"
@@ -72,6 +73,33 @@ public:
 	// Builds the model (meshes, materials, MultiMeshes). Returns the model id, or -1; the report says why either way.
 	int64_t add_model(const String &model_name);
 	Dictionary get_model_report(int64_t model) const;
+
+	// ---- custom unit rigs: an OpenBFME addition, not retail (docs/CUSTOM_ANIMATION.md). Presentation only: the simulation never reads them.
+	// Coordinates are Godot model axes (W3D (x, y, z) -> (x, z, -y), Y up, w3drig.h), one unit per W3D unit, without the instance transform.
+	// A call that fails returns an empty value or false, changes nothing and records the reason in get_errors().
+	//
+	// One dictionary per pivot, parents before children: { name, parent (-1 for the root), rest (the bind transform relative to the parent),
+	// vertices (the drawn vertices the pivot carries most), bounds (an AABB of those vertices in the pivot's own frame, bind pose; empty when
+	// vertices is 0) }. Computed on the first call per model.
+	Array get_model_rig(int64_t model);
+	// The model-space pose of a clip at a frame (0 .. frames - 1, fractions interpolate), one transform per pivot, without an instance. Clip names
+	// are resolved as in set_instance_clip.
+	TypedArray<Transform3D> get_clip_rig_pose(int64_t model, const String &clip, double frame);
+	// The model an instance was added with.
+	int64_t get_instance_model(int64_t instance);
+	// The placement given to add_instance / set_instance_transform (this node's space).
+	Transform3D get_instance_transform(int64_t instance);
+	// The live instances of every model of this name (case-insensitive, colour sets and texture swaps included), in creation order.
+	PackedInt64Array find_model_instances(const String &model_name) const;
+	// The model-space pose of an instance as of the last update (call update_now() after posing), one transform per pivot.
+	TypedArray<Transform3D> get_instance_rig_pose(int64_t instance);
+	// Overrides the instance's pose with model-space transforms, one per pivot, each a rotation plus a translation (no scale, shear or
+	// reflection). The override holds until it is cleared with an empty array: set_instance_clip and set_instance_pose change the clip
+	// underneath (its pivot visibility and fade still apply) but not the transforms. A held pose is not evaluated again while the clock runs.
+	// remove_instance releases it; clearing a removed instance succeeds.
+	bool set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose);
+	// The same pose for several instances of one hierarchy, checked as a whole before any instance changes; the instances share one copy.
+	bool set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose);
 
 	// clip: "HIERARCHY.CLIP" or a clip name of the model's hierarchy; empty = bind pose. Returns the instance id or -1.
 	int64_t add_instance(int64_t model, const Transform3D &transform, const String &clip, double start_time, double speed);
@@ -242,6 +270,8 @@ private:
 		int Dithered = 0;                // S-029 counts of the last write of this model
 		int SortedItems = 0;
 		float CullRadius = -1.0f;        // lane PERF-3: cull_radius, computed on first use
+		std::vector<W3DBoneSkin> Skin;   // get_model_rig: per pivot, computed on first use
+		bool SkinReady = false;
 	};
 	struct Instance
 	{
@@ -265,6 +295,7 @@ private:
 		int Sway = 0;                         // lane VISUAL-2: set_instance_sway (INSTANCE_CUSTOM.w += 1024 * Sway)
 		bool Fogged = false;                  // lane VISUAL-2: set_instance_fogged (INSTANCE_CUSTOM.w += 16384)
 		std::vector<std::uint8_t> HiddenSubs; // by sub object index; empty = none hidden (set_instance_hidden_subobjects)
+		std::shared_ptr<const std::vector<Matrix3D>> RigPose; // set_instance(s)_rig_pose: W3D model space, one per pivot; null = none
 		bool Removed = false;                 // remove_instance: skipped by the pose and buffer passes
 		float Opacity = 1.0f;                 // set_instance_opacity (lane PROJ-2)
 		bool PoseStale = true;                // SMOOTH-1: the pose inputs changed since the last evaluation (clip-driven instances follow GlobalTime)
@@ -289,6 +320,8 @@ private:
 	void rebuild_layout();
 	void evaluate_pose(Instance &inst) const;
 	void evaluate_animation_pose(Instance &inst) const; ///< the animation part of evaluate_pose (lane COMBAT-4 adds the bone spins after it)
+	bool rig_instance(int64_t instance, const char *call); // a live instance, else an error recorded for `call`
+	bool rig_error(const std::string &message);             // records the message; false
 	void write_palette(const Instance &inst);
 	void write_buffers();
 	const HAnimClass *resolve_clip_cached(Model &m, const std::string &name);
