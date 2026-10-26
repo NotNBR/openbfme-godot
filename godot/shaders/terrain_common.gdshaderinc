@@ -95,6 +95,39 @@ varying vec2 v_local;        // cell-local coordinates (0..1) of the pixel
 varying flat vec4 v_wrap;    // base layer class wrap rect (x0, y0, w, h); w == 0: none
 varying flat float v_rec;    // record index of the cell's blend layers, or -1
 
+#include "res://shaders/natural_ground.gdshaderinc"
+#include "res://shaders/grass_field.gdshaderinc"
+uniform bool grass_surface_enabled = false;
+uniform sampler2D terrain_guide : filter_linear_mipmap, repeat_disable, hint_default_black;
+uniform vec2 world_origin = vec2(0);
+uniform vec2 grid_size = vec2(1);
+varying float v_grass_depth;
+
+// Replace sub-pixel geometry with matching turf, before the ordinary cloud/fog/shroud passes.
+vec3 grass_canopy(vec3 original, vec4 vcol) {
+ vec2 guv=(v_ground_xy-world_origin)/(grid_size*10.0);
+ vec4 guide=texture(terrain_guide,guv);
+ float inside=step(0.0,guv.x)*step(0.0,guv.y)*step(guv.x,1.0)*step(guv.y,1.0);
+ vec3 regional=textureLod(terrain_guide,guv,1.0).rgb;
+ float coverage=grass_density(v_ground_xy,guide.a,regional)*inside;
+ float amount=grass_surface_mix(vec2(v_ground_xy.x,-v_ground_xy.y),v_grass_depth);
+ vec3 base=grass_palette(regional,v_ground_xy);
+ float footprint=max(length(dFdx(v_ground_xy)),length(dFdy(v_ground_xy)));
+ float fine=(noise(v_ground_xy*1.1)-0.5)*(1.0-smoothstep(0.5,2.0,footprint));
+ // Broad moving light variation survives zoom; amplitude stays subtle to avoid sliding texture.
+ float gust=sin(dot(v_ground_xy,vec2(0.035,0.021))-TIME*1.35);
+ float ripple=gust*min(grass_wind_strength,0.6)*0.035;
+ vec3 sun=overbright ? sun_color*0.5 : sun_color;
+ vec3 light=(vcol.rgb+0.5*lightning_color+sun*max(normalize(sun_dir_sage).z,0.15))*(overbright ? 2.0 : 1.0);
+ // The blades' own clumps, as light and shade, keep a meadow readable once single blades are subpixel.
+ float clumps=(grass_colony(v_ground_xy)-0.5)*0.40;
+ vec3 canopy=base*light*(0.94+fine*0.12+ripple+clumps);
+ // Restrained contact darkening ties roots to the soil, strongest under dense nearby clumps.
+ float contact=1.0-0.13*coverage*(1.0-amount);
+ return mix(original*contact,canopy,clamp(amount*coverage*0.90,0.0,0.90));
+}
+
+
 // Varyings may only be assigned in vertex() itself, so the maths returns its results through out parameters.
 void terrain_vertex(vec3 vtx, vec3 nrm, vec3 cam_world, float time, out vec3 lts, out vec3 hts, out float fog, out vec2 cloud, out vec2 macro_uv) {
 	vec3 sp = vec3(vtx.x, -vtx.z, vtx.y);
@@ -161,7 +194,7 @@ vec4 record_texel(int rec, int k) {
 }
 
 // One layer's lit colour in retail (gamma) space, before cloud / macro / fog.
-vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod) {
+vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod, float meadow, vec3 pattern, vec4 detail) {
 	vec2 uv = wrap_into_class(rect, uv_unwrapped);
 	vec3 albedo = textureLod(base_atlas, uv, lod).rgb;
 	if (debug_mode == 7) {
@@ -171,6 +204,9 @@ vec3 shade_layer(vec2 uv_unwrapped, vec4 rect, vec4 vcol, float lod) {
 	vec2 nxy = 2.0 * nm.xy - 1.0;
 	float nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
 	vec3 N = normalize(vec3(nxy, nz));
+	if (natural_ground_enabled && debug_mode == 0 && meadow > 0.0) {
+		ground_surface(meadow, pattern, detail, albedo, N, nm.b);
+	}
 	vec3 Lt = normalize(v_lts);
 	vec3 Ht = normalize(v_hts);
 	float NdL = dot(N, Lt);
@@ -212,12 +248,33 @@ vec3 terrain_output(vec2 uv0, vec4 vcol) {
 	float lod1 = atlas_lod(uv1);
 	float lod2 = atlas_lod(uv2);
 
-	vec3 comp = shade_layer(uv0, v_wrap, vcol, lod0);
+	vec3 pattern = vec3(0.0);
+	vec4 detail = vec4(0.5);
+	float meadow0 = 0.0;
+	float meadow1 = 0.0;
+	float meadow2 = 0.0;
+	if (natural_ground_enabled && debug_mode == 0) {
+		meadow0 = textureLod(meadow_mask, wrap_into_class(v_wrap, uv0), lod0).r;
+		meadow1 = has1 ? textureLod(meadow_mask, wrap_into_class(rect1, uv1), lod1).r : 0.0;
+		meadow2 = has2 ? textureLod(meadow_mask, wrap_into_class(rect2, uv2), lod2).r : 0.0;
+		// Explicit derivatives keep mip selection valid at divergent material boundaries.
+		vec2 ground_uv = v_ground_xy / 16.0;
+		vec2 ground_dx = dFdx(ground_uv);
+		vec2 ground_dy = dFdy(ground_uv);
+		if (max(meadow0, max(meadow1, meadow2)) > 0.0) {
+			pattern = ground_pattern(v_ground_xy, max(length(ground_dx), length(ground_dy)) * 16.0);
+			// A single shared detail sample for all three layers, with full mip filtering.
+			detail = textureGrad(turf_detail, ground_uv, ground_dx, ground_dy);
+		}
+		if (has1) { alpha1 = ground_blend(alpha1, meadow0, meadow1, pattern, detail); }
+		if (has2) { alpha2 = ground_blend(alpha2, mix(meadow0, meadow1, has1 ? alpha1 : 0.0), meadow2, pattern, detail); }
+	}
+	vec3 comp = shade_layer(uv0, v_wrap, vcol, lod0, meadow0, pattern, detail);
 	if (has1) {
-		comp = mix(comp, shade_layer(uv1, rect1, vcol, lod1), alpha1);
+		comp = mix(comp, shade_layer(uv1, rect1, vcol, lod1, meadow1, pattern, detail), alpha1);
 	}
 	if (has2) {
-		comp = mix(comp, shade_layer(uv2, rect2, vcol, lod2), alpha2);
+		comp = mix(comp, shade_layer(uv2, rect2, vcol, lod2, meadow2, pattern, detail), alpha2);
 	}
 	if (debug_mode == 4) { return vec3(fract(uv0 * 16.0), 0.0); }
 	if (debug_mode == 7) { return retail_output(clamp(comp, 0.0, 1.0)); }
@@ -226,6 +283,7 @@ vec3 terrain_output(vec2 uv0, vec4 vcol) {
 	vec3 cloud = texture(cloud_tex, v_cloud).rgb;
 	vec3 macro = texture(macro_tex, v_macro).rgb;
 	if (debug_mode == 6) { return retail_output(cloud * macro); }
+	if (grass_surface_enabled && debug_mode == 0) { comp = grass_canopy(comp, vcol); }
 	vec3 col = mix(fog_color, comp * cloud * macro, v_fog);
 	col = col * shroud;
 	if (shroud_enabled) {
