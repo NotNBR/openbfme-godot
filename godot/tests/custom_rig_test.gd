@@ -16,6 +16,60 @@ func near(a: Transform3D, b: Transform3D) -> bool:
 	# tolerance: single-precision parent inversion and recomposition across a 19-bone hierarchy; 0.0001 model units.
 	return a.origin.distance_to(b.origin) < 0.0001 and (a.basis.x - b.basis.x).length() < 0.0001 and (a.basis.y - b.basis.y).length() < 0.0001 and (a.basis.z - b.basis.z).length() < 0.0001
 
+func check_placement_and_skin(inst: Node, model: int, rig: Array) -> void:
+	var placed := Transform3D(Basis(Vector3.UP, 0.5), Vector3(12.5, 3.0, -7.25))
+	var c: int = inst.add_instance(model, placed, "IUPikeman_IDLA", 0.0, 1.0)
+	check(inst.get_instance_transform(c) == placed, "instance transform reads back as placed")
+	inst.remove_instance(c)
+	check(inst.get_instance_transform(c) == Transform3D.IDENTITY, "removed instance has no transform")
+	var drawn := 0
+	for sub in inst.get_model_report(model).sub_objects:
+		if sub.kind == "mesh" and not sub.get("hidden", false) and not sub.get("error", false):
+			drawn += int(sub.vertices)
+	var carried := 0
+	for bone in rig:
+		carried += int(bone.vertices)
+	check(carried == drawn, "every drawn vertex counts for one bone (%d of %d)" % [carried, drawn])
+	check(rig[rig.map(func(b): return b.name).find("B_WEAPON")].vertices > 0, "the pike's bone carries vertices")
+
+
+func check_fresh_pose(inst: Node, id: int, rig: Array) -> void:
+	var raised: Array[Transform3D] = []
+	for bone in rig:
+		var pose: Transform3D = bone.pose
+		pose.origin.y += 1.0
+		raised.append(pose)
+	check(inst.set_instance_rig_pose(id, raised), "pose for the fresh read")
+	var read: Array = inst.get_instance_rig(id)                   # no update_now in between
+	check(near(read[0].pose, raised[0]) and near(read[-1].pose, raised[-1]), "rig reads the pose just set, before an update")
+	check(inst.set_instance_rig_pose(id, []), "fresh read cleared")
+	inst.update_now()
+
+
+func check_hidden_bones(inst: Node, id: int, rig: Array) -> void:
+	var weapon: int = rig.map(func(b): return b.name).find("B_WEAPON")
+	var shown: PackedFloat32Array = inst.get_instance_palette(id)
+	check(inst.set_instance_hidden_bones(id, PackedStringArray(["b_weapon"])), "hide a bone by name")
+	inst.update_now()
+	var hidden: PackedFloat32Array = inst.get_instance_palette(id)
+	var row := weapon * 12
+	var collapsed := true
+	for r in 3:
+		collapsed = collapsed and hidden[row + r * 4] == 0.0 and hidden[row + r * 4 + 1] == 0.0 and hidden[row + r * 4 + 2] == 0.0
+		collapsed = collapsed and hidden[row + r * 4 + 3] == shown[row + r * 4 + 3]
+	check(collapsed, "a hidden bone's palette keeps only its place")
+	var others := true
+	for i in shown.size():
+		if i < row or i >= row + 12: others = others and hidden[i] == shown[i]
+	check(others, "other bones untouched")
+	check(not inst.set_instance_hidden_bones(id, PackedStringArray(["NO_SUCH_BONE"])), "unknown bone rejected")
+	inst.update_now()
+	check(inst.get_instance_palette(id) == hidden, "rejected names change nothing")
+	check(inst.set_instance_hidden_bones(id, PackedStringArray()), "show every bone again")
+	inst.update_now()
+	check(inst.get_instance_palette(id) == shown, "palette restored")
+
+
 func run() -> void:
 	var fs = ClassDB.instantiate("RetailFileSystem")
 	if not fs.mount_retail().ok:
@@ -51,6 +105,9 @@ func run() -> void:
 	check(inst.set_instances_rig_pose(PackedInt64Array([a, b]), []), "batch clear")
 	inst.update_now()
 	check(inst.get_instance_rig(a) == before and inst.get_instance_rig(b) == before, "batch clear restores both units")
+	check_placement_and_skin(inst, model, before)
+	check_fresh_pose(inst, b, before)
+	check_hidden_bones(inst, b, before)
 	var rig = Rig.new()
 	root.add_child(rig)
 	check(rig.attach(inst, a) == OK, "attach")

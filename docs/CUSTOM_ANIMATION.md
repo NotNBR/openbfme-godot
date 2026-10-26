@@ -69,11 +69,26 @@ for callers with their own pose evaluator, who must coordinate ownership.
   case-insensitively, including its house-color variants. IDs belong to that
   instancer and must be queried again after the map/instancer is rebuilt.
 - `get_instance_rig(instance)` returns one dictionary per pivot: `name`, `parent`,
-  local `rest`, and model-space `pose`. Invalid/removed instances return `[]`.
+  local `rest`, model-space `pose`, and what the bone carries: `vertices`, the
+  drawn vertices it carries most (its own rigid meshes, and skin vertices whose
+  larger weight is on it), and `bounds`, their box in the bind pose (model space).
+  The model names no roles; the bounds tell a long thin sword bone from a cape
+  bone. The pose is current even without pose culling: a pose set since the last
+  update reads back at once. Invalid/removed instances return `[]`.
+- `get_instance_transform(instance)` returns the placement given to
+  `add_instance`/`set_instance_transform`, in the instancer's space (identity for
+  an invalid or removed instance), so a caller can find where a map put a unit.
 - `set_instance_rig_pose(instance, Array[Transform3D])` accepts a complete set of
   model-space transforms, or `[]` to clear the override. It validates count,
   finite values and rigid rotation before changing anything. It returns false
   on invalid input or a removed instance.
+- `set_instance_hidden_bones(instance, names)` hides what the named bones carry
+  (case-insensitive): their skin vertices collapse onto the bone and rigid sub
+  objects on them are not drawn, in the visible and shadow passes. It reaches
+  parts skinned into a shared mesh, such as a hero's weapon, which
+  `set_instance_hidden_subobjects` cannot. A vertex shared with a visible bone
+  is pulled towards the hidden one by its weight. `[]` shows everything; an unknown name returns false and
+  changes nothing. Removing an instance releases its rig pose and hidden bones.
 - Coordinates are Godot model space: Y up, one unit per SAGE world unit.
   The native boundary converts `(x,y,z)` from W3D to `(x,z,-y)`, including bone
   axes. Instance/world placement stays in `set_instance_transform`; root bone
