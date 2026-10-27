@@ -318,6 +318,36 @@ struct CahShellFx
 };
 } // namespace
 
+TEST_CASE("cahcam1 retail: main-menu preview resets on page and hero selection, not a repeated page")
+{
+	OPENBFME_REQUIRE_START(s);
+	CahShellFx c(s, true);
+	AptCreateAHero *scr = c.screen();
+	REQUIRE(scr);
+	CHECK(c.fx->services.countRequests(ShellAction::CreateAHero) == 1);
+	const CreateAHeroSubClass *sub = s->world->createAHeroSystem().subClass(0, 1);
+	REQUIRE(sub);
+	CHECK(sub->viewInfo.loaded);
+	CHECK(sub->viewInfo.normalCam == 0.5f); // Omitted in the retail include: constructor, not zero initialization.
+	for (char page : { 'C', 'A', 'P', 'M' })
+	{
+		const auto revision = scr->cameraRevision();
+		scr->showPage(page);
+		CHECK(scr->cameraRevision() == revision + 1);
+		scr->showPage(page);
+		CHECK(scr->cameraRevision() == revision + 1);
+	}
+	auto revision = scr->cameraRevision();
+	scr->selectHero(0);
+	CHECK(scr->cameraRevision() == revision + 1);
+	revision = scr->cameraRevision();
+	scr->setClassAndType(0, 1);
+	CHECK(scr->cameraRevision() == revision + 1);
+	revision = scr->cameraRevision();
+	scr->setClassAndType(-1, -1);
+	CHECK(scr->cameraRevision() == revision);
+}
+
 TEST_CASE("cah1 retail shell: the main menu's Create-a-Hero pushes CreateAHero.apt, the promo page first, then the Manager lists the system heroes")
 {
 	OPENBFME_REQUIRE_START(s);

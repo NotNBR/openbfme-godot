@@ -133,6 +133,8 @@ public:
 	const PathfindWallGeometry *getWallGeometry() const override; // lane WALL-1: from the world's PathfindWallMeshSource, kept while the transform holds
 	bool isSkirmishAIControlled() const override; // lane WALL-2: Waypoint::isValidUnitType's AllowNonSkirmishAI test
 	bool inMoveAwaySearch() const override;       // lane WALL-2: RW AI + 0x3CF (Waypoint::isValidUnitType's type 7 test)
+	bool hasCurrentWeapon() const override;             // lane LOS-1: RW 0x68B58C(0)
+	bool isClearGoalFiringLineOfSightTerrain(const Coord3D &goalPos, const PathfindObject &victim) const override; // lane LOS-1: RW 0x6CC6DD
 
 private:
 	// AIWorld::movementInfo of the object's template, remembered with the template it was looked up for (lane PERF-1: the pathfinder and the

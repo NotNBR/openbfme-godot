@@ -686,11 +686,14 @@ TEST_CASE("BACKLOG2 r1 determinism: three units on a build site: the draw assign
 	// agreeing): the goals are TARGET-1's, Aragorn ends elsewhere (was 0x4425E21A 0x458D2BBD) and the last hash is 0x165E2BAF (TARGET-1: 0xA0300E3C)
 	// merge queue q26: community #74's spiral (RW 0x6FA2A4) moves Faramir and Aragorn as #74's own port measured (were 0x4422A000 0x458CA400 / 0x44224BB5
 	// 0x458CE977), the goals unchanged
-	CHECK(a.positions == std::vector<std::uint32_t>{ 0x442A2000u, 0x458ED400u, 0x44202000u, 0x458CA400u, 0x44246B33u, 0x458D5A9Au });
+	// merge queue q27: LOS-1 (the terrain line of sight in the target search and the attack view) moves Aragorn as LOS-1's own port measured (was
+	// 0x44246B33 0x458D5A9A), the goals unchanged; the last hash 0x4BFCBFF6 -> 0x5572D938 (measured at each merge point: LOS-1 alone)
+	CHECK(a.positions == std::vector<std::uint32_t>{ 0x442A2000u, 0x458ED400u, 0x44202000u, 0x458CA400u, 0x4413A000u, 0x458D9400u });
 	// merge queue q24: the last hash 0x165E2BAF -> 0x0E2AE1AF, goals and positions unchanged: OFFMAP-1 (RotWK's idle state RW 0x745A64: no ZH frame <= 1 snap, no
 	// pathfinder position update) moves it (bisected: the q24 tree with CAMPUI-1 alone keeps q23's hash); measured once on the merged tree
 	// merge queue q26 (community #73 / #74 with BANNER-1, SIEGE-1 and the rest, measured once on the merged tree): 0x0E2AE1AF -> 0x4BFCBFF6
-	CHECK(a.hashes.back() == 0x4BFCBFF6U);   // q19: BACKLOG-8 hashes the formation and march rows of AIData / GameData in GameLogicSettings::crc (unconditionally) and moves the march;
+	// merge queue q28 (measured once on the merged tree and at each merge point): 0x5572D938 -> 0x30F97357
+	CHECK(a.hashes.back() == 0x30F97357U);   // q19: BACKLOG-8 hashes the formation and march rows of AIData / GameData in GameLogicSettings::crc (unconditionally) and moves the march;
 	                                         // re-measured on the merged tree (a CI host); was 0x78A9CB12 (q18: DEVPORT-3C castle keep gate / Horde removal record, before 0x2BD4804B); goals and positions unchanged
 	// every unit left the spot it stood on
 	CHECK(a.positions[0] != a.goals[0]);

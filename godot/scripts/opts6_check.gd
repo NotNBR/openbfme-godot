@@ -1238,9 +1238,9 @@ func screen_inventory(name: String) -> Array:
 				"LanOpenPlay.LobbyMain.instance224.OnSortName.OnSortName", "LanOpenPlay.LobbyMain.instance224.OnSortMap.OnSortHeroMap",
 				"LanOpenPlay.LobbyMain.instance224.OnSortPlayers.OnSortPlayers", "LanOpenPlay.LobbyMain.TopRightFrame.LanLobby::NameEntry",
 				"LanOpenPlay.LobbyMain.instance224.LanLobby::CustomGamesList", "LanOpenPlay.LobbyMain.TopRightFrame.CreateGame.instance11",
+				# the game browser is no host (MpGameSetup::HostMode is the owner's host flag, RW 0x845AE2 = BFME2 AptMpGameSetup::ExternFunc query 0):
+				# the map list and its sort tabs belong to Create Game's setup; the selected game's map info stays
 				"LanOpenPlay.LobbyMain.instance1.TabMap.instance7", "LanOpenPlay.LobbyMain.instance1.TabButtons.RulesTab.bttn",
-				"LanOpenPlay.LobbyMain.instance1.MapsTabSelected.MapsTab_Assorted.ArrowTab.OnSortIcon", "LanOpenPlay.LobbyMain.instance1.MapsTabSelected.MapsTab_Assorted.NameTab.OnSortName",
-				"LanOpenPlay.LobbyMain.instance1.MapsTabSelected.MapsTab_Assorted.PlayersTab.OnSortPlayers", "LanOpenPlay.LobbyMain.instance1.MapsTabSelected.MapsTab_Assorted.instance22.MapList",
 				"LanOpenPlay.LobbyMain.instance1.MapsTabSelected.instance1.MapInfo.MapInfo", "MainButtons.MainMenu.bttn", "MainButtons.Options.bttn", "instance82.MessengerButton.bttn"]
 	return []
 

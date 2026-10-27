@@ -6,6 +6,7 @@
 #include "Libraries/WWVegas/WW3D2/assetmgr.h"
 
 #include "Common/RetailArchivePolicy.h"
+#include "Common/BuildVersion.h"
 #include "Common/ArchiveFile.h"
 #include "GameClient/UserDataFolder.h"
 #include "Common/ModEngineFeatures.h"
@@ -514,6 +515,12 @@ Dictionary RetailFileSystem::mountFrom(const std::string &rotwkRoot, const std::
 		result["md5_cache_hits"] = report.md5CacheHits;
 		result["mounted"] = mounted;
 		result["excluded_found"] = excluded;
+		PackedStringArray languages; // issue #49: "<install>:<language>" (RetailMountReport::languages)
+		for (const std::string &l : report.languages)
+		{
+			languages.push_back(toGodot(l));
+		}
+		result["languages"] = languages;
 		if (report.ok && !m_installModArgs.is_empty())
 		{
 			// lane MODS-2: an install-folder mod: the file system the merged game folder would give (Common/ModMount.h MountInstallOverlay)
@@ -546,6 +553,27 @@ Dictionary RetailFileSystem::mountFrom(const std::string &rotwkRoot, const std::
 			{
 				report.ok = false; // the mod the player asked for, or nothing (never retail instead)
 			}
+		}
+		if (report.ok && !report.unverifiedLanguage.empty())
+		{
+			// PR #77: language archives no pin covers were mounted: the texts of the warning the game shows once per install (scripts/release/release.gd)
+			Dictionary warning;
+			Array archives;
+			for (const UnverifiedLanguageArchive &a : report.unverifiedLanguage)
+			{
+				Dictionary d;
+				d["install"] = toGodot(a.install);
+				d["path"] = toGodot(RetailPrintableText(a.path));
+				d["language"] = toGodot(RetailPrintableText(a.language));
+				d["md5"] = toGodot(a.md5);
+				d["size"] = (int64_t)a.size;
+				archives.push_back(d);
+			}
+			warning["archives"] = archives;
+			warning["message"] = toGodot(RetailLanguageWarningText(report.unverifiedLanguage));
+			warning["details"] = toGodot(RetailLanguageWarningDetails(report.unverifiedLanguage, BuildVersion::versionLine()));
+			warning["signature"] = toGodot(RetailLanguageWarningSignature(report.unverifiedLanguage));
+			result["unverified_language"] = warning;
 		}
 		if (report.ok)
 		{
@@ -581,6 +609,28 @@ Dictionary RetailFileSystem::mountFrom(const std::string &rotwkRoot, const std::
 		if (m_mounted && !m_modArgs.is_empty())
 		{
 			mountMods(rotwkRoot, errors);
+		}
+		// lane SDK-1: the asset packs' models against the files they replace in the mounted set (game and mods): a model that does not keep
+		// the original's skeleton is left out with a note; a pack model that is not a W3D file stops the start (AssetPacks::checkModels)
+		if (m_mounted && !m_packs.empty())
+		{
+			ArchiveW3DFileSource mounted(*m_fs);
+			std::vector<std::string> packErrors;
+			if (!m_packs.checkModels(mounted, packErrors))
+			{
+				for (const std::string &e : packErrors)
+				{
+					errors.push_back(toGodot(e));
+				}
+				m_fs.reset();
+				m_mounted = false;
+			}
+			PackedStringArray notes;
+			for (const std::string &n : m_packs.notes())
+			{
+				notes.push_back(toGodot(n));
+			}
+			result["asset_pack_notes"] = notes;
 		}
 	}
 
@@ -734,6 +784,12 @@ Dictionary RetailFileSystem::mountBfme2Shell(const std::string &bfme2Root)
 			excluded.push_back(toGodot(e));
 		}
 		result["excluded_found"] = excluded;
+		PackedStringArray languages; // issue #49: "<install>:<language>" (RetailMountReport::languages)
+		for (const std::string &l : report.languages)
+		{
+			languages.push_back(toGodot(l));
+		}
+		result["languages"] = languages;
 		PackedStringArray warnings;
 		for (const std::string &w : report.warnings)
 		{

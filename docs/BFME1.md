@@ -121,6 +121,22 @@ These are the places where BFME1's data or menus differ from RotWK's. Each one i
 - **Pause menu:** BFME1 uses type-8 `PushData` constants to reference the active constant pool. Resolving these initializes each button's own text and callback, including the Restart/Exit confirmations.
 - **Keys and voices:** only `Data\INI\CommandMap.ini` exists (there's no root `CommandMap.ini`), and there's no
   `CrowdResponse.ini`, because BFME1 has no crowd responses.
+- **Siege initiation sounds:** the update-based siege deploy powers retain BFME1's `InitiateSound2` alongside
+  `InitiateSound` in their own base parser. BFME2/RotWK still reject the extra row. This fixes siege-ladder object
+  loading; initiation-sound playback remains unimplemented under S-4942.
+- **Legacy behavior fields:** `DynamicPortalBehaviour` reads `AllowKindOf` and `RejectKindOf` only for BFME1 data.
+  A unit must match any allowed kind and no rejected kind; an explicitly empty allow mask admits nothing.
+  These become the shared waypoint filter with an ANY rule, not ordinary Object fields. Sources: Open-BFME-1
+  `DynamicPortalBehaviourRva001F96E0.cpp` and `Map/Waypoint_method001ABBB0.cpp`.
+  The default allows all defined kinds and rejects none. Rejecting `CAVALRY` also rejects units with the
+  `MOUNTED` model condition, even without the cavalry kind. This does not establish full BFME1 waypoint parity.
+  `BloodthirstyUpdate` also reads BFME1's `NumToSacrifice` (default 1) and `InitiateVoice2` without widening
+  BFME2/RotWK's field tables. The second initiation voice plays alongside the first, independently of crowd responses
+  (`MessageStream/CommandXlatVoice.cpp`, case `0x7E9` and its two-slot playback tail). Voice voting groups the ordered
+  pair of initiation sounds case-insensitively, including choices with only a second sound.
+  The recovered BFME1 `Update/Rva00287290Update.cpp` awards experience on every accepted sacrifice, as the shared
+  runtime does; it does not gate experience on `NumToSacrifice`. That field is retained, but any further purpose is
+  unverified, so no quota-based veterancy rule is invented.
 - **Main menu:** `MainMenu.apt` shows its menu bar only when `ShowMainMenu()` is called. INFERENCE: BFME1's
   `OnInitialized` makes that call (Open-BFME-1 declares `_bfme_onInitialized` without its body). Its button instance
   names don't match the buttons: the clip named `Skirmish` is the Campaign button, and `Tutorial` is Skirmish. Scripts
@@ -147,6 +163,18 @@ to start a BFME2 linear campaign. BFME1 currently uses the English language view
 ## Checks
 
 Synthetic CSF tests are included in `openbfme_tests --test-case="GameText:*"`.
+Legacy portal filtering, both bloodthirsty voice slots, per-sacrifice experience, and BFME2/RotWK rejection are
+covered by `openbfme_tests --test-case="bfme1 isolation:*"`. A core-only installed-data check can run without Godot:
+
+```sh
+BFME1_INSTALL="$PWD/games/BFME1" engine/build/openbfme_tests \
+  --test-case="bfme1 isolation retail: installed BFME1 object world*"
+```
+
+It mounts BIG archives in BFME1 order (excluding launcher-generated `!!!` overrides), checks every subsystem parse
+error, and verifies the castle-upgrade parent and child templates load. Without `BFME1_INSTALL` it prints SKIP;
+that is not a passed installed-data check. It does not launch gameplay or write player settings.
+
 Run `engine/build/openbfme_tests --test-case="GameText:*"` from the checkout
 root on Linux after building the core tests (Windows: `engine\build\openbfme_tests.exe`
 with the same argument). No retail data is needed for these synthetic tests.

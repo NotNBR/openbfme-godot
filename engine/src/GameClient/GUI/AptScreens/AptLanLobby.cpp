@@ -372,13 +372,13 @@ void AptLanLobby::backToLobby()
 	// RW 0x847AB2: state 0 and the movie's CancelGame (its "_lobby" frame); retail's state 0 then waits for the movie (RW 0x847ED0) before StartLobby,
 	// which plays the same frame: here the list state follows at once, so "_lobby" is not started twice (a second start rebuilds the list's gadgets)
 	restoreMode(); // lane UBERJOIN-1
+	setHostModeText("0");
 	invokeRoot("CancelGame");
 	m_state = 1;
 	m_ready = false;
 	m_listDirty = true;
 	m_gameRows.clear(); // until the lobby's list is filled again
 	m_listedHosts.clear();
-	setHostModeText("1");
 }
 
 void AptLanLobby::enterSetup(bool host)

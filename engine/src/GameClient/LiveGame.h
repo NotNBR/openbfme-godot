@@ -64,6 +64,7 @@
 #include <vector>
 
 class ArchiveFileSystem;
+class SdkScriptHost;
 class ArchiveW3DFileSource;
 class WW3DAssetManager;
 
@@ -129,6 +130,9 @@ public:
 	// being computed. The drawables belong to the render side and need no wait. Lane RENDERWAIT-1: each accessor passes its caller's file and line
 	// (filled in by the compiler) to waitIdle, which names the site of every blocking wait (logicWaitSites)
 	GameLogic &logic(const char *file = __builtin_FILE(), int line = __builtin_LINE()) { holdLogic(file, line); return *m_logic; }
+	// lane SDK-2: the mod scripts' banners (ui.banner) and report lines since the last call; any thread (GameLogic/Sdk/SdkScriptHost.h)
+	std::vector<std::string> takeSdkBanners();
+	std::vector<std::string> takeSdkReports();
 	DrawableManager &drawables() { return *m_drawables; }
 	// RENDER-2: the launch bone provider the logic's projectile launches ask (CombatState::setLaunchOffsets)
 	DrawableLaunchBones &launchBones(const char *file = __builtin_FILE(), int line = __builtin_LINE()) { holdLogic(file, line); return *m_launchBones; }
@@ -364,6 +368,7 @@ private:
 	std::unique_ptr<DrawableWallMeshes> m_wallMeshes;   // WALL-1: the wall pieces' walkable surfaces for the pathfinder (RW 0x936B7D); before the AI world
 	std::unique_ptr<DrawableManager> m_drawables; // before the logic: the logic deletes its objects (and calls the manager) in its destructor first
 	std::unique_ptr<LiveScripting> m_scripting;   // likewise: the objects' destructors call the world hooks
+	std::unique_ptr<SdkScriptHost> m_sdkScripts; // lane SDK-2: the mod's sim Luau scripts (before the logic: they listen to it)
 	std::unique_ptr<class MapScriptSetup> m_scriptSetup; // lane SCRIPT-1: the libraries the script engine's lists point into (outlive the logic)
 	std::unique_ptr<ScriptEngineHost> m_scriptHost;      // lane SCRIPT-1
 	bool m_mapScripts = false;

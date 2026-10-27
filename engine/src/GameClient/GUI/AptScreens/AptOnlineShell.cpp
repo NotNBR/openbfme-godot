@@ -106,7 +106,8 @@ const std::vector<std::string> &AptOnlineShell::stopLines()
 		"to the relay (each client probes it; the cell banded by the summed round trip at GameSpy's default 300 / 600 ms cut-offs); the grid's per-row Kick "
 		"buttons stay in the movie's own unpressable state there (the room's per-slot Kick removes a player); an OpenBFME page covers the grid and says it "
 		"in words (the lobby's response time, the player's ping to the relay and its loss, each other player's ping to the player), and the chat's Players "
-		"list shows each player's ping (the owner, 2026-10-20)",
+		"list shows each player's ping (the owner, 2026-10-20); the grid is retail's eight by eight: in a room of more than eight players, those of "
+		"slots 9 to 16 are on the page only",
 		"[S-4551] online staging room chat: the Players list names the room's players (retail's fill, the chat's recipients, was not read) and every "
 		"line goes to everyone (no private lines)",
 		"[S-4552] online staging room rows: Hero and Handicap work as in the LAN room (lane ONLINEMENU-1: the lobby carries a player's Create-a-Hero record "
@@ -1880,6 +1881,7 @@ void AptOnlineShell::backToList()
 		m_client->leaveGame();
 	}
 	restoreMode(); // lane UBERJOIN-1
+	setHostModeText("0");
 	callPage("ClosePassword");
 	callPage("GotoAndPlay", { "_lobby" });
 	callPage("EnableButtonCreateGame");
@@ -1893,7 +1895,6 @@ void AptOnlineShell::backToList()
 		callPage("PopUpConnectingClose");
 		m_connecting = false;
 	}
-	setHostModeText("1");
 	m_listDirty = true;
 	if (m_client)
 	{
@@ -2259,6 +2260,18 @@ void AptOnlineShell::update()
 	{
 		windows().setMouseFilterOverBox(false);
 	}
+	// OpenBFME-only controls: OnlineOpenPlay's Ready column ends at x=943; the free strip beside its tabs is x=520..944, y=168..192.
+	// Do not reuse the offline screen's scrollbar/selector positions over the online Ready boxes, Chat tab and footer ornament.
+	auto place = [](GameWindow *window, int x, int y, int width, int height) {
+		if (!window) return;
+		window->winSetPosition(x, y);
+		int w, h;
+		window->winGetSize(&w, &h);
+		if (w != width || h != height) window->winSetSize(width, height);
+	};
+	place(slotScrollWindow(), 948, 422, 18, 216);
+	place(mapCapacityFilterWindow(), 520, 168, 220, 24);
+	place(slotRangeWindow(), 746, 168, 198, 24);
 	if ((networkPageOpen() || !m_joinDetails.empty()) && shell().top() == this && !isHidden())
 	{
 		takeDecorator();
@@ -2730,15 +2743,19 @@ void AptOnlineShell::drawConnectionGrid()
 	{
 		return; // the grid is drawn once the movie asked for it (Connection::RedrawGrid names its clip), then whenever a cell changes
 	}
+	// BFME2 0x005DB647 RedrawGrid (decomp GUICallbacks/Apt/AptConnectionGridCallbacks.cpp) draws rows and columns 0..7 and 0x005DB630 the eight
+	// players' names: the movie's grid is eight by eight (Main.Grid.<row>.<column>, no cell 8). OpenBFME's 16-player rooms (MAX_SLOTS) keep that
+	// grid; the players of slots 9 to 16 are on the page in words only (S-4550). Before: the loops ran to MAX_SLOTS, and the first missing cell
+	// (0, 8) stopped the draw, so every row after the first stayed undrawn and the screen noted a missing movie function
 	std::string signature;
-	for (int row = 0; row < MAX_SLOTS; ++row)
+	for (int row = 0; row < kConnectionGrid; ++row)
 	{
-		for (int column = 0; column < MAX_SLOTS; ++column)
+		for (int column = 0; column < kConnectionGrid; ++column)
 		{
 			signature += connectionFrame(row, column) + ",";
 		}
 	}
-	for (int i = 0; i < MAX_SLOTS; ++i)
+	for (int i = 0; i < kConnectionGrid; ++i)
 	{
 		signature += narrow(m_client->gameInfo().slots[i].name) + ";";
 	}
@@ -2748,7 +2765,7 @@ void AptOnlineShell::drawConnectionGrid()
 	}
 	m_gridDrawn = signature;
 	// BFME2 0x005DB3B3 UpdateSlotName: a human slot's name and its number (idx + 1), nothing for the others
-	for (int i = 0; i < MAX_SLOTS; ++i)
+	for (int i = 0; i < kConnectionGrid; ++i)
 	{
 		const SkirmishGameSlot &s = m_client->gameInfo().slots[i];
 		const bool human = m_client->slotViews()[(size_t)i].state == "player";
@@ -2756,9 +2773,9 @@ void AptOnlineShell::drawConnectionGrid()
 		windows().setAptText("APT:ConnectionPlayerNum_" + std::to_string(i), human ? std::to_string(i + 1) : std::string());
 	}
 	// the cells: the movie's UpdateConnection_<row>_<column>(frame) (retail invokes it in the grid's level)
-	for (int row = 0; row < MAX_SLOTS; ++row)
+	for (int row = 0; row < kConnectionGrid; ++row)
 	{
-		for (int column = 0; column < MAX_SLOTS; ++column)
+		for (int column = 0; column < kConnectionGrid; ++column)
 		{
 			const std::string fn = "UpdateConnection_" + std::to_string(row) + "_" + std::to_string(column);
 			const std::string frame = connectionFrame(row, column);
@@ -2774,7 +2791,7 @@ void AptOnlineShell::drawConnectionGrid()
 				m_gridDrawn.clear();
 				return;
 			}
-			m_gridFrames[(size_t)(row * MAX_SLOTS + column)] = frame;
+			m_gridFrames[(size_t)(row * kConnectionGrid + column)] = frame;
 		}
 	}
 }

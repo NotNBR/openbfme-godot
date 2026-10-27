@@ -19,6 +19,8 @@
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/SkirmishAI/SkirmishAIManager.h"
 #include "GameLogic/AI/AIGroup.h"
+#include "GameLogic/Combat/CombatLineOfSight.h"
+#include "GameLogic/Combat/ObjectWeapons.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/SlavedUpdate.h"
 #include "GameLogic/Object/Contain/HordeContainRuntime.h"
@@ -473,6 +475,26 @@ bool ObjectPathfindAdapter::isSignificantlyAboveTerrain() const
 	const Coord3D &p = *m_object->getPosition();
 	const float above = SimMath::pc24Add(SimMath::pc24Sub(p.z, m_object->logic().getGroundHeight(p.x, p.y)), 0.0f);
 	return above > SimMath::pc24Mul(m_object->logic().settings().gravity, -9.0f);
+}
+
+// lane LOS-1: RW 0x68B58C(0), the attacker's current weapon (the IMMOBILE test of RW 0x6F4557 is the pathfinder's)
+bool ObjectPathfindAdapter::hasCurrentWeapon() const
+{
+	const ObjectWeapons *w = m_object->getWeapons();
+	return w && w->currentWeapon() != nullptr;
+}
+
+// lane LOS-1: RW 0x6CC6DD with the current weapon (CombatLineOfSight.h)
+bool ObjectPathfindAdapter::isClearGoalFiringLineOfSightTerrain(const Coord3D &goalPos, const PathfindObject &victim) const
+{
+	const ObjectPathfindAdapter *v = dynamic_cast<const ObjectPathfindAdapter *>(&victim);
+	const ObjectWeapons *w = m_object->getWeapons();
+	const Weapon *weapon = w ? w->currentWeapon() : nullptr;
+	if (!v || !weapon)
+	{
+		throw std::logic_error("LOS-1: the weapon terrain line (RW 0x6CC6DD) needs an object victim and the current weapon");
+	}
+	return CombatLineOfSight::isClearGoalFiringLineOfSightTerrain(*weapon, *m_object, goalPos, &v->object());
 }
 
 bool ObjectPathfindAdapter::isMobile() const

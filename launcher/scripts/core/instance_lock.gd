@@ -10,6 +10,7 @@
 ## Nothing else is sent or read (tools/release/net_guard.py permits only this protocol and the exact read-only query). Godot sets neither
 ## SO_REUSEADDR nor SO_EXCLUSIVEADDRUSE on Windows, and on Linux SO_REUSEADDR never lets a second process listen on a listened port.
 extends RefCounted
+const L10n := preload("res://scripts/l10n/l10n.gd")
 
 const FIRST_PORT := 49200
 const PORTS := 16000  # 49200..65199, inside the dynamic range
@@ -58,13 +59,13 @@ func acquire() -> bool:
 			_serving = true
 			_thread = Thread.new()
 			if _thread.start(_serve) != OK:
-				error = "could not start the launcher lock listener"
+				error = L10n.t("launcher.instance_lock.listener_failed")
 				release()
 				return false
 			if windows:
 				var published := DirAccess.make_dir_recursive_absolute(_ports_dir.path_join(str(port)))
 				if published != OK and published != ERR_ALREADY_EXISTS:
-					error = "could not publish launcher lock port %d: %s" % [port, error_string(published)]
+					error = L10n.t("launcher.instance_lock.publish_failed", {"port": port, "reason": error_string(published)})
 					release()
 					return false
 				# A concurrent candidate must see our listening socket after publishing its own marker, or we see its marker here.
@@ -81,7 +82,7 @@ func acquire() -> bool:
 		if windows and hello.is_empty() and not queried:
 			var result := _windows_exclusions()
 			if not result.ok:
-				error = "cannot bind local port %d: %s" % [port, result.error]
+				error = L10n.t("launcher.instance_lock.bind_failed", {"port": port, "reason": result.error})
 				return false
 			ranges = result.ranges
 			queried = true
@@ -89,7 +90,7 @@ func acquire() -> bool:
 			continue
 		_refused(port, hello)
 		return false
-	error = "all launcher lock ports are excluded by Windows"
+	error = L10n.t("launcher.instance_lock.all_excluded")
 	return false
 
 
@@ -97,9 +98,12 @@ func _refused(candidate: int, hello: String) -> void:
 	port = candidate
 	if hello.begins_with(HELLO):
 		other_launcher = hello.substr(HELLO.length()).strip_edges()
-		error = "another OpenBFME Launcher (%s) holds local port %d" % [other_launcher, port]
+		error = L10n.t("launcher.instance_lock.other_launcher", {"version": other_launcher, "port": port})
 	else:
-		error = "local port %d is in use by another program (%s)" % [port, "it did not answer as a launcher" if hello == "" else "it answered something else"]
+		if hello == "":
+			error = L10n.t("launcher.instance_lock.port_busy_silent", {"port": port})
+		else:
+			error = L10n.t("launcher.instance_lock.port_busy_other", {"port": port})
 
 
 func _check_published(own_port := 0) -> bool:
@@ -107,13 +111,13 @@ func _check_published(own_port := 0) -> bool:
 		return true
 	var dir := DirAccess.open(_ports_dir)
 	if dir == null:
-		error = "cannot read the launcher lock port index: " + error_string(DirAccess.get_open_error())
+		error = L10n.t("launcher.instance_lock.index_unreadable", {"reason": error_string(DirAccess.get_open_error())})
 		return false
 	var exclusions := {}
 	var exclusions_queried := false
 	for name in dir.get_directories():
 		if not name.is_valid_int() or str(int(name)) != name or int(name) < FIRST_PORT or int(name) >= FIRST_PORT + PORTS:
-			error = "invalid launcher lock port marker: " + name
+			error = L10n.t("launcher.instance_lock.marker_invalid", {"name": name})
 			return false
 		var candidate := int(name)
 		if candidate == own_port:
@@ -132,7 +136,7 @@ func _check_published(own_port := 0) -> bool:
 				exclusions = _windows_exclusions()
 				exclusions_queried = true
 			if not exclusions.ok:
-				error = "cannot verify published launcher lock port %d: %s" % [candidate, exclusions.error]
+				error = L10n.t("launcher.instance_lock.verify_failed", {"port": candidate, "reason": exclusions.error})
 				return false
 			if _excluded(candidate, exclusions.ranges):
 				continue
@@ -150,11 +154,11 @@ static func _excluded(candidate: int, ranges: Array) -> bool:
 
 func _windows_exclusions() -> Dictionary:
 	if not OS.get_environment("SystemRoot").is_absolute_path():
-		return {"ok": false, "error": "Windows SystemRoot is not an absolute path"}
+		return {"ok": false, "error": L10n.t("launcher.instance_lock.systemroot_relative")}
 	var output := []
 	var code := OS.execute(OS.get_environment("SystemRoot").path_join("System32/netsh.exe"), ["int", "ipv4", "show", "excludedportrange", "protocol=tcp"], output, true)
 	if code != 0:
-		return {"ok": false, "error": "Windows excluded-port query failed (exit %d)" % code}
+		return {"ok": false, "error": L10n.t("launcher.instance_lock.query_failed", {"code": code})}
 	return parse_exclusions("\n".join(output))
 
 
@@ -177,14 +181,14 @@ static func parse_exclusions(text: String) -> Dictionary:
 			continue
 		var matched := row.search(clean)
 		if footer or matched == null:
-			return {"ok": false, "error": "unrecognized Windows excluded-port table row: " + clean.left(120)}
+			return {"ok": false, "error": L10n.t("launcher.instance_lock.row_unrecognized", {"row": clean.left(120)})}
 		var first := int(matched.get_string(1))
 		var last := int(matched.get_string(2))
 		if first < 1 or last > 65535 or first > last:
-			return {"ok": false, "error": "invalid Windows excluded-port range: " + clean.left(120)}
+			return {"ok": false, "error": L10n.t("launcher.instance_lock.range_invalid", {"row": clean.left(120)})}
 		ranges.append([first, last])
 	if not table:
-		return {"ok": false, "error": "Windows excluded-port query returned no recognizable table"}
+		return {"ok": false, "error": L10n.t("launcher.instance_lock.no_table")}
 	return {"ok": true, "ranges": ranges}
 
 

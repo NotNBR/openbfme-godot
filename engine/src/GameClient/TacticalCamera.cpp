@@ -427,10 +427,23 @@ void TacticalCamera::startMap(const GameLogic &logic, const WorldHeightMap &heig
 
 void TacticalCamera::lookAt(const Coord3D &world)
 {
+	// RW 0x48CEA3 / BFME2 W3DView::lookAt (0x48D55D): refresh the destination ground before rebuilding the view.
 	m_pos.x = world.x;
 	m_pos.y = world.y;
 	m_pos.z = 0.0f;
+	const float height = sampleTerrainHeight(m_pos.x, m_pos.y);
+	if (height != m_groundLevel)
+	{
+		m_groundLevel = height;
+		m_constraintValid = false;
+	}
 	setCameraTransform();
+	// Retail jumps do not traverse the old view; both render endpoints must be the new pose, even between client frames.
+	snapInterpolation();
+	if (m_jumpHandler)
+	{
+		m_jumpHandler();
+	}
 }
 
 void TacticalCamera::setAngle(float angle)
@@ -921,4 +934,3 @@ void DisplayedCameraView::present(int width, int height, double alpha)
 	setFov(cam->verticalFov());
 	set(mix(cam->previousEye(), cam->eye()), mix(cam->previousTarget(), cam->target()));
 }
-

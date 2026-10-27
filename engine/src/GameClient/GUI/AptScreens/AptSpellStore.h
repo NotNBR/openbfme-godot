@@ -44,7 +44,8 @@ public:
 	bool bind(const CommandStore &commands, GameLogic &logic, Player &player, const GameTextSource *gameText, std::string *error);
 	// RW 0x822E43, once per HUD update
 	void update();
-	// the close (OnBttnClose and Escape): the pending purchases (RW 0x8232ED) to send, and the store wants to go
+	void setViewportSize(int width, int height);
+	// OnBttnClose accepts pending purchases (RW 0x8232ED); Escape resets before closing (RW 0x8234C8).
 	bool closing() const { return m_closing; }
 	std::vector<GameMessage> takePurchases();
 	// RW 0x823484

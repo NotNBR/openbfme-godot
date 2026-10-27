@@ -278,6 +278,28 @@ Ref<Texture2D> MapTerrainBuilder::loadTexture(RetailFileSystem &fs, const std::s
 	{
 		return cached->second;
 	}
+	// lane SDK-1: an asset pack's replacement first (the sky, cloud and macro textures, water, rivers and roads load here; the terrain tile
+	// textures go through the atlas instead and are not replaced: GameClient/AssetPacks.h)
+	{
+		std::string packError;
+		Ref<Image> packImage = Load_Asset_Pack_Image(fs.assetPacks().empty() ? nullptr : &fs.assetPacks(), name, packError);
+		if (!packError.empty())
+		{
+			errors.push_back(toGodot("texture " + name + ": " + packError));
+			return Ref<Texture2D>();
+		}
+		if (packImage.is_valid())
+		{
+			if (mipmaps && !packImage->has_mipmaps() && !packImage->is_compressed())
+			{
+				packImage->generate_mipmaps();
+			}
+			Ref<ImageTexture> tex = ImageTexture::create_from_image(packImage);
+			tex->set_meta("retail_path", packImage->get_meta("retail_path"));
+			m_textureCache[key] = tex;
+			return tex;
+		}
+	}
 	// BFME keeps textures compiled under a two-letter folder (W3D_Compiled_Texture_Path): usually DDS, but some
 	// are a colour JPG with a separate PNG that carries the alpha (e.g. TRWagonTraveled, TSCracks02). Loose
 	// art\textures and the terrain archive are checked next.

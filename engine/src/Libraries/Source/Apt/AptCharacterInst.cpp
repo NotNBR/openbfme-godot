@@ -169,11 +169,12 @@ AptSpriteInst *AptCharacterInst::movieRoot()
 
 AptMatrix AptCharacterInst::globalMatrix() const
 {
+	const AptMatrix local = viewportTransform.concat(matrix);
 	if (!m_parent)
 	{
-		return matrix;
+		return local;
 	}
-	return m_parent->globalMatrix().concat(matrix);
+	return m_parent->globalMatrix().concat(local);
 }
 
 AptColorTransform AptCharacterInst::globalColor() const
@@ -965,11 +966,7 @@ void AptSpriteInst::gotoFrame(int target)
 						{
 							dst.ratio = p.ratio;
 						}
-						if (p.flags & APT_PLACE_HASCLIPDEPTH)
-						{
-							dst.clipDepth = p.clipDepth;
-						}
-						dst.flags |= (p.flags & (APT_PLACE_HASMATRIX | APT_PLACE_HASCOLORTRANSFORM | APT_PLACE_HASRATIO | APT_PLACE_HASCLIPDEPTH));
+						dst.flags |= (p.flags & (APT_PLACE_HASMATRIX | APT_PLACE_HASCOLORTRANSFORM | APT_PLACE_HASRATIO));
 						if (!c.hasBase)
 						{
 							c.anyOverlay = true;
@@ -1280,7 +1277,8 @@ void AptSpriteInst::applyPlaceFields(AptCharacterInst &inst, const AptPlaceObjec
 	{
 		inst.placeRatio = place.ratio; // the record's ratio field, read whether or not the flag is set
 	}
-	if (place.flags & APT_PLACE_HASCLIPDEPTH)
+	// RW 0xB0D0C0 (BFME2 AptMovieFrameControls.cpp, tier A): a new placement always passes clip depth; moves retain it.
+	if (isNew)
 	{
 		inst.clipDepth = place.clipDepth;
 	}

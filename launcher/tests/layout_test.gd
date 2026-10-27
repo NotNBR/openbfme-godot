@@ -121,6 +121,11 @@ func _run() -> void:
 			await process_frame
 			continue
 		main._show_demo(c.state)
+		var nav: Control = main._nav["play"].get_parent()
+		var footer: Label = nav.get_child(nav.get_child_count() - 1).get_child(0)
+		footer.text = main.L10n.t("launcher.main.footer_version", {"version": main.Semver.display("v0.4.12-nightly.261024100")})
+		if c.state == "long":
+			footer.text += "\n" + main.L10n.t("launcher.main.footer_local_trial")
 		if c.chip != "":
 			main._play_screen.set_players(c.chip.trim_prefix("●  "))   # the real chip (lane ONLINECOUNT-1), at the widest counts
 		await _frames(3)
@@ -619,6 +624,24 @@ func _check_window(main: Control, where: String) -> void:
 		if absf(rbn.position.x - left) > EPS or absf(rbn.end.x - right) > EPS:
 			_record(where, "the banner is off the margins", "%s .. %s, expected %s .. %s" % [rbn.position.x, rbn.end.x, left, right])
 	var rv: Control = main._nav["play"].get_parent()
+	var rail: Rect2 = rv.get_parent().get_parent().get_global_rect()
+	var nav_keys := ["play", "news", "multiplayer", "mods", "games", "settings"]
+	for i in nav_keys.size():
+		var button: Button = main._nav[nav_keys[i]]
+		var rect := button.get_global_rect()
+		if not rail.grow(EPS).encloses(rect):
+			_record(where, "sidebar button exceeds rail", "%s: %s in %s" % [nav_keys[i], rect, rail])
+		if absf(rect.position.x - rail.position.x - 13.0) > EPS or absf(rail.end.x - rect.end.x - 13.0) > EPS:
+			_record(where, "sidebar insets are not 13", "%s: %s in %s" % [nav_keys[i], rect, rail])
+		if absf(button.size.y - 36.0) > EPS or button.focus_mode != Control.FOCUS_ALL:
+			_record(where, "sidebar target is not controller-sized", "%s: height %s, focus %s" % [nav_keys[i], button.size.y, button.focus_mode])
+		if i > 0:
+			var previous: Button = main._nav[nav_keys[i - 1]]
+			var pitch := button.get_global_rect().position.y - previous.get_global_rect().position.y
+			if absf(pitch - 38.0) > EPS:
+				_record(where, "sidebar vertical pitch is not 38", "%s: pitch %s" % [nav_keys[i], pitch])
+			if previous.find_valid_focus_neighbor(SIDE_BOTTOM) != button or button.find_valid_focus_neighbor(SIDE_TOP) != previous:
+				_record(where, "sidebar directional focus skips a button", nav_keys[i])
 	var logo: Control = rv.get_child(0).get_child(0)
 	var foot: Control = rv.get_child(rv.get_child_count() - 1).get_child(0)
 	var icon: float = main._nav["play"].get_global_rect().position.x + main._nav["play"].get_theme_stylebox("normal").get_margin(SIDE_LEFT)

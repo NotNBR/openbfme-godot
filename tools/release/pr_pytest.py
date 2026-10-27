@@ -28,6 +28,7 @@ SUBSET = [
     "tools/horde_oracle/test_dump_tables.py",
     "tools/horde_oracle/test_rng_reference.py",
     "tools/hover/test_hover_inventory.py",
+    "tools/l10n/test_l10n.py",
     "tools/maps/oracle/test_census.py",
     "tools/maps/oracle/test_resolve.py",
     "tools/menus/test_menu_inventory.py",

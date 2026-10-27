@@ -65,6 +65,7 @@ struct AptStageMapping
 	float offsetX() const;
 	float offsetY() const;
 	float uniformScale() const; // min(scaleX, scaleY): the font scale
+	AptStageMapping fitImage(float imageWidth, float imageHeight) const;
 	void stageToWindow(float x, float y, float &wx, float &wy) const;
 	void windowToStage(float wx, float wy, float &x, float &y) const;
 };

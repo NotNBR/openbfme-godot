@@ -17,10 +17,13 @@
 
 #pragma once
 
+#include "GameLogic/Object/ObjectGeometry.h"
+
 #include <array>
 
 #include "GameClient/VideoPlayer.h" // lane CAMP-1H: m_videos (complete for the unique_ptr)
 #include "GameClient/EndGame.h"
+#include "GameClient/ShroudFade.h" // lane FOGFX-1: m_shroudFade
 #include "GameClient/CommandLogLoad.h" // lane SAVE-2: m_saveLoad (complete for the unique_ptr)
 #include "Common/System/SaveGame/SaveGameFile.h"
 #include "GameClient/ScriptCameraDirector.h"
@@ -151,6 +154,7 @@ public:
 	int64_t get_shroud_status_at(double x, double y) const;
 	int64_t get_object_shroud_status(int64_t objectId) const;
 	void set_shroud_drawn(bool on);
+	void set_shroud_fade(bool on); // lane FOGFX-1: the shroud texture's fade (RW 0x472CF2); off: the texels land at once (a before / after proof)
 	PackedByteArray get_shroud_cells() const;
 	// lane PROJ-1: the projectile objects in flight (KindOf PROJECTILE with a BezierProjectileBehavior): id, template, position, the position of the previous logic frame, the unit
 	// X axis of the basis, the flight step / segment count and whether it has landed. The client draws them (the streak draw module is not ported: stop S-365).
@@ -162,6 +166,12 @@ public:
 	Dictionary get_end_game_state() const;
 	int hud_end_game_timer() const;
 	Array take_end_game_requests();
+	// lane SDK-1b (a): asset packs are offline only for now: game.gd calls this before every game (false for a LAN / online game). When the answer
+	// changes, the scene is cleared and the drawables' asset manager and the effects' textures are rebuilt, so nothing drawn with the packs
+	// before stays. {loaded: any packs, used: they are applied, changed}
+	Dictionary set_asset_packs_used(bool used);
+	PackedStringArray take_sdk_banners(); // lane SDK-2: the mod scripts' ui.banner texts since the last call
+	PackedStringArray take_sdk_reports(); // lane SDK-2: their report lines ("SDK <mod>: ...")
 	// GameLogic::clearGameData (RW 0x7792BC): keeps the score screen's data (when `show_score_screen`) and tears the game down (the worker stopped, the
 	// network session, audio, effects and objects released); a new game may start afterwards. { ok, score_screen: { type, frames, entries: [...] } }
 	Dictionary clear_game_data(bool show_score_screen);
@@ -333,6 +343,7 @@ public:
 	// the builder's hero (a .cah record) on the loaded map's preview object (RW 0x9C0E03 then RW 0x80ACE3 through CreateAHeroGame::applyBuilder): { ok, error };
 	// refused in a started skirmish, a network game or under the logic worker, and while cah_builder is off
 	Dictionary cah_preview_apply(int64_t object_id, const PackedByteArray &record);
+	Dictionary cah_preview_set_orientation(int64_t object_id, double angle);
 	// the builder's map locations (AptMyHero + 0x164, RW 0x9C09FC: an object whose map name holds '_' is the location atoi(after the '_')), indexed by
 	// MapLocation: [{ id (0: none), name, template, x, y, z, angle }]
 	Array cah_preview_locations() const;
@@ -699,8 +710,10 @@ private:
 	void build_static_layer(const Ref<RetailFileSystem> &fs, Dictionary &report, Array &errors, Array &stops);
 	void refresh_views(double deltaMs);
 	// VIS-1: the local player's shroud as a cell texture on the terrain materials (S-567)
-	void refresh_shroud(bool force);
+	void refresh_shroud(bool force, double dtMs = 0.0);
 	Ref<godot::ImageTexture> m_shroudTexture;
+	ShroudFade m_shroudFade; ///< lane FOGFX-1: the texels' fade toward their cell's level (RW 0x472CF2), client only
+	bool m_shroudFadeOn = true;
 	bool m_shroudDrawn = true;
 	// lane BIGBATTLE-1: the shroud parameters the terrain's materials were last given (refresh_shroud visits them only when one changes)
 	bool m_shroudParamsSet = false;
@@ -808,6 +821,17 @@ private:
 	};
 	std::unique_ptr<TreeTopple> m_treeTopple;
 	std::vector<ToppleTreeView> m_treeViews; ///< index = the animator's tree index
+	// lane TREES1: the client-only shrubs and props a construction (TheTerrainVisual slot 0x48) or a felled tree (slot 0x4C, props only) removes
+	struct FootprintView
+	{
+		int64_t instance = -1;
+		Coord3D position{};
+		float scale = 1.0f;
+		bool prop = false; ///< MAPOBJ_CLIENT_PROP (the prop buffer), else a shrub (the shrub buffer)
+		bool removed = false;
+	};
+	std::vector<FootprintView> m_footprintViews;
+	void clearFootprint(const Coord3D &pos, float angle, const std::vector<ObjectGeometry::Shape> &shapes, bool propsOnly);
 	size_t m_treeEventsSeen = 0;
 	void heldClientWork(); // lane RENDERWAIT-1: the render side's reads of the live logic, where it is held
 	void updateTreeTopple(double dt);

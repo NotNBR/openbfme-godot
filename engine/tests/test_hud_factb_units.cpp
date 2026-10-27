@@ -3816,7 +3816,7 @@ TEST_CASE("factc units: every Goblin and Angmar unit, horde and hero ability and
 			  { { "* Command_ToggleStance", "S-289" },
 				{ "AngmarDarkRangerHorde Command_AngmarLongShotAbility", "S-1997|HordeAttackNugget" }, { "AngmarKarsh Command_WhisperofDeath", "S-2006|AngmarWhisperofDeath: no result" },
 				{ "AngmarNecromancerHorde Command_NecromancerBlackIce", "S-2006|no effect of it is asserted" },
-				{ "AngmarPorter Command_PorterExtinguishFire", "S-1997|PorterFireExtinguisher: no result" }, { "AngmarRogash Command_RogashLeap", "S-2006|RogashLeap: no result" } });
+				{ "AngmarPorter Command_PorterExtinguishFire", "S-1997|PorterFireExtinguisher: no result" } });
 }
 
 TEST_CASE("factc heroes: every Goblin and Angmar hero is recruited and revived through the started keep's REVIVE buttons")

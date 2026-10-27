@@ -434,6 +434,29 @@ TEST_CASE("ownerfix2 retail: a farm's placement shows its claimable share (RW 0x
 	const float half = TerrainResourceClaimView::claimableFraction(logic, px + radius, py, radius, data->m_highPriority, me);
 	CHECK(half > 0.25f); // tolerance: a disc half over the farm's own ground shares it; the exact share is the raster's (checked cell by cell below)
 	CHECK(half < 0.75f); // tolerance: as above
+	{
+		// lane FOGFX-1 (FB-0055): the placement mask asks each cell once (a per-cell memo) and gives every vertex the value RW 0x75C1A9 computes asking
+		// its 13 cells one by one; half over the farm's ground the mask holds partial weights
+		fb.updatePlacement(logic, me, farmT, Coord3D{ px + radius, py, 0.0f }, u"%d%%");
+		const ResourcePlacementFeedback &pl = fb.placement();
+		const std::uint32_t base = ((std::uint32_t)pl.decalOpacity << 24) | (pl.color & 0xFFFFFFu);
+		int mismatches = 0, partialVertices = 0, vertices = 0;
+		for (int j = 0; j < pl.maskH; ++j)
+		{
+			for (int i = 0; i < pl.maskW; ++i)
+			{
+				const std::uint8_t want = (std::uint8_t)(TerrainResourceClaimView::vertexColor(logic, base, pl.maskVx0 + i, pl.maskVy0 + j, me) >> 24);
+				const std::uint8_t got = pl.maskAlpha[(size_t)j * (size_t)pl.maskW + (size_t)i];
+				mismatches += got != want ? 1 : 0;
+				partialVertices += (want != 0 && want != pl.decalOpacity) ? 1 : 0;
+				++vertices;
+			}
+		}
+		CHECK(vertices == pl.maskW * pl.maskH);
+		CHECK(mismatches == 0);
+		CHECK(partialVertices > 0); // tolerance: presence of the edge's partial weights is the claim (their count is the raster's)
+		MESSAGE("fogfx1: the farm's placement mask " << pl.maskW << " x " << pl.maskH << ", " << partialVertices << " partial vertices, all equal to RW 0x75C1A9's");
+	}
 	// the vertex weights along the farm's edge are the table of RW 0x75C1A9 (an independent reading of the 13 cells)
 	{
 		auto ok = [&](int x, int y) { return TerrainResourceClaimView::claimable(logic, x, y, 0u, INVALID_ID, false, me); };

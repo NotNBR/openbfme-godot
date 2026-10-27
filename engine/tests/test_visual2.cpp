@@ -9,7 +9,9 @@
 
 using retailtest::PeImage;
 
+#include "Common/ModelState.h"
 #include "GameClient/DrawableShroud.h"
+#include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Damage.h"
 #include "GameLogic/Module/ActiveBody.h"
 #include "GameLogic/Object/Object.h"
@@ -900,4 +902,113 @@ TEST_CASE("visual2 r2 retail: an own barracks off the map is SHROUDED for its ow
 	rig.input->update();
 	CHECK(ui.isSelected(onId));
 	CHECK_FALSE(ui.isSelected(offId));
+}
+
+// ---- lane FOGFX-1 (FB-0056: "some FX are visible in the fog of war, including construction dust") ------------------------------------------------
+namespace
+{
+struct FogFxRun
+{
+	int status = -1;                        ///< the object's status for the local player at the end
+	size_t dustSystems = 0;                 ///< BuildingContructDust systems on the foundation's drawable at the end
+	size_t particlesNear = 0;               ///< particles within 300 of the object, summed over the frames
+	unsigned long long frameEventsFired = 0; ///< LiveFX's animation FXEvents fired (RW 0x4BCE68)
+};
+
+// an enemy (Player_2) object at the far corner of the map from the local base, `frames` logic frames with the live effect player; `sight` Never: the
+// local player never sees it, Always: the map revealed. `foundation`: a GondorBarracks foundation actively being built (its ACTIVELY_BEING_CONSTRUCTED
+// state's ParticleSysBone BuildingContructDust, retail men/barracks.ini); else a MordorMumakil walking toward the map's centre (its moving state's
+// FXEvent footsteps)
+FogFxRun enemyInFog(Sight sight, bool foundation, int frames)
+{
+	hudtest::SharedWorld &s = hudtest::shared();
+	FogFxRun out;
+	hudtest::Rig rig(s, "map mp fall back 4p", "FactionMen");
+	auto playback = std::make_unique<FXPlayback>(*s.mount->fs, RandomAlgorithm::RotWK_GameDat_LCG);
+	REQUIRE(playback->loadRetailData().empty());
+	auto fx = std::make_unique<LiveFX>(*rig.game, *playback);
+	const auto context = s.world->enterContext();
+	creeptest::removeCreeps(rig.logic());
+	ShroudManager *sm = rig.logic().shroud();
+	REQUIRE(sm != nullptr);
+	sm->setDisplayed(true);
+	const int me = rig.index();
+	const Coord3D at = farCorner(rig, *sm);
+	if (sight == Sight::Always)
+	{
+		sm->revealMapForPlayerPermanently(me);
+	}
+	const int enemy = rig.game->players().findPlayerWithName("Player_2")->getPlayerIndex();
+	std::string err;
+	Object *o = rig.game->createObject(foundation ? "GondorBarracks" : "MordorMumakil", enemy, at, 0.0f, &err);
+	REQUIRE_MESSAGE(o != nullptr, err);
+	const ObjectID id = o->getID();
+	if (foundation)
+	{
+		// a foundation that rises (as test_fx3_particles: Construction.cpp startRise, RW 0x858931 ff)
+		o->setConstructionPercent(0.0f);
+		o->setStatus(OBJECT_STATUS_UNDER_CONSTRUCTION, true);
+		o->setModelConditionState(ModelCondition::indexOf("ACTIVELY_BEING_CONSTRUCTED"), true);
+		o->setModelConditionState(ModelCondition::indexOf("PARTIALLY_CONSTRUCTED"), true);
+	}
+	else
+	{
+		const float cx = sm->originX() + sm->cellSize() * (float)sm->cellCountX() * 0.5f, cy = sm->originY() + sm->cellSize() * (float)sm->cellCountY() * 0.5f;
+		const float dx = cx - at.x, dy = cy - at.y, len = std::sqrt(dx * dx + dy * dy);
+		REQUIRE(o->getAIUpdateInterface() != nullptr);
+		o->getAIUpdateInterface()->aiMoveToPosition(Coord3D{ at.x + dx / len * 400.0f, at.y + dy / len * 400.0f, 0.0f }, CMD_FROM_SCRIPT);
+	}
+	for (int i = 0; i < frames; ++i)
+	{
+		fxFrame(rig, *fx, *playback);
+		size_t systems = 0, particles = 0;
+		countNear(*playback, *rig.logic().findObjectByID(id)->getPosition(), systems, particles);
+		out.particlesNear += particles;
+	}
+	const Drawable *d = rig.game->drawables().findByObject(id);
+	REQUIRE(d != nullptr);
+	playback->particles().forEachSystem([&](const FXParticleSystem::ParticleSystem &ps) {
+		if (!ps.isDestroyed() && ps.getTemplate().getName() == "BuildingContructDust" && ps.attachedDrawableID() == d->getID())
+		{
+			++out.dustSystems;
+		}
+	});
+	out.status = (int)sm->clientObjectStatus(*rig.logic().findObjectByID(id), me);
+	out.frameEventsFired = fx->stats().frameEventsFired;
+	return out;
+}
+} // namespace
+
+TEST_CASE("fogfx1 retail: an enemy foundation being built in the shroud makes no construction dust (RW 0x5FA2CE, 0x64849E); in sight, the same dust plays")
+{
+	if (!hudtest::haveWorld("fogfx1 retail construction dust in the shroud"))
+	{
+		return;
+	}
+	const FogFxRun hidden = enemyInFog(Sight::Never, true, 30);
+	CHECK(hidden.status == (int)OBJECTSHROUD_SHROUDED);
+	CHECK(hidden.dustSystems == 1u); // the ParticleSysBone system exists on the drawable ...
+	CHECK(hidden.particlesNear == 0u); // ... and emits nothing while the local player cannot see the foundation
+	const FogFxRun seen = enemyInFog(Sight::Always, true, 30);
+	CHECK(seen.status == (int)OBJECTSHROUD_CLEAR);
+	CHECK(seen.dustSystems == 1u);
+	CHECK(seen.particlesNear > 0u); // tolerance: presence of emission is the claim; the counts belong to the FX-1 particle simulator
+	MESSAGE("fogfx1: construction dust particles in the shroud " << hidden.particlesNear << ", in sight " << seen.particlesNear);
+}
+
+TEST_CASE("fogfx1 retail: a walking enemy in the shroud fires no animation FXEvents (doDrawModule RW 0x4C72BE -> 0x4BCE68 is not reached for a drawable "
+		  "that is not drawn); in sight, its footsteps fire")
+{
+	if (!hudtest::haveWorld("fogfx1 retail frame events in the shroud"))
+	{
+		return;
+	}
+	const FogFxRun hidden = enemyInFog(Sight::Never, false, 40);
+	CHECK(hidden.status == (int)OBJECTSHROUD_SHROUDED);
+	CHECK(hidden.frameEventsFired == 0u);
+	CHECK(hidden.particlesNear == 0u);
+	const FogFxRun seen = enemyInFog(Sight::Always, false, 40);
+	CHECK(seen.status == (int)OBJECTSHROUD_CLEAR);
+	CHECK(seen.frameEventsFired > 0u); // tolerance: presence is the claim; the count follows the animation's frames
+	MESSAGE("fogfx1: mumakil FXEvents fired in the shroud " << hidden.frameEventsFired << ", in sight " << seen.frameEventsFired);
 }

@@ -40,8 +40,11 @@ Tiers:
 
 Decomp status of the counterpart: `authored` / `vendored` / `generated` = byte-matched C++
 (the ledger row starting at the function), `attempt` = recovered C++ that does not match yet
-(`reverse/attempts/`), `tu-only` = no code, but the decomp assigns the function to a file,
-`library` / `dump` = no source, `partial-*` = ledger rows cover part of the extent, `none`.
+(`reverse/attempts/`; the folder is absent while nothing is banked), `tu-only` = no code, but the
+decomp assigns the function to a file, `assembly` = byte-matched reviewed assembly (not C++),
+`data` = verified data in `.text`, `library` / `dump` = no source, `partial-*` = ledger rows cover
+part of the extent, `none`. A ledger lane the tools don't know stops the rebuild: add it to
+`LANE_RANK` in `match_rotwk.py` (the clone's `tools/progress.py` `SOURCE_LANES` lists them).
 
 Always cite the RotWK address; BFME2 and the decomp are donors (PLAN source priority).
 

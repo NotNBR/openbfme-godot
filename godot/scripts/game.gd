@@ -49,6 +49,10 @@
 ##                           options, hash (PINGWHEEL_HASH=quiet|pings), video (frames in --screens); pingwheel-<name>.png in --screens
 ##     --autocast1=<a,...>   (lane AUTOCAST-1, with --auto) scripts/autocast1_player.gd: witchking (a right click on the Witch-king's Morgul Blade
 ##                           button turns its autocast on, the button glows, he casts it at an enemy hero by himself; off again); autocast1-<name>.png
+##     --trees1=<a,...>      (lane TREES1, with --auto) scripts/trees1_player.gd: harvest (a lumber mill's workers fell trees and earn), crush (a
+##                           siege engine topples the trees it drives into); trees1-*.png in --screens
+##     --herocast1=<a,...>   (lane HEROCAST-1, with --auto) scripts/herocast1_player.gd: gandalfs (two Gandalfs of different ranks selected by a
+##                           drag box cast Lightning Sword at a spot: only the senior one casts); herocast1-<name>.png
 ##     --visual2=<a,...>     (lane VISUAL-2, with --auto) scripts/visual2_player.gd: fog (what the local player sees of the enemy in the fog: drawn
 ##                           objects, particles), trees (the sway), look (views for the colour comparison); visual2-*.png in --screens
 ##     --start-spot=<n>      (with --auto) slot 0 clicks the lobby's start spot n first (RW 0x845830): e.g. 0 = Player_1_Start, a fortress map's fortress
@@ -394,7 +398,9 @@ var _devport8 := PackedStringArray() # lane DEVPORT-8 (scripts/devport8_player.g
 var _hud7 := PackedStringArray() # lane HUD-7 (scripts/hud7_player.gd: radar, deselect, sell, upgrade, herocancel)
 var _pingwheel := PackedStringArray() # the ping wheel's scenarios (scripts/ping_wheel_player.gd)
 var _autocast1 := PackedStringArray() # lane AUTOCAST-1 (scripts/autocast1_player.gd: witchking)
+var _herocast1 := PackedStringArray() # lane HEROCAST-1 (scripts/herocast1_player.gd: gandalfs)
 var _visual2 := PackedStringArray() # lane VISUAL-2 (scripts/visual2_player.gd: fog, trees, look)
+var _trees1 := PackedStringArray() # lane TREES1 (scripts/trees1_player.gd: harvest, crush)
 var _start_spot := -1            # lane HUD-5
 ## lane INPUT-1: the keyboard scenarios of scripts/input1_player.gd (--input1=groups,...)
 var _input1 := PackedStringArray()
@@ -851,8 +857,12 @@ func _ready() -> void:
 			_devport8 = arg.substr(11).split(",", false)
 		elif arg.begins_with("--autocast1="):
 			_autocast1 = arg.substr(12).split(",", false)
+		elif arg.begins_with("--herocast1="):
+			_herocast1 = arg.substr(12).split(",", false)
 		elif arg.begins_with("--visual2="):
 			_visual2 = arg.substr(10).split(",", false)
+		elif arg.begins_with("--trees1="):
+			_trees1 = arg.substr(9).split(",", false)
 		elif arg.begins_with("--start-spot="):
 			_start_spot = int(arg.substr(13))
 		elif arg.begins_with("--input1="):
@@ -1499,6 +1509,50 @@ func _open_recording() -> void:
 		_begin_replay(_replay_file)
 
 
+# lane SDK-2: the mod scripts' banners (ui.banner: centred near the top of the screen, a few seconds each, the newest replacing the last) and
+# report lines (the log)
+var _sdk_banner_layer: CanvasLayer
+var _sdk_banner: Label
+var _sdk_banner_tween: Tween
+
+
+func _sdk_tick() -> void:
+	for line in _world.take_sdk_reports():
+		print("GAME ", line)
+	for text in _world.take_sdk_banners():
+		print("GAME SDK banner: ", text)
+		_sdk_show_banner(text)
+
+
+func _sdk_show_banner(text: String) -> void:
+	if _sdk_banner == null:
+		_sdk_banner_layer = CanvasLayer.new()
+		_sdk_banner_layer.layer = 90
+		add_child(_sdk_banner_layer)
+		_sdk_banner = Label.new()
+		_sdk_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_sdk_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_sdk_banner.anchor_left = 0.1
+		_sdk_banner.anchor_right = 0.9
+		_sdk_banner.offset_left = 0
+		_sdk_banner.offset_right = 0
+		_sdk_banner.offset_top = 90
+		_sdk_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_sdk_banner.add_theme_font_size_override("font_size", 26)
+		_sdk_banner.add_theme_color_override("font_color", Color(1.0, 0.86, 0.45))
+		_sdk_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		_sdk_banner.add_theme_constant_override("outline_size", 6)
+		_sdk_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_sdk_banner_layer.add_child(_sdk_banner)
+	_sdk_banner.text = text
+	_sdk_banner.modulate.a = 1.0
+	if _sdk_banner_tween != null:
+		_sdk_banner_tween.kill()
+	_sdk_banner_tween = create_tween()
+	_sdk_banner_tween.tween_interval(3.5)
+	_sdk_banner_tween.tween_property(_sdk_banner, "modulate:a", 0.0, 0.8)
+
+
 func _process(delta: float) -> void:
 	_frames += 1
 	if _platform_ready:
@@ -1507,6 +1561,8 @@ func _process(delta: float) -> void:
 		_capture_tick() # lane ONLINE-4
 	Release.set_in_game(_state == State.PLAYING) # lane RELEASE-1: the version corner in the menus only
 	_campaign_check_tick() # lane CAMP-1
+	if _state == State.PLAYING and _world != null:
+		_sdk_tick() # lane SDK-2
 	if _stance_at >= 0 and _state == State.PLAYING and _world != null and _world.get_presented_frame() >= _stance_at:
 		_stance_at = -1
 		_stance_proof()
@@ -2133,6 +2189,14 @@ func _begin_game(message: Dictionary) -> void:
 	print("GAME new game: map %s seed %d cash %d" % [message.map, message.seed, message.starting_cash])
 	_rejoin_watch.reset() # lane ONLINEUX-1 r2: every game's rejoin is watched afresh (the watch also starts afresh on a new net_status attempt)
 	_game_kind = "lan" if _net_state == "loading" else ("network" if not _net_state.is_empty() else ("restart" if not _restart_stack.is_empty() else "skirmish"))
+	# lane SDK-1b (a): asset packs are offline only until their online checks exist: a LAN or online game draws the game's own assets on every peer
+	var multiplayer_game := _game_kind == "lan" or _game_kind == "network"
+	var packs: Dictionary = _world.set_asset_packs_used(not multiplayer_game)
+	if packs.get("loaded", false):
+		if multiplayer_game:
+			print("GAME asset packs: not used in this LAN / online game: HD packs are offline only for now (every player sees the game's own models and textures)")
+		else:
+			print("GAME asset packs: used (an offline game)")
 	_hub_begin(message) # lane ONLINEHUB-1: what the score screen records
 	_last_new_game = message.duplicate(true) # lane END-2: the quit menu's Restart starts it again (RW 0x9220DE)
 	if _restart_stack.is_empty():
@@ -2180,7 +2244,7 @@ func _begin_game(message: Dictionary) -> void:
 	var world_was_visible: bool = _world.visible
 	_world.hide() # keep partially constructed terrain behind the loading screen
 	_on_load_progress(0) # present the initial bar before synchronous loading
-	var opts := {"progress": Callable(self, "_on_load_progress"), "test_hooks": _end or not _zoom1.is_empty() or _rules_shot > 0 or not _gamemodes.is_empty() or _uber1 > 0 or _play_script.ends_with("spell3_player.gd") or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") or _play_script.ends_with("banner1_player.gd") or _play_script.ends_with("ownerfix2_player.gd")} # lane ZOOM-1: the bars scenario hurts some units (logged)
+	var opts := {"progress": Callable(self, "_on_load_progress"), "test_hooks": _end or not _zoom1.is_empty() or _rules_shot > 0 or not _gamemodes.is_empty() or _uber1 > 0 or _play_script.ends_with("spell3_player.gd") or _play_script.ends_with("ownerfix1_player.gd") or _play_script.ends_with("devport7_player.gd") or _play_script.ends_with("banner1_player.gd") or _play_script.ends_with("ownerfix2_player.gd") or not _trees1.is_empty()} # lane ZOOM-1: the bars scenario hurts some units (logged)
 	if _record and _net_state.is_empty():
 		opts["record"] = _last_replay_path() # lane MP-2: every skirmish is recorded
 	if _pingwheel.has("hash"):
@@ -3047,6 +3111,15 @@ func _run_auto() -> void:
 		await pac.run(self, _autocast1)
 		get_tree().quit(0 if pac.fail_count == 0 else 1)
 		return
+	if not _herocast1.is_empty():
+		var hc: GDScript = load("res://scripts/herocast1_player.gd")
+		if hc == null or not hc.can_instantiate():
+			_fail("scripts/herocast1_player.gd does not load")
+			return
+		var phc = hc.new()
+		await phc.run(self, _herocast1)
+		get_tree().quit(0 if phc.fail_count == 0 else 1)
+		return
 	if not _input1.is_empty():
 		var iscript: GDScript = load("res://scripts/input1_player.gd")
 		if iscript == null or not iscript.can_instantiate():
@@ -3115,6 +3188,16 @@ func _run_auto() -> void:
 		var pv2 = v2.new()
 		await pv2.run(self, _visual2)
 		get_tree().quit(0 if pv2.fail_count == 0 else 1)
+		return
+	if not _trees1.is_empty():
+		# lane TREES1: the trees scenarios (logged test hooks)
+		var t1: GDScript = load("res://scripts/trees1_player.gd")
+		if t1 == null or not t1.can_instantiate():
+			_fail("scripts/trees1_player.gd does not load")
+			return
+		var pt1 = t1.new()
+		await pt1.run(self, _trees1)
+		get_tree().quit(0 if pt1.fail_count == 0 else 1)
 		return
 	if not _quit_flow.is_empty():
 		await _run_quit()
@@ -3733,9 +3816,9 @@ func _input(event: InputEvent) -> void:
 		# screen its Escape first (AptMenuPlayer::menu_escape) and marks the event used, so this is only reached with no such screen; the quit menu under it stays
 		if not stack.is_empty() and stack[-1] == "SaveLoad.apt":
 			return
-		# lane PLAY-1: Escape over the powers screen closes it with its purchases (AptSpellStore: OnBttnClose and Escape, RW 0x8232ED), not the quit menu
+		# RW 0x8234C8: Escape resets pending SpellStore purchases before closing; ordinary close still accepts them.
 		if _hud != null and _hud.get_spellbook_state().get("store", {}).get("open", false):
-			_hud.close_spell_store()
+			_hud.cancel_spell_store()
 			print("GAME powers screen closed by Escape")
 			return
 		# lane PLAY-1: Escape over the tribute screen closes it (its key handler RW 0x914E91 -> RW 0x914C51), not the quit menu

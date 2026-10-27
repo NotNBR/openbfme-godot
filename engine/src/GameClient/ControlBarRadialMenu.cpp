@@ -3,6 +3,9 @@
 
 #include "GameClient/ControlBarRadialMenu.h"
 
+#include "Common/Audio/AudioEntryPoints.h"
+#include "Common/Audio/AudioLog.h"
+
 #include "GameClient/Drawable.h"
 #include "GameClient/DrawableManager.h"
 #include "GameClient/GUI/GameWindowManager.h"
@@ -275,6 +278,12 @@ bool ControlBarRadialMenu::mouseButton(bool left, bool down, int x, int y, Contr
 		}
 	}
 	const bool enabled = b && (b->source.state == ButtonState::Enabled || b->source.state == ButtonState::Active);
+	// RW 0x72A027 (BFME2 Rva003285D4Input, tier A): left/right down, not release; a disabled cancelable right press uses the enabled cue.
+	const bool cancelable = b && b->source.button && b->source.button->hasOption(COMMAND_OPTION_CANCELABLE);
+	{
+		AudioLog::Scope sound("HUD radial press");
+		AudioApi::playUiSound(enabled || (!left && cancelable) ? "Gui_PalantirCommandButtonClick" : "Gui_PalantirCommandButtonDisabledClick");
+	}
 	if (left)
 	{
 		if (enabled)

@@ -23,6 +23,8 @@
 ##   --prefix=<name> / --timescale=<f>   (scenario projectiles) the screenshot name prefix (default proj1) and the logic speed (default 0.25); --air=<n> projectiles in the air for the volley shot (default 6)
 ##   --bow-shot              (scenario projectiles, lane RENDER-2) first a close view of our shooters, saved as <prefix>-bow.png when arrows have just left their launch bones
 ##   --report                print the HUD's report (stops, errors, notes) before quitting
+##   --asset-pack=<folder>   (lane SDK-1, repeatable) draw with that asset pack; --scenario=asset_pack circles the first --spawn object at
+##                           --s2-height for --bench-seconds and selects it halfway (the before / after clip of a pack)
 ##   --logic-thread=on|off   (lane SMOOTH-1, S-810) the logic on its worker thread (default) or on the main thread
 ##   --scenario=smooth_bench (lane SMOOTH-1) the frame-time benchmark and motion probe: every --spawn object marches, turns (a second move order at 90 degrees) and then
 ##                           attack-moves into every --enemy object (which attack-moves back); per segment it prints SMOOTH PERF (render frame times, the C++ timers of the
@@ -61,6 +63,9 @@
 ##   --army=<slot>:<Template>:<dx>,<dy>   (lane PERF-3, repeatable) an object for player slot 1..4 at exactly focus + (dx, dy) (no free-spot search: the
 ##                           benchmark's grid is laid out by its caller); slots 3 / 4 add Player_3 (--army3-faction, default FactionElves, our team) and
 ##                           Player_4 (--army4-faction, default FactionIsengard, the opponent's team)
+##   --scenario=los1         (lane LOS-1) on Tournament Rhudaur (--map="map mp tournament rhudaur"): Haldir west of a hill at (3950, 1900), three orcs right behind
+##                           it at x 4110 .. 4130 (the hill of test_los1_terrain.cpp; a horde's flank members would show beside this narrow hill); 8 s
+##                           of idle auto-acquire, then Haldir is ordered to attack the first orc; saves los1-idle.png and los1-attack.png in --shots, prints LOS1 lines
 ##   --scenario=perf3_battle (lane PERF-3) the 4-player mass battle: every army attack-moves into the middle of all armies; per segment (approach, melee, pan:
 ##                           the camera sweeps over the fight) SMOOTH PERF / TIMER / LOW as smooth_bench prints them; --bench-seconds=<s> per segment
 ##   --perf-stat=<prefix>    (lane PERF-3, Linux with perf) every benchmark segment counts the main thread's and the whole process's user instructions and
@@ -282,10 +287,23 @@ func _ready() -> void:
 		elif arg.begins_with("--fx-speed="):
 			_fx_speed = float(arg.substr(11))
 	_fs = ClassDB.instantiate("RetailFileSystem")
+	# lane SDK-1: --asset-pack=FOLDER (repeatable) draws with those asset packs (only these: the viewer never reads user://asset-packs)
+	var packs := PackedStringArray()
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--asset-pack="):
+			packs.push_back(arg.substr(13))
+	if not packs.is_empty():
+		var pr: Dictionary = _fs.set_asset_packs(packs)
+		if not pr.ok:
+			_fail("asset packs: %s" % [pr.errors])
+			return
+		print("HUD asset packs: ", ", ".join(pr.packs), " (", pr.textures, " textures, ", pr.models, " models)")
 	var mount: Dictionary = _fs.mount_retail()
 	if not mount.ok:
 		_fail("mount failed: %s" % [mount.errors])
 		return
+	for note in mount.get("asset_pack_notes", PackedStringArray()):
+		print("HUD asset packs: ", note)
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0, 0, 0) # the base game shows black outside the map (owner, 2026-10-06)
@@ -832,6 +850,34 @@ func _run_scenario() -> void:
 		return
 	var shots := _shots_dir if not _shots_dir.is_empty() else "user://screens"
 	match _scenario:
+		"los1":
+			# lane LOS-1: the terrain line of sight. Before the lane both sides engaged through the hill at once; with it nobody acquires across it, and the
+			# ordered Haldir climbs until his bow sees the orcs
+			var hx := Vector2(3950.0, 1900.0)
+			var ex := Vector2(4120.0, 1900.0)
+			var mine: int = _world.create_object("ElvenHaldir", _local_index, hx.x, hx.y, 0.0)
+			var theirs: int = _world.create_object("MordorFighter", _enemy_index, 4110.0, 1900.0, PI)
+			var more1: int = _world.create_object("MordorFighter", _enemy_index, 4122.0, 1894.0, PI)
+			var more2: int = _world.create_object("MordorFighter", _enemy_index, 4130.0, 1905.0, PI)
+			if mine < 0 or theirs < 0 or more1 < 0 or more2 < 0:
+				_fail("los1: objects not created (%d, %d, %d, %d)" % [mine, theirs, more1, more2])
+				return
+			_cam_target = (hx + ex) * 0.5
+			_cam_height = 300.0
+			_place_camera()
+			await _frames(240)
+			print("LOS1 idle: ", _world.get_combat_report())
+			_save(shots.path_join("los1-idle.png"))
+			_world.order_attack([mine], theirs)
+			for i in 450:
+				await get_tree().process_frame
+				var mo: Dictionary = _world.get_object(mine)
+				if mo.get("ok", false):
+					_cam_target = _cam_target.lerp((Vector2(mo.x, mo.y) + ex) * 0.5, 0.02)
+					_place_camera()
+				if i == 300:
+					_save(shots.path_join("los1-attack.png"))
+			print("LOS1 attack: ", _world.get_combat_report())
 		"spell":
 			# lane SPELL-1: the player's spell book (its state in the label: the InGameSpellBook APT is not ported, S-529), buy --science through
 			# MSG_PURCHASE_SCIENCE, cast --power from the spell book at a point next to the focus through MSG_DO_SPECIAL_POWER_AT_LOCATION, follow
@@ -1129,6 +1175,29 @@ func _run_scenario() -> void:
 			await _frames(60)
 			print("HUD4 hero ", _hud.get_selection())
 			_save(shots.path_join("hud4-select-hero.png"))
+		"asset_pack":
+			# lane SDK-1 (the before / after clip of an asset pack): the camera circles the first --spawn object at --s2-height for
+			# --bench-seconds, selecting it halfway (its voice / selection sound), then quits
+			var name: String = _spawned.keys()[0]
+			var o: Dictionary = _world.get_object(_spawned[name])
+			if not o.get("ok", false):
+				_fail("the spawned object %s does not exist (%s)" % [name, o])
+				return
+			_cam_target = Vector2(o.x, o.y)
+			_hud.camera_look_at(_cam_target)
+			_hud.camera_set_height(_s2_height)
+			var frames := int(_bench_seconds * 30.0)
+			for i in frames:
+				_hud.camera_set_angle_pitch(0.6 + TAU * 0.35 * float(i) / float(frames), 0.0)
+				_hud.camera_look_at(_cam_target) # the angle turns the camera about itself: aim at the object again
+				if i == frames / 2:
+					await _click_world(_cam_target)
+				await _frames(1)
+			# the proof that a pack changes nothing the game logic sees: the same run with and without the pack prints the same lines
+			print("ASSET PACK state hash: ", _world.get_state_hash(), "; mod identity: ", _fs.get_mod_report().get("identity", PackedStringArray()))
+			print("ASSET PACK clip done: ", name)
+			_finish()
+			return
 		"select_building":
 			# the first spawned object: select it by a click, wait for the bar to fill, save the picture
 			var name: String = _spawned.keys()[0]

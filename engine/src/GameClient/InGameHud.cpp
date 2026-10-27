@@ -368,6 +368,14 @@ void InGameHud::setWindowSize(int width, int height)
 {
 	m_windowW = std::max(1, width);
 	m_windowH = std::max(1, height);
+	if (m_palantirRef)
+	{
+		m_palantirRef->setViewportSize(m_windowW, m_windowH);
+	}
+	if (m_store && !isBfme1Data(m_config.fs))
+	{
+		m_store->setViewportSize(m_windowW, m_windowH);
+	}
 }
 
 void InGameHud::whenHeld(std::function<void()> f)
@@ -455,6 +463,7 @@ void InGameHud::flashPalantirButton(int slot, int seconds)
 		m_palantirRef->flashButton(slot, seconds);
 	}
 }
+
 
 bool InGameHud::palantirObjectivesFlashing() const
 {
@@ -587,6 +596,7 @@ void InGameHud::update(double seconds)
 		m_wm->update((int)(seconds * 1000.0));
 	}
 	part(m_updateParts.windows);
+	m_palantirRef->setViewportSize(m_windowW, m_windowH);
 	// lane HUD-2: the local side and the control bar's context the Palantir's update reads (AptPalantir::syncLocal, PalantirCommandUI.h). INFERENCE: the context
 	// drawable is the selection's only object; a multiple selection hands NULL, as ZH's ControlBar does for its multi-select context (the RotWK context rules,
 	// RW 0x944390 .. 0x9450B3, were not read)
@@ -781,6 +791,8 @@ void InGameHud::updateRadarEvents()
 		}
 	}
 }
+
+
 
 // ---- lane SPELL-2 ------------------------------------------------------------------------------------------------------------------------------
 void InGameHud::send(const std::vector<GameMessage> &msgs)
@@ -1034,6 +1046,10 @@ void InGameHud::syncSpellBook()
 	m_palantirRef->syncSpellBook(slots);
 	if (m_store)
 	{
+		if (!isBfme1Data(m_config.fs))
+		{
+			m_store->setViewportSize(m_windowW, m_windowH);
+		}
 		// lane SPELL-3 (S-923 inference): the store's update (RW 0x822E43) runs only after the movie stepped a frame in this update. Its SetLayout swaps the
 		// SpellStore's Buttons clip when the movie next steps; SetSpellButtonState sent before that step reached the Spell<n> clips being replaced, the new
 		// ones started their fade-in without a targetState and fell through into _disabled (dead to clicks), and the state cache never sent them again. A
@@ -1173,8 +1189,22 @@ bool InGameHud::openSpellStore(std::string *error)
 	{
 		return false;
 	}
+	if (!isBfme1Data(m_config.fs))
+	{
+		store->setViewportSize(m_windowW, m_windowH);
+	}
 	m_store = std::move(store);
 	return true;
+}
+
+void InGameHud::cancelSpellStore()
+{
+	if (m_store)
+	{
+		// RW 0x8234C8: Escape resets (0x823484) before closing (0x82289A); Enter and grave only close.
+		m_store->reset();
+		closeSpellStore();
+	}
 }
 
 void InGameHud::closeSpellStore()
@@ -1689,4 +1719,3 @@ void InGameHud::presentBeacons()
 		}
 	}
 }
-

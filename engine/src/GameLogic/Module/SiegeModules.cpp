@@ -125,6 +125,15 @@ const FieldParse kSpecialPowerUpdateBase[] = { // RW 0x9911B3 -> the table RW 0x
 	{ "StartsPaused", INI::parseBool, nullptr, SB_OFF(m_startsPaused) },
 	{ nullptr, nullptr, nullptr, 0 },
 };
+// BFME1's INI.big, evilfactionunits.ini: SiegeDeploySpecialPower supplies InitiateSound2 as well as InitiateSound.
+// Retain the second name as SpecialPowerModuleData already does (Open-BFME-1 SpecialPowerModuleData_buildFieldParse.cpp).
+// This update-based power has its own base table; registering the other special-power table does not cover it.
+// Playback remains part of the existing client stop S-4942. BFME2 / RotWK keep their original table.
+const FieldParse kBfme1SpecialPowerUpdateBase[] = {
+	{ "InitiateSound2", parseSoundName, nullptr, SB_OFF(m_initiateSound2) },
+	{ nullptr, nullptr, nullptr, 0 },
+};
+const Bfme1FieldRowsRegistration kBfme1SpecialPowerUpdateBaseRegistration(kSpecialPowerUpdateBase, kBfme1SpecialPowerUpdateBase);
 #undef SB_OFF
 const FieldParse kSiegeDeployHorde[] = { // RW 0xC74958
 	{ "HordeDeploy", INI::parseBool, nullptr, (int)offsetof(SiegeDeployHordeSpecialPowerModuleData, m_hordeDeploy) },
@@ -1449,6 +1458,11 @@ void AIUpdateInterface::aiFacePosition(const Coord3D &pos, CommandSourceType sou
 	{
 		return;
 	}
+	privateFacePosition(pos, source);
+}
+
+void AIUpdateInterface::privateFacePosition(const Coord3D &pos, CommandSourceType source)
+{
 	if (!GarrisonRules::isMobile(*getObject())) // RW 0x690E97
 	{
 		return;

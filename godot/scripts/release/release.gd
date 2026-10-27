@@ -27,6 +27,7 @@
 extends Node
 
 const UpdateHandover := preload("res://scripts/release/update_handover.gd")
+const LanguageWarning := preload("res://scripts/release/language_warning.gd")
 const UPDATE_POLL_SECONDS := 1.0
 const UPDATE_NOTE_SECONDS := 15.0   # how long "Up to date" stays in the corner
 const UPDATE_WATCH_SECONDS := 3 * 3600.0
@@ -301,8 +302,66 @@ func set_in_game(in_game: bool) -> void:
 
 
 ## Mounts the retail archives (RetailFileSystem `fs`) from the environment, the remembered folders or the first-run screen. Returns the
-## mount report ({ok, errors, ...}); with ok false the caller fails with the errors.
+## mount report ({ok, errors, ...}); with ok false the caller fails with the errors. PR #77: when the mount took language archives no pin covers,
+## the details are logged and the language warning (scripts/release/language_warning.gd) is shown before the game goes on.
 func mount_retail(fs: RefCounted) -> Dictionary:
+	var mount: Dictionary = await _mount_retail_folders(fs)
+	# lane SDK-1: the asset pack models that replace nothing or do not fit the model they replace (left out; the game's model is drawn)
+	for note in mount.get("asset_pack_notes", PackedStringArray()):
+		print("RELEASE asset packs: ", note)
+	if mount.get("ok", false) and await language_warning(mount):
+		mount["quit"] = true # --language-warning-shot: the capture is saved, the game quits (game.gd)
+	return mount
+
+
+## PR #77: the warning for an install in a language OpenBFME has not checked: logged always; shown in a window once per install (until the player
+## ticks "Don't show this again"), not in a headless or scripted (--auto) run. --language-warning-shot=<png> (a proof capture): the box is shown even
+## in a scripted run, the window is saved to that file, and the game quits (returns true).
+func language_warning(mount: Dictionary) -> bool:
+	var w := LanguageWarning.warning_of(mount)
+	if w.is_empty():
+		return false
+	for line in LanguageWarning.log_lines(mount):
+		print(line)
+	var shot := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--language-warning-shot="):
+			shot = a.trim_prefix("--language-warning-shot=")
+	if _headless() or (OS.get_cmdline_user_args().has("--auto") and shot.is_empty()):
+		print("LANGUAGE the warning box is not shown in a headless or scripted run")
+		return false
+	if shot.is_empty() and LanguageWarning.dismissed(mount):
+		print("LANGUAGE the player chose not to see the warning again for this install")
+		return false
+	var box: AcceptDialog = LanguageWarning.make_dialog(mount)
+	if not shot.is_empty():
+		# the capture renders the box at the menus' size in a viewport of its own (the window may not have its size yet this early)
+		var stage := SubViewport.new()
+		stage.size = Vector2i(1280, 720)
+		stage.gui_embed_subwindows = true
+		stage.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		var backdrop := ColorRect.new()
+		backdrop.color = Color(0.05, 0.05, 0.06)
+		backdrop.size = Vector2(1280, 720)
+		stage.add_child(backdrop)
+		add_child(stage)
+		stage.add_child(box)
+		box.popup_centered()
+		for i in 30:
+			await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		var image := stage.get_texture().get_image()
+		var err := image.save_png(shot)
+		print("LANGUAGE --language-warning-shot: ", shot.get_file(), " ", image.get_width(), "x", image.get_height(), " ", error_string(err))
+		stage.queue_free()
+		return true
+	add_child(box)
+	box.popup_centered()
+	await box.tree_exiting
+	return false
+
+
+func _mount_retail_folders(fs: RefCounted) -> Dictionary:
 	if OS.get_cmdline_user_args().has("--game=bfme1"):
 		if not mod_args(OS.get_cmdline_user_args(), OS.get_environment("OPENBFME_MOD")).is_empty():
 			return {"ok": false, "errors": ["-mod is RotWK's switch (lane MODS-1); BFME1 mode mounts no mods"]}
@@ -334,7 +393,7 @@ func mount_retail(fs: RefCounted) -> Dictionary:
 	if not packs.ok:
 		return {"ok": false, "errors": packs.errors}
 	if not packs.packs.is_empty():
-		print("RELEASE asset packs: ", ", ".join(packs.packs), " (", packs.textures, " textures, ", packs.models, " models)")
+		print("RELEASE asset packs: ", ", ".join(packs.packs), " (", packs.textures, " textures, ", packs.models, " models; offline games only for now, lane SDK-1b)")
 		for note in packs.notes:
 			print("RELEASE asset packs: ", note)
 	var test_pick := _first_run_test_args(args)
@@ -388,18 +447,36 @@ static func install_mod_args(args: PackedStringArray, env: String) -> PackedStri
 	return out
 
 
-# lane SDK-0: the asset pack folders: user://asset-packs/<pack>/ in name order (drag and drop), then --asset-pack=FOLDER in command-line order
+# lane SDK-0: the asset pack folders: user://asset-packs/<pack>/ in name order (drag and drop), then --asset-pack=FOLDER in command-line order.
+# Lane SDK-1: a pack named in user://asset-packs/disabled.txt (one folder name per line; the launcher's Mods page writes it) is left out.
 static func asset_pack_folders(args: PackedStringArray) -> PackedStringArray:
 	var out := PackedStringArray()
 	var root := ProjectSettings.globalize_path("user://asset-packs")
 	var names := DirAccess.get_directories_at(root) if DirAccess.dir_exists_absolute(root) else PackedStringArray()
 	names.sort()
+	var off := disabled_asset_packs(root)
 	for n in names:
+		if off.has(n.to_lower()):
+			print("RELEASE asset packs: ", n, " is turned off (asset-packs/disabled.txt)")
+			continue
 		out.push_back(root.path_join(n))
 	for a in args:
 		if a.begins_with("--asset-pack="):
 			out.push_back(a.trim_prefix("--asset-pack="))
 	return out
+
+
+# lane SDK-1: the pack folder names (lower case) listed in <root>/disabled.txt; blank lines and lines starting with # are skipped
+static func disabled_asset_packs(root: String) -> Dictionary:
+	var off := {}
+	var path := root.path_join("disabled.txt")
+	if not FileAccess.file_exists(path):
+		return off
+	for line in FileAccess.get_file_as_string(path).split("\n"):
+		var n := line.strip_edges()
+		if not n.is_empty() and not n.begins_with("#"):
+			off[n.to_lower()] = true
+	return off
 
 
 # --first-run=accept                 take the first discovered folders that pass the check (the "found" case of the fresh-user test)

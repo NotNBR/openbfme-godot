@@ -155,6 +155,7 @@ public:
 
 	// placement state
 	AptMatrix matrix;
+	AptMatrix viewportTransform;
 	AptColorTransform color;
 	float ratio = 0;
 	float placeRatio = 0; // lane FB7-1: the ratio of the place object that created the instance (the seek's same-placement test, BFME2 0x00AF9589)

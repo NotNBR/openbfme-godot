@@ -154,8 +154,10 @@ public:
 	void startRunning(const std::string &id, bool rejoin);
 	// lane ONLINEUX-1 (tests): whether the movie was last told to enable its Login button (-1: not told yet)
 	int loginButtonState() const { return m_loginButton; }
+	// BFME2 0x005DB647 RedrawGrid: the Connections grid's rows and columns (retail's eight players; a 16-player room keeps it, S-4550)
+	static constexpr int kConnectionGrid = LEGACY_MAX_SLOTS;
 	// lane ONLINEMENU-1 (tests): the Connections screen's cells as last drawn ("" not drawn), and whether it is open
-	const std::string &connectionCell(int row, int column) const { return m_gridFrames[(size_t)(row * MAX_SLOTS + column)]; }
+	const std::string &connectionCell(int row, int column) const { return m_gridFrames.at((size_t)(row * kConnectionGrid + column)); }
 	bool connectionsOpen() const { return m_connectionsOpen; }
 	const std::string &gridCaller() const { return m_gridCaller; }
 	// lane ONLINEMENU-1 (owner, 2026-10-20: the grid "makes like no sense just have it show like ping to server, ping to other players etc"): the
@@ -307,7 +309,7 @@ private:
 	std::string m_clipboard;
 	std::vector<bool> m_rowOtherBuild; ///< lane JOINVER-1: a row of a game of another build (greyed: it cannot be joined)
 	void decorateAll(GadgetDrawList &out);
-	std::array<std::string, MAX_SLOTS * MAX_SLOTS> m_gridFrames; ///< each cell's frame as last drawn (tests)
+	std::array<std::string, kConnectionGrid * kConnectionGrid> m_gridFrames; ///< each cell's frame as last drawn (tests)
 	std::unique_ptr<RelayProbe> m_probe;
 	std::uint64_t m_probeDueMs = 0;
 	std::uint64_t m_probeDoneMs = 0;        ///< when the last measurement ended (0 none)

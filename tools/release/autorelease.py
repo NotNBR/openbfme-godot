@@ -296,6 +296,10 @@ def knows_alpha(semver_gd: str) -> bool:
     with tempfile.TemporaryDirectory() as d:
         Path(d, "project.godot").write_text('config_version=5\n\n[application]\n\nconfig/name="semver probe"\n')
         Path(d, "semver.gd").write_text(semver_gd)
+        # L10N-1: semver.gd preloads the launcher's text runtime for its display strings; the probe checks the grammar only, so a stub
+        # that returns the id stands in for it (an older tree's semver.gd does not preload it: the stub is then unused)
+        Path(d, "scripts/l10n").mkdir(parents=True)
+        Path(d, "scripts/l10n/l10n.gd").write_text("extends RefCounted\nstatic func t(id: String, _args: Dictionary = {}) -> String:\n\treturn id\n")
         Path(d, "probe.gd").write_text(_ALPHA_PROBE)
         env = dict(os.environ, XDG_DATA_HOME=str(Path(d, "data")), XDG_CONFIG_HOME=str(Path(d, "config")), XDG_CACHE_HOME=str(Path(d, "cache")))
         try:
@@ -1034,8 +1038,8 @@ class SyncAudit(audit_package.Audit):
 
 
 def is_detached_signature(name: str, data: bytes, depth: int, payload_tar: bool = False) -> bool:
-    """PUBLICCI-1: a release's detached Ed25519 signature (manifest*.json.sig, sign_manifest.py, and SIGNKMS-1's manifest*.json.sig2,
-    kms_sign.py: 64 raw bytes, top level) is random; about
+    """PUBLICCI-1: a release's detached Ed25519 signature (manifest*.json.sig, sign_manifest.py, and SIGNKMS-1's manifest*.json.sig2
+    slot: 64 raw bytes, top level) is random; about
     1 in 992 starts with a valid zlib header (the hosted pull request checks hit one in test_autorelease). Such a file that does NOT decode
     as zlib is a signature, not a finding; one that decodes is still decoded and checked like any other stream.
     The signed payload sidecar at a release package root has the same random bytes (one archive layer, or the Linux gzip stream followed by its tar)."""

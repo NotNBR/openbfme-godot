@@ -169,6 +169,7 @@ public:
 	// the store (AptPalantir::OnBttnSpellStore): SpellStore.apt in a window slot over the Palantir, bound to the local player; closing sends the purchases
 	bool openSpellStore(std::string *error = nullptr);
 	void closeSpellStore();
+	void cancelSpellStore();
 	AptSpellStore *spellStore() { return m_store.get(); }
 	const PlayerMessageLog &playerMessages() const { return m_playerMessages; }
 	// lane CHEAT-1: a line of text (not a game text label) in the message log, as InGameUI::message's handler adds one: the Cheat Mode announcements

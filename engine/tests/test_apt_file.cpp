@@ -396,7 +396,7 @@ TEST_CASE("decoder: branches resolve to instruction indices; a branch into the m
 	CHECK(b->instructions[0].branchTarget == 2);   // the End instruction
 	TestMovie m2;
 	Asm a2 = m2.program();
-	a2.rawBranch(APT_OP_BRANCHALWAYS, 5).op(APT_OP_END).op(APT_OP_END); // lands past every instruction boundary
+	a2.rawBranch(APT_OP_BRANCHALWAYS, 2).pushLong(0).op(APT_OP_END); // zero inside the PushLong operand, not an End
 	std::string err;
 	CHECK_FALSE(decodeOne(m2, a2, &err));
 	CHECK(err.find("targets non-instruction") != std::string::npos);
@@ -407,6 +407,44 @@ TEST_CASE("decoder: branches resolve to instruction indices; a branch into the m
 	std::shared_ptr<const AptCodeBlock> b3 = decodeOne(m3, a3);
 	REQUIRE(b3);
 	CHECK(b3->instructions[1].branchTarget == 0);
+}
+
+TEST_CASE("decoder: branches to End beyond the linear stream do not decode intervening data")
+{
+	// RW 0x00B193B0 / 0x00B18F00, then runStream RW 0x00B14470: read the target opcode, not the skipped bytes.
+	for (std::uint8_t opcode : { APT_OP_BRANCHALWAYS, APT_OP_BRANCHIFTRUE })
+	{
+		TestMovie m;
+		Asm a = m.program();
+		a.rawBranch(opcode, 4).op(APT_OP_END).op(0xFE).op(0x7F).op(0xFF).op(APT_OP_END);
+		std::string err;
+		auto b = decodeOne(m, a, &err);
+		REQUIRE_MESSAGE(b, err);
+		CHECK(b->instructions.size() == 2);
+		CHECK(b->instructions[0].branchTarget == 1);
+		CHECK(b->instructions[1].opcode == APT_OP_END);
+		CHECK(b->endOffset == a.startOffset() + 9);
+	}
+}
+
+TEST_CASE("decoder: terminal branches still reject out-of-range and non-End targets")
+{
+	for (std::int32_t delta : { INT32_MIN, INT32_MAX, 1 })
+	{
+		TestMovie m;
+		Asm a = m.program();
+		a.rawBranch(APT_OP_BRANCHALWAYS, delta).op(APT_OP_END).op(0xFF);
+		std::string err;
+		CHECK_FALSE(decodeOne(m, a, &err));
+		CHECK(err.find("targets non-instruction") != std::string::npos);
+	}
+	TestMovie m;
+	Asm a = m.program();
+	a.defineFunction("bounded", {}, [](Asm &f) { f.rawBranch(APT_OP_BRANCHALWAYS, 4).op(APT_OP_END); });
+	a.op(APT_OP_END);
+	std::string err;
+	CHECK_FALSE(decodeOne(m, a, &err));
+	CHECK(err.find("targets non-instruction") != std::string::npos);
 }
 
 TEST_CASE("decoder: DefineFunction and DefineFunction2 nest, report their parameters and count flat instructions")

@@ -682,6 +682,15 @@ void GameLogic::update(int phase)
 			}
 			p->getScoreKeeper().recordPerFrameStats(*this, *p, m_frame);
 		}
+		// lane SDK-2: the OpenBFME end-of-frame listeners (mod scripts); a copy, as a listener may remove itself
+		if (!m_endOfFrameHooks.empty())
+		{
+			const std::vector<EndOfFrameEntry> hooks = m_endOfFrameHooks;
+			for (const EndOfFrameEntry &h : hooks)
+			{
+				h.hook(m_frame);
+			}
+		}
 	}
 	m_inUpdate = wasInUpdate;
 	--m_depth;

@@ -737,6 +737,58 @@ TEST_CASE("render list: a clip layer emits MaskBegin, the mask shape, MaskConten
 	CHECK(rl.unverified == std::vector<std::string>{ "clip-layer" });
 }
 
+TEST_CASE("player: stored clip depth defines a mask without the SWF flag and survives moves and seeks")
+{
+	// RW 0xB0D0C0: clip depth is a placement argument, not a flag-gated move field.
+	for (bool seek : { false, true })
+	{
+		TestMovie m;
+		m.addCharacter(0);
+		const auto shape = m.addCharacter(m.addShape(0, 0, 10, 10, 1));
+		auto mask = placeChar(shape, 1, "mask");
+		mask.clipDepth = 2;
+		REQUIRE((mask.flags & APT_PLACE_HASCLIPDEPTH) == 0);
+		TestMovie::Place move;
+		move.flags = APT_PLACE_MOVE | APT_PLACE_HASMATRIX | APT_PLACE_HASCLIPDEPTH;
+		move.depth = 1;
+		move.translation[0] = 5;
+		move.clipDepth = 99; // even a flagged move cannot replace the placement's clip depth
+		m.setRootFrames({ { m.addPlaceItem(mask), m.addPlaceItem(placeChar(shape, 2, "inside")),
+			m.addPlaceItem(placeChar(shape, 3, "outside")) }, {}, { m.addPlaceItem(move) } });
+		PlayerFx fx;
+		addShapeFile(fx, "A", 1);
+		REQUIRE(fx.load(0, "A", m));
+		auto check = [&]() {
+			AptRenderList rl;
+			fx.apt->buildRenderList(rl);
+			using K = AptRenderCommand::Kind;
+			std::vector<K> kinds;
+			for (const auto &command : rl.commands)
+			{
+				kinds.push_back(command.kind);
+			}
+			REQUIRE(kinds == std::vector<K>{ K::MaskBegin, K::Shape, K::MaskContentBegin, K::Shape, K::MaskEnd, K::Shape });
+			CHECK(rl.commands[0].clipDepth == 2);
+			CHECK(rl.commands.back().path == "_level0.outside");
+		};
+		check();
+		if (seek)
+		{
+			fx.apt->level(0)->gotoFrame(2);
+		}
+		else
+		{
+			fx.apt->stepFrame(fx.apt->msPerFrame());
+			fx.apt->stepFrame(fx.apt->msPerFrame());
+		}
+		check();
+		CHECK(fx.apt->level(0)->childAtDepth(1)->matrix.tx == 5.0f);
+		fx.apt->level(0)->gotoFrame(0);
+		check();
+		CHECK(fx.host.errors.empty());
+	}
+}
+
 namespace
 {
 class ComponentHost : public AptStubHost

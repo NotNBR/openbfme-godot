@@ -107,6 +107,7 @@ public:
 	// lane SDK-0: the packs (empty without any) and the W3D source of the RENDER side: the mounted files with the packs in front. Never for
 	// the simulation's asset manager (LiveGame's m_simAssetSource reads the archive file system directly).
 	const AssetPacks &assetPacks() const { return m_packs; }
+	AssetPacks &assetPacksMutable() { return m_packs; } // lane SDK-1b: GameWorld::set_asset_packs_used
 	std::unique_ptr<W3DFileSource> renderW3DSource();
 
 protected:

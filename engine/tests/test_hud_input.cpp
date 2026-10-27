@@ -758,26 +758,120 @@ TEST_CASE("synthetic HUD: an unarmed selection or no selection cannot issue an e
 	}
 }
 
-TEST_CASE("synthetic HUD: attack-move targeting and current right-click cancellation")
+// Issue #82. BFME2 GUICommandTranslator::translateGameMessage (0x004314B1): a waiting ATTACK_MOVE swaps the click roles when GlobalData m_useAlternateMouse is
+// set (the right click carries it out: doAttackMoveCommand 0x004311A7, MSG_DO_ATTACKMOVETO; the left click ends it); the standard setup keeps the left click
+// for the order and the right click for the cancel. SelectionTranslator (0x0043003C) does not cancel an ATTACK_MOVE on the right button up
+TEST_CASE("synthetic HUD: attack-move click roles in the alternate mouse setup (right click orders, left click cancels)")
 {
-	synthetichud::Rig r;
-	r.place("TestFighter", 100, 100);
-	r.click(100, 100); r.drain();
+	synthetichud::Rig r; // the alternate setup, RotWK's default
+	Object *a = r.place("TestFighter", 100, 100);
+	r.click(100, 100); r.selected({ a->getID() });
 	CommandButton attackMove;
 	attackMove.m_command = GUI_COMMAND_ATTACK_MOVE;
+	attackMove.m_options = COMMAND_OPTION_NEED_TARGET_POS;
+	attackMove.m_cursorName = "AttackMove";
 	r.input->ui().setGUICommand(&attackMove);
-	SUBCASE("world left click issues attack move")
+	SUBCASE("a right click on the ground sends the attack move to the clicked point and ends the command")
+	{
+		r.click(300, 300, HudInput::Button::Right);
+		r.locationCommand(MSG_DO_ATTACKMOVETO, 300, 300);
+		CHECK(r.input->ui().getGUICommand() == nullptr);
+		r.selected({ a->getID() });
+	}
+	SUBCASE("a right double click carries it out too")
+	{
+		r.click(300, 300, HudInput::Button::Right, true);
+		r.locationCommand(MSG_DO_ATTACKMOVETO, 300, 300);
+		CHECK(r.input->ui().getGUICommand() == nullptr);
+	}
+	SUBCASE("a left click ends the command: no order, the selection stays")
+	{
+		r.click(300, 300);
+		CHECK(r.commands.messages().size() == 0u);
+		CHECK(r.input->ui().getGUICommand() == nullptr);
+		r.selected({ a->getID() });
+		// the next right click is an ordinary move again
+		r.click(320, 320, HudInput::Button::Right);
+		r.locationCommand(MSG_DO_MOVETO, 320, 320);
+	}
+}
+
+TEST_CASE("synthetic HUD: attack-move click roles in the standard mouse setup (left click orders, right click cancels)")
+{
+	synthetichud::Rig r;
+	r.input->commandTranslator().setUseAlternateMouse(false);
+	Object *a = r.place("TestFighter", 100, 100);
+	r.click(100, 100); r.selected({ a->getID() });
+	CommandButton attackMove;
+	attackMove.m_command = GUI_COMMAND_ATTACK_MOVE;
+	attackMove.m_options = COMMAND_OPTION_NEED_TARGET_POS;
+	attackMove.m_cursorName = "AttackMove";
+	r.input->ui().setGUICommand(&attackMove);
+	SUBCASE("a left click on the ground sends the attack move and ends the command")
 	{
 		r.click(300, 300);
 		r.locationCommand(MSG_DO_ATTACKMOVETO, 300, 300);
+		CHECK(r.input->ui().getGUICommand() == nullptr);
+		r.selected({ a->getID() });
 	}
-	SUBCASE("finding: world right click clears the target mode but also moves")
+	SUBCASE("a right click ends the command without an order; the standard setup's right button up deselects (0x0043003C, type 10)")
 	{
-		// SPELLRC-1's spellbook cancel hook is separate: this GUI attack-move behaviour remains on main.
 		r.click(300, 300, HudInput::Button::Right);
-		r.locationCommand(MSG_DO_MOVETO, 300, 300);
+		CHECK(r.input->ui().getGUICommand() == nullptr);
+		// no order: the one logic message is the deselection's MSG_DESTROY_SELECTED_GROUP (true)
+		const GameMessage &m = r.onlyCommand(MSG_DESTROY_SELECTED_GROUP);
+		REQUIRE(m.getArgumentCount() == 1);
+		CHECK(m.getArgument(0)->type == ARGUMENTDATATYPE_BOOLEAN);
+		CHECK(m.getArgument(0)->boolean == true);
+		r.selected({});
 	}
-	CHECK(r.input->ui().getGUICommand() == nullptr);
+}
+
+TEST_CASE("synthetic HUD: the waiting attack move shows its CursorName (createCommandHint 0x002A3273, GUI command mode)")
+{
+	synthetichud::Rig r;
+	Object *a = r.place("TestFighter", 100, 100);
+	r.click(100, 100); r.selected({ a->getID() });
+	r.move(300, 300);
+	CHECK(r.input->ui().cursor() == "Move");
+	CommandButton attackMove;
+	attackMove.m_command = GUI_COMMAND_ATTACK_MOVE;
+	attackMove.m_options = COMMAND_OPTION_NEED_TARGET_POS;
+	attackMove.m_cursorName = "AttackMove";
+	attackMove.m_invalidCursorName = "GenericInvalid";
+	r.input->ui().setGUICommand(&attackMove);
+	// setGUICommand 0x0029A889: Arrow, the GUI command mode (2) with the Arrow as its cursor
+	CHECK(r.input->ui().mouseMode() == 2);
+	CHECK(r.input->ui().cursor() == "Arrow");
+	CHECK(r.input->ui().mouseModeCursor() == "Arrow");
+	r.move(310, 300);
+	CHECK(r.input->ui().cursor() == "AttackMove");
+	CHECK(r.input->ui().mouseModeCursor() == "AttackMove");
+	// over an own unit: the mode's cursor (createMouseoverHint), never Select, and the command hint keeps the AttackMove
+	r.move(100, 100);
+	CHECK(r.input->ui().cursor() == "AttackMove");
+	SUBCASE("the order ends the mode and the cursor is the Arrow again")
+	{
+		r.click(300, 300, HudInput::Button::Right);
+		r.locationCommand(MSG_DO_ATTACKMOVETO, 300, 300);
+		CHECK(r.input->ui().mouseMode() == 0);
+		CHECK(r.input->ui().cursor() == "Arrow");
+		r.move(320, 300);
+		CHECK(r.input->ui().cursor() == "Move");
+	}
+	SUBCASE("the cancel ends the mode and the cursor is the Arrow again")
+	{
+		r.click(300, 300);
+		CHECK(r.commands.messages().size() == 0u);
+		CHECK(r.input->ui().mouseMode() == 0);
+		CHECK(r.input->ui().cursor() == "Arrow");
+	}
+	SUBCASE("a button without a CursorName shows the Target (cursor 4)")
+	{
+		attackMove.m_cursorName.clear();
+		r.move(330, 300);
+		CHECK(r.input->ui().cursor() == "Target");
+	}
 }
 
 TEST_CASE("synthetic HUD finding: modifier-only bindings match the whole chord, not independent bits")

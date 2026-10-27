@@ -208,6 +208,8 @@ AptSkirmish::~AptSkirmish()
 AptSkirmish::AptSkirmish(WindowManager &windows, Shell &shell, ShellEnvironment &environment, const char *filename, const char *codePrefix, bool lan)
 	: AptScreen(windows, shell, filename, codePrefix), m_env(environment), m_lan(lan)
 {
+	// RW 0x845AE2 queries the setup owner: a network browser is not a host (LAN owner RW 0x846D9A).
+	setHostModeText(lan ? "0" : "1");
 	m_profiles = environment.profiles;
 	if (!m_profiles)
 	{
@@ -984,13 +986,11 @@ void AptSkirmish::registerLobby()
 		return true;
 	});
 	registerProvider("MpGameSetup::HostMode", [this](const std::string &, std::string &value, bool setting) {
-		if (setting)
+		// RW 0x845AE2: query 0 reads the owner; writes do not change host status.
+		if (!setting)
 		{
-			m_hostModeText = value;
-			m_hostMode = value == "1";
-			return true;
+			value = m_hostModeText;
 		}
-		value = m_hostModeText;
 		return true;
 	});
 	registerProvider("MpGameSetup::IsInitialized", [this](const std::string &, std::string &value, bool setting) {
@@ -1003,7 +1003,7 @@ void AptSkirmish::registerLobby()
 		return true;
 	});
 	// the chat and clan tabs belong to online play; the generated rule rows have no data source in the engine yet [S-178]
-	// lane UI-1: AptMpGameRules::ShowChat is RW 0x845AE2's id 0: the host interface's slot 4 (the LAN lobby: TheLAN's slot 0xD8, RW 0x846D9A) as "1" / "0"
+	// RW 0x845AE2 query 3 reads the setup flags' chat bit, independently of HostMode (query 0).
 	registerProvider("AptMpGameRules::ShowChat", [this](const std::string &, std::string &value, bool setting) {
 		if (!setting)
 		{

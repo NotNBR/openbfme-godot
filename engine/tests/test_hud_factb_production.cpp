@@ -523,6 +523,20 @@ Outcome researchOne(factb::HudGame &g, Object *bld, const CommandButton *cb, Res
 		pending = str("%s not enabled (state %d)%s%s", cb->m_name.c_str(), (int)b.state, need.empty() ? "" : ", needs", need.c_str());
 		return Outcome::NotEnabled;
 	}
+	if (cb->hasOption(COMMAND_OPTION_NONPRESSABLE))
+	{
+		// the Hall of Twilight's technologies (_patch201 commandbutton.ini Options = NONPRESSABLE): retail draws them _static (RW 0x9D2BFA) and buys them
+		// itself through its DoCommandUpgrade modules; the bar refuses their press (ControlBar::pressButton, INFERENCE)
+		if (g.press(b))
+		{
+			res.fail(item, "a NONPRESSABLE button's press sent a message (" + cb->m_name + ")");
+		}
+		else
+		{
+			res.pass(item, "NONPRESSABLE: the press is refused (" + cb->m_name + ")");
+		}
+		return Outcome::Done;
+	}
 	const ObjectID bldId = bld->getID();
 	waitProductionIdle(g, bld);
 	if (!(bld = g.logic().findObjectByID(bldId)))

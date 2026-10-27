@@ -23,8 +23,9 @@
 //     the optional filter), then the melee drop and the horde adjustment.
 //   * adjustVictim RW 0x68D30E(victim, attacker, attackRange, arg): see the function.
 //
-// INFERENCE / NOT PORTED (stop S-326, reported): the line of sight filter (RW 0x6616AC: the terrain line, TheTerrainLogic vslot 0x3C, and the pathfinder's
-// view block RW 0x6F4F9D) is taken as clear, as the horde member pick takes it (S-859); the reject-buildings filter's contain answer (contain vslot 0x4C, the
+// The line of sight filter (RW 0x6616AC: the terrain line, TheTerrainLogic vslot 0x3C, and the pathfinder's view block RW 0x6F4F9D) is ported (lane LOS-1,
+// GameLogic/Combat/CombatLineOfSight.h).
+// INFERENCE / NOT PORTED (stop S-326, reported): the reject-buildings filter's contain answer (contain vslot 0x4C, the
 // apparent controlling player) is not ported (an uncontrolled contained structure is refused); the attack-moving skirmish AI filter needs AI state 0x21
 // (AIAttackMoveToState), which the port's attack-move does not use (S-328), so it is never linked; the CONTESTING_BUILDING branch (contain vslot 0xDC)
 // has no setter in the port; the friendly-fire crowd query is distance type 4 (RW 0xA3C7D0 -> RW 0xAD2CE0, S-1020): with AIData ArtilleryMaxFriendlyFire
