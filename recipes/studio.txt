@@ -1,9 +1,10 @@
-# combo/studio: the engine bfme2-map-studio runs (its submodule native/openbfme-godot follows this branch).
-# Held at upstream/main of 2026-10-26 15:01 (#103 merged): its next sync, 09517811, rewrites AssetPacks and the retail
-# mount, and conflicts with feat/hd-terrain-packs (AssetPacks, docs/MODS.md) and feat/extra-archives (RetailFileSystem).
-# Rebase those two on upstream/main, then go back to `base upstream/main`.
-base 09875876
-# Upstream now includes #64 (siege), #73 (horde centring), #74 (destination spiral), #115 (bokeh smoothing), and #123 (flag recapture).
+# combo/studio: the engine BFME Studio and bfme2-map-studio run (their submodules engine/openbfme-godot and
+# native/openbfme-godot follow this branch).
+# feat/extra-archives and feat/hd-terrain-packs took upstream/main of 2026-10-27 (61719ed8: its asset-pack rework and
+# language mounts) by merge, so the combo follows upstream again.
+base upstream/main
+# Upstream now includes #64 (siege), #73 (horde centring), #74 (destination spiral), #115 (bokeh smoothing), #119 (packed
+# model textures) and #123 (flag recapture).
 
 feat/extra-archives     # fork only: OPENBFME_EXTRA_ARCHIVES, the studio's map archives over retail (until games on user maps, S-5160)
 feat/no-shroud          # fork only: --no-shroud
