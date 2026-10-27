@@ -139,7 +139,8 @@ TEST_CASE("render lighting: classic W3D surfaces are lit like defaultw3d.fxo, in
 	k.PriGradient = W3D_GRADIENT_MODULATE;
 	k.HasDCG = true;
 	const std::string code = Generate_W3D_Shader_Code(k);
-	CHECK(has(code, "unshaded"));
+	CHECK(has(code, "ambient_light_disabled"));
+	CHECK(has(code, "instance uniform bool w3d_receive_shadows : instance_index(1) = false;"));
 	CHECK_FALSE(has(code, "source_color")); // the retail arithmetic runs on the stored texel values
 	CHECK(has(code, "global uniform vec3 w3d_amb_obj;"));
 	CHECK(has(code, "global uniform mat3 w3d_lcol_inf;"));

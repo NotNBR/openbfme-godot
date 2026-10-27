@@ -347,6 +347,7 @@ var _shell: Node2D           # AptMenuPlayer
 var _camera: Camera3D
 var _env: WorldEnvironment
 var _sun: DirectionalLight3D
+var _shadow_lighting: Dictionary = {}
 var _state := State.BOOT
 var _frames := 0
 var _menu_revealed := false
@@ -651,6 +652,8 @@ var _scripted_skirmish_ini := ""
 
 
 func _exit_tree() -> void:
+	if _sun != null:
+		load("res://scripts/object_shadows.gd").disable()
 	if not _scripted_skirmish_ini.is_empty():
 		# lane MENU-1: the scripted run's own Skirmish.ini; lane OWNERFIX-3: its folder and the profiles' stats files in it
 		var dir := _scripted_skirmish_ini.get_base_dir()
@@ -2864,20 +2867,31 @@ func _zoom_out_setting() -> float:
 
 func _apply_lighting(rep: Dictionary) -> void:
 	if not rep.has("lighting"):
+		if _sun != null:
+			_sun.visible = false
+			load("res://scripts/object_shadows.gd").disable()
 		return
 	var lit: Dictionary = rep.lighting
 	_env.environment.ambient_light_color = lit.ambient
 	_env.environment.ambient_light_energy = 1.0
 	if _sun != null:
+		_sun.visible = false
 		_sun.queue_free()
 	_sun = DirectionalLight3D.new()
 	_sun.name = "ObjectSun"
 	_sun.light_color = lit.diffuse
-	_sun.shadow_enabled = false
+	_shadow_lighting = lit
+	var shadow_lod := int(_shell.get_detail_state().get("shadow_lod", 3)) if _shell != null else 3
+	set_shadow_lod(shadow_lod)
 	var dir: Vector3 = lit.direction
 	if dir.length() > 0.0001:
 		_sun.transform = Transform3D(Basis.looking_at(dir.normalized(), Vector3.UP if absf(dir.normalized().y) < 0.99 else Vector3.RIGHT), Vector3.ZERO)
 	add_child(_sun)
+
+
+func set_shadow_lod(lod: int) -> void:
+	if _sun != null:
+		load("res://scripts/object_shadows.gd").configure(_sun, _shadow_lighting, lod)
 
 
 # ---- the scripted run (--auto) --------------------------------------------------------------------------------------------------------------
