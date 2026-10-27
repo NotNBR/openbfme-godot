@@ -4,6 +4,7 @@
 #include "Common/BfmeGame.h"
 #include "GodotDevice/GodotGammaComposite.h"
 #include "GodotDevice/GodotMapTerrain.h"
+#include "GodotDevice/GodotGroundCover.h"
 
 #include "Common/ArchiveFileSystem.h"
 #include "GameClient/MapClassification.h"
@@ -30,12 +31,15 @@
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/box_mesh.hpp>
 #include <godot_cpp/classes/geometry_instance3d.hpp>
+#include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
+#include <godot_cpp/classes/json.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
 #include <godot_cpp/classes/multi_mesh.hpp>
 #include <godot_cpp/classes/multi_mesh_instance3d.hpp>
 #include <godot_cpp/classes/resource_loader.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/shader.hpp>
 #include <godot_cpp/classes/shader_material.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
@@ -671,6 +675,12 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 	const TimeOfDayLights *tod = lighting ? &lighting->tod[std::max(0, std::min(3, lighting->timeOfDay - 1))] : nullptr;
 	const float effectColorScale = lighting ? W3DObjectLightingUtil::effectColorScale(*lighting) : 1.0f;
 	const bool overbright = effectColorScale > 1.0f;
+	const bool wantGroundCover = wantTerrain && optBool(options, "ground_cover",
+		(bool)ProjectSettings::get_singleton()->get_setting("openbfme/rendering/ground_cover", false));
+	Ref<Image> groundCoverMask;
+	Ref<ShaderMaterial> groundCoverTerrainMaterial;
+	TerrainUvOptions groundCoverUv;
+	std::vector<RoadStrip> groundCoverRoads;
 
 	if (lighting)
 	{
@@ -810,6 +820,39 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		};
 		Ref<ImageTexture> baseTex = makeTexture(images.base, images.width, images.height);
 		Ref<ImageTexture> normalTex = makeTexture(images.normal, images.width, images.height);
+		// Grass eligibility by terrain class; atlas gutters match TerrainAtlas.
+		const String profilePath = "res://assets/ground_cover/profiles.json";
+		const Variant parsedProfiles = JSON::parse_string(FileAccess::get_file_as_string(profilePath));
+		if (parsedProfiles.get_type() != Variant::DICTIONARY)
+		{
+			memdelete(root);
+			return fail("grass profiles must be a JSON dictionary: " + std::string(profilePath.utf8().get_data()));
+		}
+		const Dictionary profiles = parsedProfiles;
+		const Array include = profiles.get("include", Array());
+		const Array exclude = profiles.get("exclude", Array());
+		const Dictionary overrides = profiles.get("overrides", Dictionary());
+		Ref<Image> meadowImage = Image::create_empty(images.width, images.height, false, Image::FORMAT_R8);
+		meadowImage->fill(Color(0, 0, 0));
+		for (const TXTextureClass &c : hm.m_textureClasses)
+		{
+			const String name = toGodot(c.name).to_lower();
+			bool meadow = false;
+			for (int64_t i = 0; i < include.size(); ++i)
+				if (name.contains(String(include[i]).to_lower())) meadow = true;
+			for (int64_t i = 0; i < exclude.size(); ++i)
+				if (name.contains(String(exclude[i]).to_lower())) meadow = false;
+			if (overrides.has(name)) meadow = (bool)overrides[name];
+			if (!meadow || c.positionInTexture.x <= 0) continue;
+			// Derive the loaded square as TerrainAtlas does; the stored width may disagree.
+			int tilesWide = 0;
+			for (int w = 16; w >= 1; --w)
+				if (c.numTiles >= w * w) { tilesWide = w; break; }
+			if (!tilesWide) continue;
+			meadowImage->fill_rect(Rect2i(c.positionInTexture.x - 4, c.positionInTexture.y - 4,
+				tilesWide * TILE_PIXEL_EXTENT + 8, tilesWide * TILE_PIXEL_EXTENT + 8), Color(1, 1, 1));
+		}
+		meadowImage->generate_mipmaps();
 		// the layers are composited per pixel in one opaque pass (TerrainComposite.h): a single shader, a single material
 		TerrainComposite::Stats cstats;
 		std::vector<TerrainComposite::Chunk> composite;
@@ -889,6 +932,11 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		};
 		Ref<ShaderMaterial> terrainMat = makeMat(terrainShader, TERRAIN_RENDER_PRIORITY);
 		terrainMat->set_shader_parameter("records", recordsTex);
+		if (wantGroundCover) {
+			groundCoverMask = meadowImage;
+			groundCoverTerrainMaterial = terrainMat;
+			groundCoverUv = mo.uv;
+		}
 
 		Node3D *terrainRoot = memnew(Node3D);
 		terrainRoot->set_name("Terrain");
@@ -1154,10 +1202,10 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 	{
 		Dictionary rd;
 		RoadBuildReport rrep;
-		std::vector<RoadStrip> strips;
+		std::vector<RoadStrip> &strips = groundCoverRoads;
 		RoadTypeIndex roadTypes;
 		const float lift = 0.15f; // presentation-only: ZH raises roads by MAP_HEIGHT_SCALE/8, which z-fights here
-		if (wantRoads)
+		if (wantRoads || wantGroundCover)
 		{
 			if (!TerrainRoads::load(*arch, roadTypes, &error))
 			{
@@ -1168,7 +1216,7 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 				TerrainRoads::buildStrips(map.chunks.objects, roadTypes, hm, lift, strips, rrep);
 			}
 		}
-		if (!strips.empty())
+		if (wantRoads && !strips.empty())
 		{
 			Ref<Shader> sh = loadShader("res://shaders/road.gdshader", errors);
 			Node3D *roadRoot = memnew(Node3D);
@@ -1260,6 +1308,23 @@ Node3D *MapTerrainBuilder::build_map(const Ref<RetailFileSystem> &fsRef, const S
 		rd["triangles"] = (int64_t)rrep.triangles;
 		rd["lift_world_units"] = lift;
 		m_report["roads"] = rd;
+	}
+
+	// Artistic client-only sprites, after roads so their exclusion geometry is available.
+	{
+		Dictionary coverReport;
+		coverReport["enabled"] = wantGroundCover;
+		coverReport["instances"] = 0;
+		if (wantGroundCover) {
+			double started = nowMs();
+			String coverError;
+			Node3D *cover = buildGroundCover(hm, map.chunks, terrain, groundCoverUv, groundCoverMask,
+				groundCoverTerrainMaterial, groundCoverRoads, true, coverReport, coverError);
+			if (!cover) { memdelete(root); return fail(toNative(coverError)); }
+			root->add_child(cover);
+			timings["ground_cover"] = nowMs() - started;
+		}
+		m_report["ground_cover"] = coverReport;
 	}
 
 	// ---- 6. object markers ----------------------------------------------------------------------------
