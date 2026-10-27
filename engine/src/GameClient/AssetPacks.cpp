@@ -45,8 +45,9 @@ std::string stemOf(const std::string &fileName)
 
 const char *AssetPacks::notCovered()
 {
-	return "asset packs replace W3D model files and the textures of models, particles, decals, roads, rivers, water and the sky; the "
-		   "terrain tile textures, UI (Apt) textures and non-W3D model formats are not replaced yet (lane SDK-1)";
+	return "asset packs replace W3D model files and the textures of models, particles, decals, roads, rivers, water and the sky, "
+		   "and terrain albedo/normal textures (up to 4x resolution); UI (Apt) textures and non-W3D model formats are not replaced "
+		   "yet (lane SDK-1)";
 }
 
 std::vector<std::string> AssetPacks::compareSkeletons(const W3DFileContents &original, const W3DFileContents &replacement)

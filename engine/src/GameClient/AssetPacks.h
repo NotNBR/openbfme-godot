@@ -21,7 +21,9 @@
 // (checkModels, run on the mounted files) and the textures of particles, decals, roads, rivers, water and the sky (GodotDevice/
 // GodotAssetPackImage.h). Precedence: base game < --mod-install < -mod < asset packs (a pack draws over a mod's file of the same name too).
 //
-// Not covered yet (reported in AssetPacks::notCovered()): terrain tile, UI (Apt) textures, and model formats other than W3D.
+// Terrain albedo and normal textures also reach the renderer's atlas, at 1x, 2x or 4x their retail class resolution.
+// This retains logical tile coordinates and never changes the simulation's asset source.
+// Not covered yet (reported in AssetPacks::notCovered()): UI (Apt) textures, and model formats other than W3D.
 
 #pragma once
 

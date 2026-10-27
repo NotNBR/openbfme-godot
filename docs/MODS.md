@@ -165,8 +165,12 @@ button. `--asset-packs`, `--asset-pack-on=<name>` and `--asset-pack-off=<name>` 
   an archive into a pack and lists what it leaves out. For example, the All In One launcher's *RotWK 2.02 HD Edition* gives 503 models
   and 466 textures. Over the original 2.01 game, 477 of its models fit. The other 26 are its redesigned citadel, statues and barracks
   damage states, which need 2.02's own data, so they are left out.
-- Not replaced yet: terrain tile textures (they are cut into the map's texture atlas at the original size), UI (Apt) textures, and model
-  formats other than W3D (glTF is planned, with automatic skeleton mapping and LODs).
+- Terrain albedo and normal textures also replace by name. Use square images at the original resolution, 2x or 4x it; the physical atlas
+  grows while the map's logical tiles, UVs, blend masks and gameplay remain unchanged. Atlas dimensions are capped at 8192 pixels, so
+  particularly large palettes may use a lower scale. Missing replacements retain retail art. Bad images stop loading with their names.
+  Replacement normal-map strength defaults to 0.25 to keep ground relief subtle; `openbfme/rendering/terrain_pack_normal_strength`
+  accepts 0..1 in Godot project settings. Original normal maps retain their authored strength.
+- Not replaced yet: UI (Apt) textures, and model formats other than W3D (glTF is planned, with automatic skeleton mapping and LODs).
 
 ## Mod scripts in Luau (lane SDK-2, in progress)
 
