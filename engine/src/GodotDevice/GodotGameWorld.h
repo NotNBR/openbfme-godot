@@ -142,6 +142,11 @@ public:
 
 	// { ok, id, template, team, owner, x, y, z, angle, health, max_health, damage_state, contained_by, members: [ids], kind_of_structure, drawable, models: [names] }
 	Dictionary get_object(int64_t id) const;
+	// The path the object's AI follows (its AIMover's; retail's AI + 0x140, Locomotor.h): { ok, points: [Vector3] (the path's nodes
+	// in walking order: the optimised chain once the path is optimised, else every node), current (the index of the node the unit
+	// is on, -1 without one), goal (the locomotor goal, Vector3), goal_type (AIGoalType), waiting (for the pathfinder), blocked,
+	// moving }. SAGE coordinates. A debugging read for viewers; it changes nothing.
+	Dictionary get_object_path(int64_t id) const;
 	// destroys an object like any logic caller would (GameLogic::destroyObject): it is deleted at the end of the next logic frame's phase 5
 	bool destroy_object(int64_t id);
 	// lane COMBAT-1: { ok, kills, damage_applications, bounty_paid, in_flight, projectiles_launched, projectiles_detonated, projectile_ground_hits, unported_nuggets, auto_acquire }
