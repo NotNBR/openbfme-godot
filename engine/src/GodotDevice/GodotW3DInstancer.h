@@ -72,6 +72,18 @@ public:
 	// Builds the model (meshes, materials, MultiMeshes). Returns the model id, or -1; the report says why either way.
 	int64_t add_model(const String &model_name);
 	Dictionary get_model_report(int64_t model) const;
+	// Opt-in authoring bridge in Godot model coordinates (Y up), excluding the instance transform.
+	Array get_instance_rig(int64_t instance) const;
+	PackedInt64Array find_model_instances(const String &model_name) const;
+	// The instance's placement as add_instance / set_instance_transform gave it (this node's space); identity for an unknown instance.
+	Transform3D get_instance_transform(int64_t instance) const;
+	// Model-space rigid bone transforms; an empty array releases the override. Invalid input leaves the pose intact.
+	bool set_instance_rig_pose(int64_t instance, const TypedArray<Transform3D> &pose);
+	bool set_instances_rig_pose(const PackedInt64Array &instances, const TypedArray<Transform3D> &pose);
+	// Hides what bones of ONE instance carry, by bone name (case-insensitive): their skinned vertices collapse to the bone and rigid sub
+	// objects on them are not drawn, in the visible and shadow passes. For parts skinned into a shared mesh (a weapon in the body's skin) that
+	// set_instance_hidden_subobjects cannot reach. An empty list shows everything. Unknown names are an error (returns false, recorded).
+	bool set_instance_hidden_bones(int64_t instance, const PackedStringArray &names);
 
 	// clip: "HIERARCHY.CLIP" or a clip name of the model's hierarchy; empty = bind pose. Returns the instance id or -1.
 	int64_t add_instance(int64_t model, const Transform3D &transform, const String &clip, double start_time, double speed);
@@ -248,6 +260,13 @@ private:
 		int Dithered = 0;                // S-029 counts of the last write of this model
 		int SortedItems = 0;
 		float CullRadius = -1.0f;        // lane PERF-3: cull_radius, computed on first use
+		// get_instance_rig: per pivot, the drawn vertices it carries most and their bounds in the bind pose (W3D model space)
+		struct BoneSkin
+		{
+			int Vertices = 0;
+			::Vector3 Min, Max;
+		};
+		std::vector<BoneSkin> Skin;
 	};
 	struct Instance
 	{
@@ -271,7 +290,9 @@ private:
 		int Sway = 0;                         // lane VISUAL-2: set_instance_sway (INSTANCE_CUSTOM.w += 1024 * Sway)
 		bool Fogged = false;                  // lane VISUAL-2: set_instance_fogged (INSTANCE_CUSTOM.w += 16384)
 		bool CastShadow = false;
+		std::shared_ptr<const std::vector<Matrix3D>> RigPose;
 		std::vector<std::uint8_t> HiddenSubs; // by sub object index; empty = none hidden (set_instance_hidden_subobjects)
+		std::vector<std::uint8_t> HiddenBones; // by pivot; empty = none hidden (set_instance_hidden_bones)
 		bool Removed = false;                 // remove_instance: skipped by the pose and buffer passes
 		float Opacity = 1.0f;                 // set_instance_opacity (lane PROJ-2)
 		bool PoseStale = true;                // SMOOTH-1: the pose inputs changed since the last evaluation (clip-driven instances follow GlobalTime)
