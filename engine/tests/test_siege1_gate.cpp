@@ -177,8 +177,10 @@ TEST_CASE("siege1 gate: the stone and bolt throwers in front of Helm's Deep's ga
 	CHECK(dc.contactsWhileStanding == 4);
 	CHECK(dc.deathFrame == 401);
 	const GateRun b = pinnedRun(*s, kHelmsDeep, "Main Gate", "IsengardBallista", 400.0f, 600);
-	CHECK(b.contactsWhileStanding == 0);
-	CHECK(b.deathFrame == 311);
+	// merge queue q27: one contact while the gate stands (was 0) and death 311 -> 389, LOS-1 (the terrain line of sight with the wall layers' heights;
+	// measured at each merge point)
+	CHECK(b.contactsWhileStanding == 1);
+	CHECK(b.deathFrame == 389);
 }
 
 TEST_CASE("siege1 gate: Mordor's catapult and Gondor's trebuchet in front of Minas Tirith's gate break it")
@@ -186,13 +188,15 @@ TEST_CASE("siege1 gate: Mordor's catapult and Gondor's trebuchet in front of Min
 	OPENBFME_REQUIRE_START(s);
 	const GateRun c = pinnedRun(*s, kMinasTirith, "Gate", "MordorCatapult", 400.0f, 600);
 	CHECK(c.ordered);
-	CHECK(c.contactsWhileStanding == 1); // MinisGate1, the gatehouse piece beside the gate
-	CHECK(c.firstHit == 21);
+	// merge queue q28 (measured once on the merged tree and at each merge point): the catapult's stones no longer meet MinisGate1 while the gate stands
+	// (1 -> 0) and the first hit is at 20 (21); the trebuchet breaks the gate at 158 (203)
+	CHECK(c.contactsWhileStanding == 0);
+	CHECK(c.firstHit == 20);
 	CHECK(c.deathFrame == 123);
 	const GateRun t = pinnedRun(*s, kMinasTirith, "Gate", "GondorTrebuchet", 400.0f, 600);
 	CHECK(t.contactsWhileStanding == 0);
 	CHECK(t.firstHit == 19);
-	CHECK(t.deathFrame == 203);
+	CHECK(t.deathFrame == 158);
 }
 
 TEST_CASE("siege1 gate: the rams, Grond and the mumak in front of the gates (no projectile: unchanged by the pair rule)")
@@ -201,7 +205,7 @@ TEST_CASE("siege1 gate: the rams, Grond and the mumak in front of the gates (no 
 	CHECK(pinnedRun(*s, kHelmsDeep, "Main Gate", "IsengardBatteringRam", 250.0f, 600).deathFrame == 99);
 	CHECK(pinnedRun(*s, kHelmsDeep, "Main Gate", "DwarvenDemolisher", 250.0f, 600).deathFrame == 101);
 	CHECK(pinnedRun(*s, kHelmsDeep, "Main Gate", "MordorGrond", 250.0f, 600).deathFrame == 128);
-	CHECK(pinnedRun(*s, kHelmsDeep, "Main Gate", "MordorMumakil", 250.0f, 600).deathFrame == 246);
+	CHECK(pinnedRun(*s, kHelmsDeep, "Main Gate", "MordorMumakil", 250.0f, 600).deathFrame == 247); // merge queue q27: 246 -> 247, LOS-1
 	CHECK(pinnedRun(*s, kMinasTirith, "Gate", "IsengardBatteringRam", 250.0f, 600).deathFrame == 57);
 	CHECK(pinnedRun(*s, kMinasTirith, "Gate", "MordorGrond", 250.0f, 600).deathFrame == 83);
 }

@@ -57,7 +57,7 @@ for game folders, updates, crashes, logs and online errors on Windows,
 Linux and macOS.
 
 **You need** **The Rise of the Witch-king 2.01** and **The Battle for
-Middle-earth II 1.06**, both in English, and x86-64 Windows 10/11 or x86-64
+Middle-earth II 1.06**, in any language, and x86-64 Windows 10/11 or x86-64
 Linux with GLIBC 2.28 or newer and Vulkan graphics (or Direct3D 12 on Windows).
 
 1. **Download OpenBFME** from
@@ -110,7 +110,7 @@ the original are still missing.
 
 | Area | Status | Notes |
 |---|---|---|
-| Finding and checking your game files | ✅ Works | English 2.01 / 1.06 installs; other languages are refused for now |
+| Finding and checking your game files | ✅ Works | 2.01 / 1.06 installs in any language (the languages the All In One service lists are checked by MD5; others load with an in-game warning and a *Copy details* button so you can send them to us); the launcher's download picks the text and voice language |
 | Skirmish, all 7 factions | ✅ Works | Men, Elves, Dwarves, Isengard, Mordor, Goblins and Angmar; scripted test players played 71 games through the real menus and controls in the latest full sweep, every faction, with no crash or stall |
 | Combat, hordes, heroes, spell book | ✅ Works | horde formations, cavalry charges, sieges, powers; details are still being matched to the original |
 | Team colours | 🟡 Partial | units and buildings show their player's colour, but how the colour is blended in is an educated guess, not yet checked against the original |
@@ -133,7 +133,7 @@ the original are still missing.
 not reinvent it. Where the evidence runs out and the team has to make an
 educated guess, that guess is not hidden: it is recorded as an *acceptance
 stop* in [docs/STOPS.md](docs/STOPS.md), reported by the game at runtime and
-pinned by a test. There are **790 open stops** today. Some are big
+pinned by a test. There are **792 open stops** today. Some are big
 (retail save files), most are small details waiting for better evidence. The plan to
 get to a 1:1 game is in [docs/ROADMAP.md](docs/ROADMAP.md).
 

@@ -932,7 +932,10 @@ TEST_CASE("save4c coverage (review r2): units attacking, moving, guarding, hunti
 	// lane BANNER-1 (the banner carriers refill the AIs' hordes as RotWK does): in seed 4127's game FactionMen (the attacker's and the garrison's player) has
 	// no armed unit left from frame 1500 on (scanned 600 .. 4500), so the scene moves to seed 4132, whose frame 1500 holds the actors (seeds 4128 .. 4132
 	// scanned: 4128 at 1200 only, 4129 .. 4131 none)
-	const NewGameMessage m = fourPlayerMessage(*s, 4132);
+	// merge queue q28 (#117's fortress module in the update schedule moves the AIs' game): seed 4132 has no frame of 1500 .. 3000 holding the actors (the
+	// #96 merge point alone still had them at 1500), so the scene moves to seed 4133 (scene at 1500); seeds 4133 .. 4138 measured on the merged tree: 4133 ..
+	// 4137 hold the actors (1500 / 2100 / 1800 / 2700 / 2700), 4138's rider is no longer in its garrison order at the stepped frame
+	const NewGameMessage m = fourPlayerMessage(*s, 4133);
 	// lane DEVPORT-7: the scene frame is found, not assumed. The test pinned 2700 / 3000, but which units of this 4-AI game live then is the AI's play,
 	// not a retail fact: with BloodthirstyUpdate ported (an update module on every Mordor / Isengard horde, woken at creation and every 2 s + 1 frame as
 	// retail's, RW 0x85123F / BFME2 0x44E0AA; it changes nothing in this game, but its update slots reorder the others', RW 0x62B921) the same seed has

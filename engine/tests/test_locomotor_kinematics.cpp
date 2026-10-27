@@ -471,6 +471,33 @@ TEST_CASE("rotateTowardsPosition: the turn per frame is capped at 2*pi / TurnTim
 	CHECK(nearly(l2.speed(), 11.0 / 3.0, 1e-4));
 }
 
+TEST_CASE("rotateTowardsPosition: a GIANT_BIRD turns its transform about the pivot, capped at its turn rate (RW 0x5E4FD0)")
+{
+	// lane TAKEOVER-1: the flyers' face turn (GiantBirdAIUpdate goal 2 -> RW 0x5E98D6 -> RW 0x5E6810). Pivot 0.5 x radius 10 = 5 ahead of the bird
+	LocoFixture f("  TurnTime = 2000\n  Appearance = GIANT_BIRD\n  TurnPivotOffset = 0.5\n  TurnThreshold = 10\n");
+	Locomotor loco(f.tmpl());
+	MockHost h;
+	h.boundingRadius = 10.0f;
+	h.place(0, 0, 0);
+	const double rate = 2.0 * kPi / 10.0;
+	loco.locomotorMoveTowardsAngle(h, (float)(kPi / 2.0));
+	CHECK(nearly(h.angle, rate, 2e-4));
+	CHECK(nearly(h.pos.x, 5.0 - 5.0 * std::cos(rate), 1e-4)); // the bird swings about (5, 0)
+	CHECK(nearly(h.pos.y, -5.0 * std::sin(rate), 1e-4));
+	CHECK(loco.turnDirection() == 1);
+	// within 0.1 of the pivot in x and y: nothing turns
+	MockHost h2;
+	h2.boundingRadius = 10.0f;
+	h2.place(0, 0, 0);
+	Locomotor l2(f.tmpl());
+	l2.rotateTowardsWrapper(h2, Coord3D{ 5.05f, 0.05f, 0 }, nullptr);
+	const LocomotorMatrix held = h2.getTransform();
+	for (int r = 0; r < 3; ++r)
+		for (int c = 0; c < 4; ++c)
+			CHECK(l2.matrix().m[r][c] == held.m[r][c]);
+	CHECK(l2.turnDirection() == 0);
+}
+
 TEST_CASE("Legs: HUGE legs slow down while turning (RW 0x5E66E1), TWO_LEGS do not")
 {
 	LocoFixture two(std::string(kHuman) + "  TurnTime = 2000\n");
@@ -823,7 +850,7 @@ TEST_CASE("Locomotor stops S-081 and S-084 are reported and pinned")
 	CHECK(stops[1].rfind("S-084:", 0) == 0);
 	CHECK(stops[1].find("HOVER") == std::string::npos); // lane SHIP-1: the HOVER and SHIP movers are ported
 	CHECK(stops[1].find("FLOATING_Z, SEA_LEVEL, SURFACE_RELATIVE_HEIGHT and ABSOLUTE_HEIGHT (the last three: lane SHIP-1;") != std::string::npos);
-	CHECK(stops[1].find("GIANT_BIRD movers are GiantBirdAIUpdate's") != std::string::npos); // lane FLY-1
+	CHECK(stops[1].find("GIANT_BIRD") == std::string::npos); // lane TAKEOVER-1: rotateTowardsPosition's GIANT_BIRD branch is ported
 	CHECK(stops[1].find("ScalesWalls") != std::string::npos);
 	CHECK(stops[2].rfind("S-1750:", 0) == 0);
 	CHECK(stops[2].find("RW 0x5E7CC7") != std::string::npos);

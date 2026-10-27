@@ -374,6 +374,24 @@ void radiusDamage(GameLogic &logic, ObjectID sourceId, const DamageNugget &nugge
 		{
 			continue;
 		}
+		// lane RADIUSHEIGHT-1: RW 0x90E1AC .. 0x90E20C (BFME2 decomp Made002CC5E1Ctor.cpp DamageNugget::doEffectPosition, the m_140 / m_144 blocks; tier B same-shape,
+		// the fields at +0x160 / +0x164 in RotWK), after slot 1 and before MinRadius. A cap of -1 (ucomiss against RW 0xBD19DC) skips its test.
+		// DamageMaxHeight: SSE subss of the source object's position z (+0x40) from the victim's, comiss > cap skips the victim (not the passed position's z).
+		// Retail reads the source with no null test (RW 0x90E1C8); here slot 1 (damageApplicable) already refused a victim when the owner is gone.
+		if (nugget.m_damageMaxHeight != -1.0f && source && SimMath::subf32(o->getPosition()->z, source->getPosition()->z) > nugget.m_damageMaxHeight)
+		{
+			continue;
+		}
+		// DamageMaxHeightAboveTerrain: Object::getHeightAboveTerrain (RW 0x70B8AE, cached as a float; BFME2 decomp ObjectCalculateHeightAboveTerrain.cpp: the z less
+		// the object's layer height, the port's layer of the position as SlowDeathBehavior::heightAboveTerrain, lane WALL-2) fcomip > cap skips the victim
+		if (nugget.m_damageMaxHeightAboveTerrain != -1.0f)
+		{
+			const Coord3D &p = *o->getPosition();
+			if (SimMath::subf32(p.z, logic.getLayerHeightForDestination(p.x, p.y, p.z)) > nugget.m_damageMaxHeightAboveTerrain)
+			{
+				continue;
+			}
+		}
 		if (nugget.m_minRadius > 0.0f && d2 < SimMath::mulf32(nugget.m_minRadius, nugget.m_minRadius))
 		{
 			continue;
@@ -964,6 +982,8 @@ void deliver(GameLogic &logic, const ParalyzeNugget &n, const WeaponTemplate &w,
 }
 } // namespace Paralyze
 
+} // namespace
+
 // RW 0x6CB81A (the first step of the aim query RW 0x6CB85A): the weapon's PreferredTargetBone (+ 0x90) when it is not empty and the victim's drawable has it exactly
 // once among its pristine bones (RW 0x68C5AF -> 0x672A73), in the world (RW 0x70BCE7: the victim's transform on the bone's translation, retail's SSE order)
 bool preferredBoneAim(GameLogic &logic, const WeaponTemplate &w, const Object &victim, Coord3D &out)
@@ -983,6 +1003,8 @@ bool preferredBoneAim(GameLogic &logic, const WeaponTemplate &w, const Object &v
 	return true;
 }
 
+namespace
+{
 // ---- lane NUGGET-1: the nuggets whose effect had no port (S-321). Every slot's first argument in RW is the firing Weapon; its + 8 (the owner's id) is all a slot
 // reads of it: `sourceId` below. The dispatch is fireWeaponTemplate's (RW 0x6CCECC .. 0x6CCF17, slot 12 false for all of these): a victim takes slot 1 then slot 5,
 // no victim slot 2 then slot 6. SlaveAttackNugget (SlaveWatcherBehavior, S-1995) and FireLogicNugget (TheFireLogicSystem, S-191) stay counted ----

@@ -25,6 +25,7 @@ GAME_OWNERS = {
     "crash_log_test.gd": "tools/release/test_launcher.py",
     "external_open_test.gd": "tools/release/test_external_open.py",
     "install_paths_test.gd": "tools/release/test_install_paths.py",
+    "language_warning_test.gd": "tools/release/test_language_warning.py",
     "opts6_wait_test.gd": "tools/release/test_external_open.py",
     "release_message_test.gd": "tools/release/test_release_tools.py",
     "replay_args_test.gd": "tools/release/test_replay_open.py",
@@ -57,6 +58,7 @@ LAUNCHER_OWNERS = {
     "external_open_test.gd": "tools/release/test_external_open.py",
     "first_run_test.gd": "launcher/tests/test_first_run.py",
     "install_paths_test.gd": "tools/release/test_install_paths.py",
+    "l10n_test.gd": "tools/l10n/test_l10n.py",
     "lobby_list_test.gd": "tools/release/test_launcher.py",
     "log_privacy_test.gd": "tools/release/test_launcher.py",
     "mod_catalog_test.gd": "tools/release/test_mods.py",
@@ -65,6 +67,8 @@ LAUNCHER_OWNERS = {
     "replay_open_test.gd": "tools/release/test_replay_open.py",
     "update_fault_test.gd": "tools/release/test_launcher_updates.py",
     "update_status_test.gd": "tools/release/test_launcher.py",
+    "verifyfiles_test.gd": "tools/test_verifyfiles.py",
+    "verifyfiles_window_test.gd": "tools/test_verifyfiles_window.py",
 }
 # Fixtures, opt-in rendered walks, and the LAN child launched by start_test.gd.
 SUPPORT = {
@@ -109,19 +113,20 @@ CI_GATES = scripts("""
 # Denylist part 2: manual dedicated invocations only, not pytest skips. Having
 # retail paths, a GPU or an opt-in environment variable must not schedule these.
 DENYLIST = {
-    **dict.fromkeys(scripts("bfme1_hud bfme1_map_memory bfme1_plot bfme1_quit bfme1"),
+    **dict.fromkeys(scripts("bfme1_hud bfme1_map_memory bfme1_plot bfme1_quit bfme1_castle_path bfme1"),
                     "manual: needs a private BFME1 installation"),
     **dict.fromkeys(scripts("""
-        audio_stress backlog3_focus cah_awards_display camp2 campsave1 floating_money_text
+        audio_stress backlog3_focus buildperf cah_awards_display camp2 campsave1 floating_money_text
         hero_radius_cursor hudredraw menustyle_native menustyle net_uber netlag1 opts4 opts5
-        pathperf1_render perf3_cull play3 player_house_color player_message_log
+        packed_model_texture pathperf1_render perf3_cull play3 player_house_color player_message_log
+        pose_buffer pose_buffer_cull_query pose_buffer_query_trigger
         renderwait1_teardown selperf shellfix1 spellbook_reload terrain_lighting uberjoin1 ui4_resize
         controller_main_menu formation_placement mixed_formation_placement online16_fix_bridge p16_ui_dictionary
-        p16_ui_legacy_shape spellbook_rightclick
+        p16_ui_legacy_shape spellbook_rightclick cah_camera_retail shellfb1_cursor shellfb1_spell_store_escape
     """) | {"object_corpus_sweep.gd"}, "manual: needs private RotWK/BFME2 assets and game/frame setup"),
     **dict.fromkeys(scripts("""
         apt_canvas_pixel building_render fx_render gamma_composite hud_image_mode_pixel
-        online_branding pro_camera radial_background render4 shader
+        menu_backdrop_resize online_branding pro_camera pro_camera_bokeh radial_background render4 shader
     """), "manual: GPU/window/render readback required (some also need retail assets)"),
     "pingwheel_test.gd": "manual: mixed UI/timer checks and retail skirmish/hash runs; not wholly asset-free",
     "replay_refusal_test.gd": "manual: mixed stub checks and retail replay subprocess; not wholly asset-free",

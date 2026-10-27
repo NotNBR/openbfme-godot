@@ -280,6 +280,15 @@ public:
 	// lane WALL-2: RW AI + 0x3CF, the unit's AI is inside a move-away search (RW 0x66DBFB / 0x66DC4B set it around getMoveAwayFromPath); a type 7 waypoint
 	// refuses such a unit (RW 0x68230B)
 	virtual bool inMoveAwaySearch() const { return false; }
+	// lane LOS-1: RW 0x68B58C(0) (Object::getCurrentWeapon) is not null: the attack view test RW 0x6F4557 then asks the weapon's terrain line
+	virtual bool hasCurrentWeapon() const { return false; }
+	// lane LOS-1: RW 0x6CC6DD Weapon::isClearGoalFiringLineOfSightTerrain(this object, goalPos, victim) with the current weapon (asked only when hasCurrentWeapon)
+	virtual bool isClearGoalFiringLineOfSightTerrain(const Coord3D &goalPos, const PathfindObject &victim) const
+	{
+		(void)goalPos;
+		(void)victim;
+		return true;
+	}
 };
 
 // TheGameLogic->findObjectByID

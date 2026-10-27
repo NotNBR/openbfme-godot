@@ -2,6 +2,7 @@
 // See GameClient/LiveGame.h.
 
 #include "GameClient/LiveGame.h"
+#include "GameLogic/Sdk/SdkScriptHost.h"
 
 #include "GameClient/FrameCensus.h"
 #include "Common/GameState.h"
@@ -82,6 +83,7 @@ LiveGame::~LiveGame()
 	{
 		m_scripting->detach(); // while the logic is alive
 	}
+	m_sdkScripts.reset(); // lane SDK-2: its listeners leave the logic first
 	if (m_logic)
 	{
 		m_logic->reset(); // the objects go first (their drawables are dropped through the hooks), then the manager
@@ -485,6 +487,17 @@ bool LiveGame::load(const Options &options, std::string *error)
 	m_scripting = std::make_unique<LiveScripting>(*m_logic, m_fs, m_world.nameKeys());
 	if (!m_scripting->start(MapClassification::mapDirectory(lowerName), error))
 	{
+		return false;
+	}
+	// lane SDK-2: the -mod folder's sim Luau scripts (GameLogic/Sdk/SdkScriptHost.h); a broken manifest or script stops the start
+	m_sdkScripts = std::make_unique<SdkScriptHost>(*m_logic);
+	std::string sdkError;
+	if (!m_sdkScripts->start(m_fs.modLooseLayer(), sdkError))
+	{
+		if (error)
+		{
+			*error = sdkError;
+		}
 		return false;
 	}
 
@@ -1528,4 +1541,14 @@ bool LiveGame::observeNextPlayer(bool forward)
 	m_shroud->refreshLocalPlayer();
 	m_shroudChanged = true;
 	return true;
+}
+
+std::vector<std::string> LiveGame::takeSdkBanners()
+{
+	return m_sdkScripts ? m_sdkScripts->takeBanners() : std::vector<std::string>();
+}
+
+std::vector<std::string> LiveGame::takeSdkReports()
+{
+	return m_sdkScripts ? m_sdkScripts->takeNewReports() : std::vector<std::string>();
 }

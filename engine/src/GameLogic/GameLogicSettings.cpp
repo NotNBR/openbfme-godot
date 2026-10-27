@@ -251,6 +251,8 @@ const FieldParse kGameDataFields[] = {
 	{ "InvisibilityOpacityMin", parseNoting<INI::parseReal>, SEEN_DATA(SEEN_OPMIN), (int)offsetof(BlockState, values.invisibilityOpacityMin) },
 	{ "InvisibilityOpacityMax", parseNoting<INI::parseReal>, SEEN_DATA(SEEN_OPMAX), (int)offsetof(BlockState, values.invisibilityOpacityMax) },
 	{ "InvisibilityOpacityCycleFrames", parseNoting<INI::parseUnsignedInt>, SEEN_DATA(SEEN_OPCYCLE), (int)offsetof(BlockState, values.invisibilityOpacityCycleFrames) },
+	// lane LOS-1: RW 0xC01060 (parseReal RW 0x42ED00, + 0x11C4; optional, the constructor's 40.0f stands otherwise)
+	{ "ClampedLOSHeightForCastleStructures", parseNoting<INI::parseReal>, 0, (int)offsetof(BlockState, values.clampedLOSHeightForCastleStructures) },
 	// lane GARRISON-1: the garrison rows (RW 0xC011D0 / 0xC011F0 / 0xC01200; optional, the GlobalData constructor's defaults stand otherwise)
 	{ "GarrisonedRangeMultiplier", parseNoting<INI::parseReal>, 0, (int)offsetof(BlockState, values.garrisonedRangeMultiplier) },
 	{ "MaxNumMembersToForceToImmediatelyEnter", parseNoting<INI::parseUnsignedInt>, 0, (int)offsetof(BlockState, values.maxNumMembersToForceToImmediatelyEnter) },
@@ -677,6 +679,10 @@ void GameLogicSettings::crc(StateHasher &h) const
 	h.addFloat(invisibilityOpacityMin);
 	h.addFloat(invisibilityOpacityMax);
 	h.addU32(invisibilityOpacityCycleFrames);
+	if (clampedLOSHeightForCastleStructures != 40.0f)
+	{
+		h.addFloat(clampedLOSHeightForCastleStructures); // lane LOS-1: only data that sets another value (the hash of every retail game is unchanged)
+	}
 	h.addFloat(garrisonedRangeMultiplier); // lane GARRISON-1
 	h.addU32(maxNumMembersToForceToImmediatelyEnter);
 	h.addU32(waitToForceMemberToEnterDelay);

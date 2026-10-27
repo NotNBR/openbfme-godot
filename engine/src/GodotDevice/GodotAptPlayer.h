@@ -57,6 +57,7 @@ struct AptCanvasRedrawPlan;
 namespace godot
 {
 
+class GodotMouse;
 class RetailFileSystem;
 
 // lane HUD-1: the owner of the native render components of a movie (clips tagged `_type`: AptPalantir::RenderRadar, RenderImage, TimerOverlay ...). The player calls it for
@@ -111,7 +112,7 @@ public:
 	String dump_tree(int level, int max_depth);
 	// { found, x, y, path } stage centre of the first button at or under `path` ("SoloPlayNav" resolves under the level root).
 	Dictionary find_button(int level, const String &path);
-	// { found, type, depth, x, y (stage, of the instance origin), visible, frame, total_frames }
+	// { found, type, depth, x, y (stage, of the instance origin), stage_transform, local_bounds, visible, frame, total_frames }
 	Dictionary instance_info(int level, const String &path);
 	Rect2 component_rect(const String &instance_path) const; // lane PLAY-1: a gadget's window in stage space (empty: none)
 
@@ -149,6 +150,7 @@ public:
 	// seed; 0 = from the clock), profile: String (optional: the Skirmish profile name to start with), options_file: String (optional, lane OPTS-2: the
 	// Options.ini to use instead of the user data folder's; the checks), presentation_fs: optional verified BFME2 shell source }. Returns { ok, errors, load_ms, strings, fonts }.
 	Dictionary boot_shell(const Ref<RetailFileSystem> &fs, Object *world, const Dictionary &config);
+	std::shared_ptr<GodotMouse> godot_mouse() const;
 	void shell_show_shell_map(bool use); // lane FB7-1: Shell::showShellMap
 	void shell_hide_background();        // lane FB7-1: WindowManager hide of the front-end background (RW 0x622C88(0))
 	// lane CAH-2 (S-1914): the host has no screen for the main menu's request `action`: AptMainMenu::screenUnavailable (a message box tells the player,
@@ -450,6 +452,7 @@ public:
 	//   texture_loads, texture_load_ms, ... }
 	Dictionary get_stats() const;
 	void reset_timing();
+	Dictionary get_cursor_image() const;
 	// { unverified: [...], errors: [...], missing_labels: [...], font_substitutions: [...], font_fallbacks: [...], placeholders: [...],
 	//   notes: { kind: count }, script_errors: [...] }
 	Dictionary get_report() const;

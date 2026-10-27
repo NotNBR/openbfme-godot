@@ -9,6 +9,7 @@
 #include "Common/NumericState.h"
 #include "GameLogic/AI/AIPathfind.h"
 #include "GameLogic/AI/AIWorld.h"
+#include "GameLogic/Combat/CombatLineOfSight.h"
 #include "GameLogic/Combat/CombatNames.h"
 #include "GameLogic/Combat/CombatQueries.h"
 #include "GameLogic/Combat/ObjectWeapons.h"
@@ -34,8 +35,6 @@
 
 namespace
 {
-const char *const kLineOfSightStop = "[S-326] target search: the line of sight filter (RW 0x6616AC: the terrain line TheTerrainLogic vslot 0x3C and the pathfinder's "
-                                     "view block RW 0x6F4F9D) is taken as clear (S-859)";
 const char *const kApparentPlayerStop = "[S-326] target search: the reject-buildings filter (RW 0x661869) met a contained structure with no controlling player; its "
                                         "contain's apparent controlling player (contain vslot 0x4C) is not ported: refused";
 const char *const kCrowdStop = "[S-326] target search: the friendly-fire crowd test (RW 0x6CB9F7 radius, the geometry overlap query RW 0xA3C7D0 -> RW 0xAD2CE0, "
@@ -247,22 +246,18 @@ private:
 	Object &m_me;
 };
 
-// vtable 0xC1D620, allow RW 0x6616AC (INFERENCE, S-859: clear)
+// vtable 0xC1D620, allow RW 0x6616AC (lane LOS-1: CombatLineOfSight::filterAllows)
 class LineOfSightFilter : public PartitionFilter
 {
 public:
-	explicit LineOfSightFilter(GameLogic &logic)
-		: m_logic(logic)
+	explicit LineOfSightFilter(Object &me)
+		: m_me(me)
 	{
 	}
-	bool allow(Object &) override
-	{
-		m_logic.noteStop(kLineOfSightStop);
-		return true;
-	}
+	bool allow(Object &obj) override { return CombatLineOfSight::filterAllows(m_me, obj); }
 
 private:
-	GameLogic &m_logic;
+	Object &m_me;
 };
 
 // vtable 0xC1D63C, allow RW 0x661027: RW 0x68D8F7(obj, player index) == CLEAR (no shroud record or ALWAYS_VISIBLE answers CLEAR there: TARGET 0x68D914;
@@ -607,7 +602,7 @@ Object *findClosestEnemy(Object &me, const Coord3D &pos, float range, unsigned q
 	RejectBuildingsFilter rejectBuildings(me);
 	AutoAcquireKindFilter kindFilter(skirmishAIOf(logic, mePlayer) != nullptr);
 	WithinAttackRangeFilter withinRange(me);
-	LineOfSightFilter lineOfSight(logic);
+	LineOfSightFilter lineOfSight(me);
 	FreeOfFogFilter fog(mePlayer ? mePlayer->getPlayerIndex() : -1);
 	InsignificantBuildingsFilter insignificant;
 	StealthFilter stealth(me);

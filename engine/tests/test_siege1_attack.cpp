@@ -38,7 +38,9 @@ TEST_CASE("siege1 attack retail: Isengard's battering ram breaks Helm's Deep's m
 	CHECK(r.slotAtHit == 1); // IsengardBatteringRamGate (AttackRange 58)
 	CHECK(r.firstHit == 269); // the drive round to the causeway, then the PreAttackDelay
 	CHECK(r.healthAfterFirst == 3000.0f); // ISENGARD_BATTERINGRAM_DAMAGE 1000, the gate's armour full
-	CHECK(r.deathFrame == 335);
+	// merge queue q27: death 335 -> 366, GATEPUSH-1 (the gate repels the units colliding with it when it opens or closes, RepelCollidingUnits; measured
+	// at each merge point)
+	CHECK(r.deathFrame == 366);
 	CHECK(r.dead);
 }
 
@@ -104,15 +106,18 @@ TEST_CASE("siege1 attack retail: a mumak and the Dwarven demolisher break Helm's
 	print("MordorMumakil", m);
 	CHECK(m.slotAtHit == 1); // MordorMumakilKnockback
 	// merge queue q26: the mumak's first damage 66 / 3400 -> 18 / 3997.75 (a knockback graze before its first full hit), death 282 -> 424
-	CHECK(m.firstHit == 18);
+	// merge queue q27: first damage 18 -> 184, death 424 -> 415, LOS-1 (the terrain line of sight in the target search and the attack view; measured at
+	// each merge point)
+	CHECK(m.firstHit == 184);
 	CHECK(m.healthAfterFirst == 3997.75f);
-	CHECK(m.deathFrame == 424);
+	CHECK(m.deathFrame == 415);
 	const AttackResult d = siegeAttack(*s, kHelmsDeep, "Main Gate", "DwarvenDemolisher", false, 250.0f, 600, true);
 	print("DwarvenDemolisher", d);
 	CHECK(d.slotAtHit == 1); // DwarvenBatteringRamGate
-	CHECK(d.firstHit == 254);
+	// merge queue q27: first damage 254 -> 316, death 320 -> 382, GATEPUSH-1 (the gate's RepelCollidingUnits; measured at each merge point)
+	CHECK(d.firstHit == 316);
 	CHECK(d.healthAfterFirst == 3000.0f);
-	CHECK(d.deathFrame == 320);
+	CHECK(d.deathFrame == 382);
 	const AttackResult c = siegeAttack(*s, kHelmsDeep, "Main Gate", "MordorCatapult", false, 500.0f, 600, true);
 	print("MordorCatapult", c);
 	// on the archive (SIEGE-1, test_siege1_gate.cpp): from 500 toward Player_2_Start the catapult's stones meet HelmsDeepGatehouseRight in their line of fire,

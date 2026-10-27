@@ -369,7 +369,15 @@ void AIGroup::groupMoveToPosition(const Coord3D &posIn, bool addWaypoint, Comman
 		{
 			if (haveFinalAngle)
 			{
-				ai->aiMoveToPositionAndOrientate(dest, finalAngle, source);
+				Coord3D taken;
+				if (ai->aiMoveToPositionAndOrientate(dest, finalAngle, source, &taken) && attackMove)
+				{
+					// RW 0x94E72B's per-object step sends an attack-move (RW 0x770CA5, range 0x7FFFFFFF) when the formation order's attack flag is set
+					// (BFME2 MoveToFormationGroupOrder::rva00547E5C, RVA 0x547E5C: aiAttackMoveToPositionAndFaceDirection instead of the plain move). The port runs it as
+					// the accepted oriented move plus its attack-move toward the installed (clipped) goal; a refused member keeps its earlier intent.
+					// The native attack-move-and-face state and the formation attack-team routing (S-4463) are not ported
+					ai->armAttackMove(taken, source);
+				}
 			}
 			else
 			{

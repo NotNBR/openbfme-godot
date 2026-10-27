@@ -47,6 +47,15 @@ float AptStageMapping::offsetY() const
 	return mode == Mode::Fit ? (windowH - stageH * uniformScale()) * 0.5f : 0.0f;
 }
 
+AptStageMapping AptStageMapping::fitImage(float imageWidth, float imageHeight) const
+{
+	AptStageMapping image = *this;
+	image.stageW = imageWidth;
+	image.stageH = imageHeight;
+	image.mode = Mode::Fit;
+	return image;
+}
+
 void AptStageMapping::stageToWindow(float x, float y, float &wx, float &wy) const
 {
 	wx = x * scaleX() + offsetX();

@@ -109,6 +109,56 @@ bool pressChatTab(WindowManager &wm, int level)
 }
 } // namespace
 
+TEST_CASE("shellfb1: the LAN browser is not a host and retains preview controls while host setup has the map picker")
+{
+	OPENBFME_REQUIRE_START(s);
+	const ProfileIdentity profile = ProfileIdentity::compute({}, RandomAlgorithm::ZH_CarryChain, {});
+	auto lan = testLan(profile, u"Host", s->world->playerTemplates().getPlayerTemplateCount(), (int)s->settings.multiplayerColors.size());
+	starttest::ShellFx fx(*s, 11);
+	fx.environment.lan = lan.get();
+	fx.shell->push("LanLobby.apt");
+	REQUIRE(fx.shell->errors().empty());
+	auto *screen = dynamic_cast<AptLanLobby *>(fx.shell->top());
+	REQUIRE(screen);
+	auto run = [&](int state) {
+		for (int i = 0; i < 300; ++i)
+		{
+			fx.tick(1);
+			if (screen->state() == state)
+			{
+				fx.tick(60);
+				return true;
+			}
+		}
+		return false;
+	};
+	auto hostMode = [&] {
+		std::string value;
+		CHECK(fx.wm->getExtern("MpGameSetup::HostMode", value) == AptExternResult::Value);
+		return value;
+	};
+	REQUIRE(run(1));
+	CHECK(hostMode() == "0");
+	CHECK(fx.wm->setExtern("MpGameSetup::HostMode", "1"));
+	CHECK(hostMode() == "0");
+	REQUIRE(screen->mapListWindow());
+	CHECK(screen->mapListWindow()->winIsHidden());
+	CHECK(screen->mapInfoWindow() != nullptr);
+	REQUIRE(fx.wm->invokeCallback("AptLanLobby::OnCreateGameBttn", ""));
+	REQUIRE(run(4));
+	CHECK(hostMode() == "1");
+	CHECK(fx.wm->setExtern("MpGameSetup::HostMode", "false"));
+	CHECK(hostMode() == "1");
+	REQUIRE(screen->mapListWindow());
+	CHECK_FALSE(screen->mapListWindow()->winIsHidden());
+	REQUIRE(fx.wm->invokeCallback("AptLanLobby::OnCancelBttn", ""));
+	REQUIRE(run(1));
+	CHECK(hostMode() == "0");
+	REQUIRE(screen->mapListWindow());
+	CHECK(screen->mapListWindow()->winIsHidden());
+	CHECK(screen->mapInfoWindow() != nullptr);
+}
+
 TEST_CASE("mp2 retail: LanLobby.apt hosts and joins a LAN game: the list, Join, a player's own options through the host, chat, Kick and rejoin, Accept, "
 		  "Play Game hands every player the start")
 {

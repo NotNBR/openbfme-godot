@@ -9,6 +9,7 @@
 #include "doctest.h"
 
 #include "HudTestUtil.h"
+#include "ObjectTestUtil.h"
 
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -32,6 +33,7 @@
 #include "GameLogic/Weapon.h"
 #include "GameLogic/WeaponState.h"
 #include "GameLogic/Module/SiegeModules.h"
+#include "GameLogic/Module/LogicModules.h"
 #include "GameLogic/Object/Contain/SiegeEngineContainRuntime.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/Object/RetailObjectWorld.h"
@@ -47,6 +49,41 @@
 #include <vector>
 
 using namespace hudtest;
+
+TEST_CASE("bfme1 isolation: siege deploy powers retain the second initiation sound only for BFME1")
+{
+	const initest::FileList bfme1Legend = { { "Data\\INI\\Default\\SubsystemLegend.ini", "; BFME1\r\n" } };
+	const initest::FileList bfme2Legend = { { "Data\\INI\\Default\\SubsystemLegend.ini", "; legend\r\n" },
+		{ "Data\\INI\\AwardSystem.ini", "; BFME2\r\n" } };
+	const initest::FileList rotwkLegend = { { "Data\\INI\\Default\\SubsystemLegend.ini", "; legend\r\n" },
+		{ "Data\\INI\\Default\\SubsystemLegendExpansion1.ini", "; RotWK\r\n" } };
+	for (const std::string module : { "SiegeDeploySpecialPower", "SiegeDeployHordeSpecialPower" })
+	{
+		CAPTURE(module);
+		const std::string text = "Object TestSiege\n Behavior = " + module + " ModuleTag_Deploy\n"
+			" InitiateSound = TestPrimary\n InitiateSound2 = TestSecondary\n StartsPaused = Yes\n End\nEnd\n";
+		for (const auto &legend : { bfme2Legend, rotwkLegend })
+		{
+			objtest::World other;
+			LogicModules::registerAll(other.modules);
+			other.fx.mount(legend);
+			CHECK(other.load(text).find("Unknown field 'InitiateSound2'") != std::string::npos);
+		}
+		objtest::World bfme1(true);
+		LogicModules::registerAll(bfme1.modules);
+		bfme1.fx.mount(bfme1Legend);
+		const std::string error = bfme1.load(text);
+		REQUIRE_MESSAGE(error.empty(), error);
+		const auto *data = dynamic_cast<const SpecialPowerUpdateBaseModuleData *>(
+			bfme1.get("TestSiege")->behaviorModules().find("ModuleTag_Deploy")->data.get());
+		REQUIRE(data);
+		CHECK(data->m_initiateSound == "TestPrimary");
+		CHECK(data->m_initiateSound2 == "TestSecondary");
+		CHECK(data->m_startsPaused);
+	}
+	CHECK(SiegeDeploySpecialPowerModuleData{}.m_initiateSound2.empty());
+	CHECK(SiegeDeployHordeSpecialPowerModuleData{}.m_initiateSound2.empty());
+}
 
 namespace
 {

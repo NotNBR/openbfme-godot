@@ -400,10 +400,12 @@ TEST_CASE("play4 heroes retail: every faction's heroes, recruited from the fortr
 				// Morgomir and the Witch-king on his fell beast kill 5 members (450 health taken) and Drogoth 3 strikes, 1500 health, all 20
 				CHECK_FALSE(own.noted3804);
 				CHECK_FALSE(ord.noted3804);
-				CHECK(own.shots == 0u);
-				CHECK(own.lost == 0.0f);
-				CHECK(own.membersKilled == 0u);
 				const bool drogoth = hero == "Drogoth";
+				// merge queue q28 (measured once on the merged tree and at each merge point): on his own Drogoth now strikes the horde once (975 health, 13 of 20
+				// killed); the fell beasts still strike nothing
+				CHECK(own.shots == (drogoth ? 1u : 0u));
+				CHECK(own.lost == (drogoth ? 975.0f : 0.0f));
+				CHECK(own.membersKilled == (drogoth ? 13u : 0u));
 				// lane BACKLOG4: 3 strikes (4 before): the hero's creation uses the teleport form (RW 0x7814CF: RW 0x696E63(pos, 0)), which idles the new
 				// hero's AI and wakes it; the fight's damage and kills are unchanged (measured with and without that call)
 				// lane STEALTHFLY1: 2 strikes (3 before): recruited from the fortress, Drogoth leaves along its production exit path in the bird's own follow
@@ -427,9 +429,19 @@ TEST_CASE("play4 heroes retail: every faction's heroes, recruited from the fortr
 			// MordorGoblinSwordsman_Slaved of the Moria goblin lair about 550 to the south-west, then the lair itself, so his strikes in the window never
 			// reached the horde (measured on a CI host). Community #74 (the destination adjustment spiralling around the cell, RW 0x6FA2A4, with #73's centred
 			// formations) on q23's tree: he fought the horde (14 of 20 killed). Merge queue q26 (with OFFMAP-1's start positions and the rest, measured once on
-			// the merged tree): he takes the creep first again; every other hero fights the horde
-			const bool creepFirst = hero == "ElvenHaldir";
-			CHECK((creepFirst ? own.lost == 0.0f : own.lost > 0.0f)); // tolerance: the pre-existing "the guard attacks the horde" bound, Haldir's 0 exact
+			// the merged tree): he takes the creep first again; every other hero fights the horde. Merge queue q27 (LOS-1's terrain line of sight in the
+			// target search, measured at each merge point): the creep behind the hill is out of his sight, and he fights the horde (8 of 20 killed) like
+			// every other hero
+			// Merge queue q28 (measured once on the merged tree and at each merge point): Haldir's guard takes the creep first again (1 strike, nothing taken from
+			// the horde); every other hero fights the horde
+			if (hero == "ElvenHaldir")
+			{
+				CHECK(own.lost == 0.0f);
+			}
+			else
+			{
+				CHECK(own.lost > 0.0f); // tolerance: the pre-existing "the guard attacks the horde" bound
+			}
 			CHECK_FALSE(own.noted3804);
 			// on an order (auto-acquire off): the order alone strikes and kills. Lane ATTACK-1 closed S-3807 (its two named exceptions, the mounted Witch-king and
 			// Mouth of Sauron, were the port's static crush test in blockedBy: the next test); its runtime note is gone
@@ -560,8 +572,12 @@ TEST_CASE("attack1 heroes retail: the mounted Witch-king and Mouth of Sauron, or
 	// #74's own port measured: the Witch-king 4 swings (the first took 525, 1125 outside the run), 15 killed, nearest 35.1055, with CRUSHER_LEVEL -1 blocked
 	// 10 frames from frame 30, one swing taking 525 from 50.9059; the Mouth of Sauron 8 swings (75 / 600), 8 killed, nearest 24.9008, with CRUSHER_LEVEL -1
 	// blocked 18 frames from frame 21, 5 swings taking 375 from 60.1409. The duels are unchanged. Engine pins, not retail values.
-	for (const Case &c : { Case{ "FactionAngmar", "AngmarWitchking", 4u, 15u, 0.0f, { 800.0f, 112.0f }, 4u, 525.0f, 1125.0f, { { 1500.0f, 800.0f }, { 700.0f, 700.0f } }, 10, 30, 1u, 525.0f, 50.9059f, 35.1055f },
-			 Case{ "FactionMordor", "MordorMouthOfSauron", 8u, 8u, 0.0f, { 640.0f, 320.0f }, 8u, 75.0f, 600.0f, { { 1500.0f, 640.0f }, { 860.0f, 640.0f }, { 220.0f, 220.0f } }, 18, 21, 5u, 375.0f, 60.1409f, 24.9008f } })
+	// Merge queue q28 (#96 / #97 / #98, #117's fortress module in the update schedule, #124 and the archive's plain batch; measured once on the merged tree
+	// and at each merge point): the Witch-king 6 shots, 18 killed (225 in the crush run), 3 swings (the first took 450, 1125 outside the run), nearest 5.53305,
+	// with CRUSHER_LEVEL -1 blocked 10 frames from frame 30, one swing taking 600 from 50.9059; the Mouth of Sauron 10 swings (75 / 750), 10 killed, nearest
+	// 40.9154, with CRUSHER_LEVEL -1 blocked 18 frames from frame 7, 5 swings taking 375 from 69.7602. The duels are unchanged. Engine pins, not retail values.
+	for (const Case &c : { Case{ "FactionAngmar", "AngmarWitchking", 6u, 18u, 225.0f, { 800.0f, 112.0f }, 3u, 450.0f, 1125.0f, { { 1500.0f, 800.0f }, { 700.0f, 700.0f } }, 10, 30, 1u, 600.0f, 50.9059f, 5.53305f },
+			 Case{ "FactionMordor", "MordorMouthOfSauron", 10u, 10u, 0.0f, { 640.0f, 320.0f }, 10u, 75.0f, 750.0f, { { 1500.0f, 640.0f }, { 860.0f, 640.0f }, { 220.0f, 220.0f } }, 18, 7, 5u, 375.0f, 69.7602f, 40.9154f } })
 	{
 		INFO(std::string(c.hero));
 		const ThingTemplate *tt = s->world->things().findTemplate(c.hero);

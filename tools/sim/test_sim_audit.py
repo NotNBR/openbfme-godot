@@ -363,7 +363,8 @@ def test_the_policy_is_the_reviewed_list():
         assert item["reason"].strip(), item
     # adding a registered facade implementation (an exemption from the AST check) is a reviewed change of THIS list
     assert policy["facade_files"] == ["src/Common/System/NumericState.cpp", "src/Common/NumericState.h",
-                                      "src/Common/System/DeterministicLibm.cpp"]  # DEP-2: the deterministic libm (Lua math)
+                                      "src/Common/System/DeterministicLibm.cpp",  # DEP-2: the deterministic libm (Lua math)
+                                      "src/GameLogic/Sdk/LuauSimMath.cpp"]  # SDK-2: a sim Luau script's math (on DetLibm)
     assert policy["facade_functions"] == ["SimMath::sqrtd", "SimMath::sinCosDet", "SimMath::atan2d", "SimMath::cosd", "SimMath::sind", "SimMath::cosf32",
                                           "SimMath::sinf32", "SimMath::atanDetUnit", "SimMath::acosDet"]
     # GodotDevice: no blanket exclusion, every file is classified on its own; the game world (game-start inputs, object creation, commands) is audited

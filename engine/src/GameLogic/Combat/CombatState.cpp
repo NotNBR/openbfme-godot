@@ -298,8 +298,8 @@ std::vector<std::string> CombatState::stops()
 		"; lane SPELL-3 (review r3): the Aim and Fire states of an attack on an object carry RotWK's cannotPossiblyAttackObject (RW 0x741798, the B1 condition lists): an owner Object::isAbleToAttack refuses (NO_ATTACK, the condition 0x81, UNDER_CONSTRUCTION, SOLD) leaves the machine with failure, an ordered attack included; its getAbleToAttackSpecificObject half (RW 0x68D6A6 with the AI's last command source) and the B1 conditions to Pursue are not ported, and the horde and melee machines have no conditions",
 		"[S-326] acquisition (lane TARGET-1): RotWK's mood scan getNextMoodTarget (RW 0x66844A) with its cadence (AI + 0x21C, the one-off random offset AI + 0x3BC, "
 		"resetNextMoodCheckTime RW 0x662DD9 on idle entry) and the target search AI::findClosestEnemy (RW 0x7006D7: the partition filters, the AttackPriority table "
-		"score with the combat chain, pathability, the horde adjustment RW 0x68D30E) run for the idle, attack-move, guard, hunt, turret and giant bird scans; "
-		"not ported: the line of sight filter (taken as clear, S-859), the friendly-fire crowd query (distance type 4, S-1020), the player's stop flag AI + 0x3CC "
+		"score with the combat chain, pathability, the horde adjustment RW 0x68D30E, the line of sight filter RW 0x6616AC: lane LOS-1) run for the idle, attack-move, guard, "
+		"hunt, turret and giant bird scans; not ported: the friendly-fire crowd query (distance type 4, S-1020), the player's stop flag AI + 0x3CC "
 		"and its retaliation branch, the firing tracker's take-once target (Object + 0x248 + 0x38), the contained structure's apparent player, the attack-moving "
 		"skirmish AI filter (state 0x21, S-328), the script attack priority actions and the team prototype's priority override (S-1180); the melee re-acquire (state 0xE5) still uses the port's TargetFinder",
 		"[S-327] horde combat: the horde object runs the melee approach and wait states (B1 ids 0xC8..0xCC) and its members attack through their own attack machine; HordeMeleeAmoeba's cell search is "

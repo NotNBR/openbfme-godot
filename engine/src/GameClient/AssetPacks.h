@@ -17,7 +17,11 @@
 // with or without packs, and a pack may be used online. (Picking uses the drawn model, so a pack can change what a click hits: input, sent
 // as ordinary commands, never a desync.)
 //
-// Not covered yet (reported in AssetPacks::notCovered()): particle, terrain, UI (Apt) and decal textures, and model formats other than W3D.
+// Lane SDK-1 adds: a whitelist (a pack holds models, textures and its own text only; anything else refuses the pack), the skeleton check
+// (checkModels, run on the mounted files) and the textures of particles, decals, roads, rivers, water and the sky (GodotDevice/
+// GodotAssetPackImage.h). Precedence: base game < --mod-install < -mod < asset packs (a pack draws over a mod's file of the same name too).
+//
+// Not covered yet (reported in AssetPacks::notCovered()): terrain tile, UI (Apt) textures, and model formats other than W3D.
 
 #pragma once
 
@@ -52,7 +56,12 @@ public:
 	// cannot be read or holds a name twice.
 	bool addPack(const std::string &folder, std::vector<std::string> &errors);
 
-	bool empty() const { return m_textures.empty() && m_models.empty(); }
+	bool empty() const { return m_suspended || (m_textures.empty() && m_models.empty()); }
+	// lane SDK-1b (a): packs are offline only for now: a LAN or online game suspends them (every lookup answers nothing, so every peer draws the
+	// game's own assets) until the online checks exist. The packs stay loaded; loaded() says whether there are any.
+	void setSuspended(bool on) { m_suspended = on; }
+	bool suspended() const { return m_suspended; }
+	bool loaded() const { return !m_textures.empty() || !m_models.empty(); }
 	// the replacement of a W3D texture name ("GUMaArms.tga", "gumaarms": the extension and the case do not matter), or nullptr
 	const AssetPackFile *texture(const std::string &textureName) const;
 	// the replacement of a W3D file, by any virtual path ending in its file name ("art\w3d\gu\gumaarms_skn.w3d"), or nullptr
@@ -67,11 +76,21 @@ public:
 	const std::vector<std::string> &notes() const { return m_notes; }
 	static const char *notCovered();
 
+	// lane SDK-1: checks every replacement model against the file it replaces in `base` (the mounted game and mods, the simulation's view):
+	// a replacement must keep the original's hierarchies (bone names, order and parents), its HLODs' hierarchy and its animations, since the
+	// animations, the effects' bones and the logic's launch bones (which keep reading the original) all name them. A model that does not
+	// fit is left out with a note naming why (the game's model is drawn: the rest of the pack still loads); a model replacing no file is a
+	// note. False + errors when a pack model cannot be read or is not a W3D file.
+	bool checkModels(W3DFileSource &base, std::vector<std::string> &errors);
+	// the reasons `replacement` does not fit `original` (empty = it fits); the checks of checkModels
+	static std::vector<std::string> compareSkeletons(const W3DFileContents &original, const W3DFileContents &replacement);
+
 private:
 	std::vector<std::string> m_packs;
 	std::map<std::string, AssetPackFile> m_textures; // texture stem, lower case
 	std::map<std::string, AssetPackFile> m_models;   // file name, lower case ("gumaarms_skn.w3d")
 	std::vector<std::string> m_notes;
+	bool m_suspended = false;
 };
 
 // The render side's W3D source with the packs in front (models only; textures go through W3DMaterialFactory::Set_Asset_Packs). Never give it

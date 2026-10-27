@@ -15,6 +15,7 @@
 #include "GameLogic/Construction.h"
 #include "GameLogic/Module/CastleModules.h"
 #include "GameLogic/GlobalWeatherSystem.h"
+#include "GameLogic/Module/SpecialAbilityModules.h"
 #include "GameLogic/Module/SpellEffectModules.h"
 #include "GameLogic/ObjectFilterMatch.h"
 #include "GameLogic/Armor.h"
@@ -1759,7 +1760,13 @@ TEST_CASE("FACT-A context commands: a battalion captures a neutral flag's buildi
 		r.clickWorld(FactRig::clickPoint(*flag));
 		r.frames(30);
 		CHECK_MESSAGE(outpost->getControllingPlayer() != r.local(), "the click captured: S-286 can shrink");
-		issue(r, *horde, *flag, "SpecialAbilityCaptureBuilding");
+		// lane HEROCAST-1: the message only when the click started no capture. A second cast while the ability runs is refused (not ready), but the group
+		// first gives the horde's AI the player's command source (AI + 0x48, RW 0x770B3D), and a player command ends a running ability (RW 0x854F0B)
+		SpecialPowerUpdateInterface *capture = SpecialAbilityModules::findUpdate(*horde, TheSpecialPowerStore->findSpecialPowerTemplate("SpecialAbilityCaptureBuilding"));
+		if (!capture || !capture->isActive())
+		{
+			issue(r, *horde, *flag, "SpecialAbilityCaptureBuilding");
+		}
 		const bool captured = waitFor(r, 900, [&]() { return outpost->getControllingPlayer() == r.local(); });
 		CHECK_MESSAGE(captured, f << " " << capturer << ": the outpost is still " << (outpost->getControllingPlayer() ? outpost->getControllingPlayer()->getPlayerName() : std::string("nobody's")));
 		std::printf("facta context %s: %s captured the Outpost through the special power message: %d\n", f.c_str(), capturer.c_str(), (int)captured);

@@ -388,8 +388,8 @@ bool AIMover::computeAttackPath()
 	// RW 0x6668CA (the ground branch; the flying / no-pathfind branch RW 0x666D4E .. 0x666E6C and the ship variant RW 0x6FDE38 are S-784)
 	static const std::string kStopAttackPath =
 		"[S-784] attack path: requestAttackPath (RW 0x663802), computeAttackPath (RW 0x6668CA, ground branch), findAttackPath (RW 0x6FC18E: the probe, the corridor "
-		"RW 0x6F9829, the ranked fallback, the range-limited expansion) and its view test RW 0x6F4557 (lane ATTACKPATH-1) are ported; NOT ported: the view test's "
-		"weapon terrain line RW 0x6CC6DD (taken as clear, S-859), the flying branch and the ship search RW 0x6FDE38, the existing path kept for a waypoint node "
+		"RW 0x6F9829, the ranked fallback, the range-limited expansion) and its view test RW 0x6F4557 (lane ATTACKPATH-1) with the weapon terrain line RW 0x6CC6DD "
+		"(lane LOS-1) are ported; NOT ported: the flying branch and the ship search RW 0x6FDE38, the existing path kept for a waypoint node "
 		"(RW 0x666907, no waypoints: S-161), the path-through flag of a guard state (state 0x10 with AI + 0x3CD, S-325), the BRIDGE victim's attack points "
 		"(RW 0x67D7EC); INFERENCE: a WALL_UPGRADE victim's corridor goal is its position (RW 0x68C9AC)";
 	m_host.noteLogicStop(kStopAttackPath);

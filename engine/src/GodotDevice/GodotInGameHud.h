@@ -179,6 +179,7 @@ public:
 	int64_t select_objects(const PackedInt64Array &ids); // lane SELPERF-1: the selection benchmark's N objects at once
 	bool open_spell_store();
 	void close_spell_store();
+	void cancel_spell_store();
 	bool spell_store_click(int64_t index);
 	bool press_spell_slot(int64_t slot);
 

@@ -26,7 +26,7 @@
 //     RW 0xC05AF8: Aragorn's Elendil).
 // Not ported (stops S-859 .. S-863, see stopLines): the special objects (no retail ability names SpecialObject), the capture / garrison /
 // disguise / grab ability enums of the trigger switch, the face command before triggering (no AI face state: the facing check is the AI idle
-// test), the line of sight test of ApproachRequiresLOS, the approach point of RW 0x851607 (the move goes to the target), sounds and voices
+// test), the approach point of RW 0x851607 (the move goes to the target), sounds and voices
 // (client), FleeRangeAfterCompletion, the emotion system (Elendil's terror pulse is counted). MountedTemplate's replacement runs since lane HERO-2 (S-861).
 
 #pragma once

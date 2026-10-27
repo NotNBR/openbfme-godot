@@ -1247,10 +1247,5 @@ std::vector<std::string> ControlBar::acceptanceStops()
 		"0x96F53C); a TOGGLE_STANCE press that reaches processCommandUI sends nothing and is counted (unportedPresses \"TOGGLE_STANCE (no sub-menu)\"); not ported: "
 		"SetStance's voice (RW 0x8DEDBB event 0x7E3, INFERENCE: the UnitSpecificSound), the items' hotkey registration (RW 0x96F890, S-280: D / F / G still send "
 		"through CommandXlat), the sub-menu owner's notifications (vslots 4 / 8), the press's context object checks (RW 0x449681 / 0x6A8803)",
-		"[S-4531] the left press's gate and click sound (lane NETLAG-1, read, not ported): RW 0x9D285E (BFME2 decomp Rva005C3427::Run, tier A) reads the "
-		"command button clip's state (RW 0xA00C0E: clip + 0x50, set by RW 0x9D2BEE: 1 _disabled, 2 _extraDisabled, 3 _cantAfford, 4 _static, 5 _notReady, "
-		"6 _up, 7 _visuallyEnabled) and for 1, 3 and 5 plays Gui_PalantirCommandButtonDisabledClick and drops the press; any other state goes to "
-		"processCommandUI (RW 0x9D2814) with no sound of its own, so an enabled press sounds only through its clip. Here every press reaches "
-		"ControlBar::pressButton, which refuses what it cannot do, silently",
 	};
 }

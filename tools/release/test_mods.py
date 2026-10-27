@@ -151,11 +151,40 @@ def test_mod_catalog_rules():
     assert r.returncode == 0 and "MODS OK" in r.stdout, r.stdout[-4000:] + r.stderr[-2000:]
 
 
+def make_asset_packs(root: Path) -> None:
+    """lane SDK-1: two made-up asset packs: "HD Units" (a model, a texture, a readme) and "Sneaky" (a texture and an INI file)"""
+    (root / "HD Units" / "textures").mkdir(parents=True)
+    (root / "HD Units" / "gumaarms_skn.w3d").write_bytes(b"w" * 600)
+    (root / "HD Units" / "textures" / "GUMaArms.dds").write_bytes(b"DDS " + b"t" * 420)
+    (root / "HD Units" / "README.md").write_text("about")
+    (root / "Sneaky").mkdir()
+    (root / "Sneaky" / "tree.dds").write_bytes(b"DDS ")
+    (root / "Sneaky" / "weapon.ini").write_text("Weapon X\nEnd\n")
+
+
+@needs_godot
+def test_asset_packs_listed_and_turned_off(tmp_path, service):
+    """lane SDK-1: --asset-packs lists the game's asset-packs folder with the game's rules; --asset-pack-off / -on write disabled.txt"""
+    root = tmp_path / "game-user" / "asset-packs"
+    make_asset_packs(root)
+    r = launch(tmp_path, service, "--asset-packs")
+    assert r.code == 0 and r.has("LAUNCHER ASSET PACKS 2 in "), r  # the folder itself is scrubbed from the log (launcher_log.gd)
+    assert r.has("LAUNCHER ASSET PACK HD Units | on | 1 models, 1 textures | 1 MB"), r
+    assert r.has("LAUNCHER ASSET PACK Sneaky problem: weapon.ini is not a model or texture"), r
+    r = launch(tmp_path, service, "--asset-pack-off=Sneaky", "--asset-packs")
+    assert r.code == 0 and r.has("LAUNCHER ASSET PACK Sneaky | off |"), r
+    assert (root / "disabled.txt").read_text().splitlines()[1:] == ["sneaky"]
+    r = launch(tmp_path, service, "--asset-pack-on=sneaky", "--asset-pack-off=Nope", "--asset-packs")
+    assert r.code == 1 and r.has("LAUNCHER ASSET PACK Sneaky | on |") and r.has("cannot turn it off: there is no asset pack Nope"), r
+    assert service.server.requests == [], "asset packs ask nothing of the service"
+
+
 @needs_godot
 def test_mods_window(tmp_path, service):
     """the real window (scripts/main.gd, headless, offline): Load the list, the question before the first mod download, Install with an
     enhancement, Play with, Pause / Resume, Remove (tests/mods_window_test.gd)"""
     (tmp_path / "home").mkdir()
+    make_asset_packs(tmp_path / "game-user" / "asset-packs")
     env = dict(os.environ, XDG_DATA_HOME=str(tmp_path / "data"), OPENBFME_GAME_USER_DIR=str(tmp_path / "game-user"), HOME=str(tmp_path / "home"))
     cmd = [GODOT, "--headless", "--path", str(LAUNCHER), "--script", "res://tests/mods_window_test.gd", "--", "--offline",
            f"--aio-base={service.server.origin}"]

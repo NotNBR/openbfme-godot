@@ -6,6 +6,7 @@
 #include "doctest.h"
 
 #include "HudTestUtil.h"
+#include "HudAudioTestUtil.h"
 
 #include "Common/INI.h"
 #include "GameClient/CommandButtonHelp.h"
@@ -239,7 +240,7 @@ namespace
 struct Hud6Rig
 {
 	Rig rig;
-	RecordingShellServices services;
+	hudaudio::RecordingShellServices services;
 	GameTextTableSource text;
 	MappedImageCollection images;
 	INIEnvironment imageEnv;
@@ -248,8 +249,7 @@ struct Hud6Rig
 	{
 		std::vector<std::uint8_t> bytes;
 		std::string error;
-		REQUIRE_MESSAGE(s.mount->fs->readFile("data/lotr.str", bytes, &error), error);
-		REQUIRE_MESSAGE(text.table.parse(bytes, &error), error);
+		REQUIRE_MESSAGE(text.table.loadRetail(*s.mount->fs, &error), error); // data/lotr.str, or a non-English install's lotr.csf
 		imageEnv.fileSystem = s.mount->fs.get();
 		images.registerBlocks(imageEnv.blocks);
 		INI ini(imageEnv);
@@ -300,6 +300,109 @@ CommandButtonHelp::Text composePrerequisiteHelp(Hud6Rig &h, const std::string &t
 	return CommandButtonHelp::compose(button, &text, h.rig.game->logic(), player, localPlayer, nullptr, "Men");
 }
 } // namespace
+
+TEST_CASE("hud click audio: radial synthetic availability states and command classes")
+{
+	if (!haveWorld("hud click audio radial"))
+	{
+		return;
+	}
+	SharedWorld &s = shared();
+	hudaudio::RetailAudio audio(*s.mount->fs);
+	Hud6Rig h(s, "FactionMen");
+	h.hud->setWindowSize(1024, 768);
+	h.rig.view.setScreen(1024, 768);
+	const Coord3D at = h.rig.freeSpot(2400, 1400, 250.0f);
+	Object *source = h.rig.make("GondorBarracks", at.x, at.y);
+	REQUIRE(source);
+	h.rig.lookAt({ at.x, at.y, 0.0f });
+	h.frames(20);
+	auto context = h.hud->enterContext();
+	ControlBar bar(h.hud->input().context());
+	struct Scenario
+	{
+		const char *name;
+		ButtonState state;
+	};
+	const Scenario scenarios[] = {
+		{ "enabled", ButtonState::Enabled },
+		{ "restricted", ButtonState::Restricted },
+		{ "cant-afford", ButtonState::CantAfford },
+		{ "not-ready", ButtonState::NotReady },
+		{ "purchased", ButtonState::Purchased },
+		{ "active", ButtonState::Active },
+	};
+	struct CommandClass
+	{
+		const char *name;
+		int command;
+	};
+	const CommandClass commandClasses[] = {
+		{ "FOUNDATION_CONSTRUCT", GUI_COMMAND_FOUNDATION_CONSTRUCT },
+		{ "CASTLE_UPGRADE", GUI_COMMAND_CASTLE_UPGRADE },
+		{ "UNIT_BUILD", GUI_COMMAND_UNIT_BUILD },
+		{ "OBJECT_UPGRADE", GUI_COMMAND_OBJECT_UPGRADE },
+		{ "SPECIAL_POWER", GUI_COMMAND_SPECIAL_POWER },
+		{ "REVIVE", GUI_COMMAND_REVIVE },
+	};
+	for (const Scenario &scenario : scenarios)
+	{
+		for (const CommandClass &commandClass : commandClasses)
+		{
+			for (const bool left : { true, false })
+			{
+				CommandButton command;
+				command.m_command = commandClass.command;
+				ControlBarButton button;
+				button.slot = 0;
+				button.button = &command;
+				button.state = scenario.state;
+				std::vector<ControlBarButton> buttons{ button };
+				h.hud->radialMenu().update(h.rig.logic(), &h.rig.game->drawables(), h.rig.view, 1024, 768, source->getID(), buttons, true);
+				REQUIRE(h.hud->radialMenu().buttons().size() == 1);
+				const RadialMenuLayout::Rect &rect = h.hud->radialMenu().buttons().front().rect;
+				const int x = rect.x + rect.w / 2;
+				const int y = rect.y + rect.h / 2;
+				audio.manager->takeEventLog();
+				h.hud->radialMenu().mouseButton(left, true, x, y, bar);
+				const std::vector<std::string> down = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+				h.hud->radialMenu().mouseButton(left, false, x, y, bar);
+				const std::vector<std::string> up = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+				const std::vector<std::string> expected = (scenario.state == ButtonState::Enabled || scenario.state == ButtonState::Active)
+					? std::vector<std::string>{ "Gui_PalantirCommandButtonClick" }
+					: std::vector<std::string>{ "Gui_PalantirCommandButtonDisabledClick" };
+				hudaudio::printSequence(std::string("radial synthetic availability ") + scenario.name + " " + commandClass.name + (left ? " left" : " right"),
+					down, up);
+				CHECK(down == expected);
+				CHECK(up.empty());
+				audio.manager->takeEventLog();
+				h.hud->radialMenu().mouseButton(left, true, -20, -20, bar);
+				const std::vector<std::string> outsideDown = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+				h.hud->radialMenu().mouseButton(left, false, -20, -20, bar);
+				const std::vector<std::string> outsideUp = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+				CHECK(outsideDown.empty());
+				CHECK(outsideUp.empty());
+			}
+		}
+	}
+	CommandButton cancelableCommand;
+	cancelableCommand.m_command = GUI_COMMAND_UNIT_BUILD;
+	cancelableCommand.m_options = COMMAND_OPTION_CANCELABLE;
+	ControlBarButton cancelableButton;
+	cancelableButton.slot = 0;
+	cancelableButton.button = &cancelableCommand;
+	cancelableButton.state = ButtonState::Restricted;
+	h.hud->radialMenu().update(h.rig.logic(), &h.rig.game->drawables(), h.rig.view, 1024, 768, source->getID(), { cancelableButton }, true);
+	const RadialMenuLayout::Rect &cancelRect = h.hud->radialMenu().buttons().front().rect;
+	audio.manager->takeEventLog();
+	h.hud->radialMenu().mouseButton(false, true, cancelRect.x + cancelRect.w / 2, cancelRect.y + cancelRect.h / 2, bar);
+	const std::vector<std::string> cancelDown = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+	h.hud->radialMenu().mouseButton(false, false, cancelRect.x + cancelRect.w / 2, cancelRect.y + cancelRect.h / 2, bar);
+	const std::vector<std::string> cancelUp = hudaudio::takeRequests(*audio.manager, "HUD radial press");
+	hudaudio::printSequence("radial synthetic availability restricted right cancelable", cancelDown, cancelUp);
+	CHECK(cancelDown == std::vector<std::string>{ "Gui_PalantirCommandButtonClick" });
+	CHECK(cancelUp.empty());
+}
 
 TEST_CASE("hud6 recovered help guards retail")
 {

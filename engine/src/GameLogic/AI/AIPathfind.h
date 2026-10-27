@@ -885,8 +885,13 @@ public:
 	bool adjustHordeMeleeDestination(PathfindObject &obj, const PathfindLocomotorInfo &loco, Coord3D *dest);
 	bool hordeMeleeFootprint(const PathfindObject &obj, int x, int y, PathfindLayerEnum layer, int radius, bool centred, int *count);
 	// lane ATTACKPATH-1: RW 0x6F4557 (BFME2 decomp PathfinderAttackView.cpp, AIPathfindAttackView.cpp): the attacker at `attackerPos` cannot see `victim` past the
-	// pathfinder's obstacles (AIData AttackUsesLineOfSight, an ATTACK_NEEDS_LINE_OF_SIGHT or CAN_SHOOT_OVER_WALLS attacker; the weapon's terrain line is S-784)
+	// pathfinder's obstacles (AIData AttackUsesLineOfSight, an ATTACK_NEEDS_LINE_OF_SIGHT or CAN_SHOOT_OVER_WALLS attacker) or, with a current weapon, past the
+	// terrain (the weapon's terrain line RW 0x6CC6DD, lane LOS-1: PathfindObject::isClearGoalFiringLineOfSightTerrain)
 	bool isAttackViewBlockedByObstacle(const PathfindObject &attacker, const Coord3D &attackerPos, const PathfindObject *victim, const Coord3D &victimPos);
+	// lane LOS-1: RW 0x6EFD35 (-> RW 0x6ECAC7 -> RW 0x6E9E66 with the callback RW 0x6E9356): the line-of-sight point of a WALK_ON_TOP_OF_WALL victim. The cells from
+	// `point`'s (centred) toward `toward`'s on the ground layer, Bresenham; the first whose layer field is not a wall layer (RW 0x6E82B3: 0x11 .. 0x40) gives `point`
+	// its centre's x and y (RW 0x6E8E19: (i + 0.5) * 10), true; a missing cell ends the walk, false (`point` unchanged)
+	bool adjustToWallTopPoint(Coord3D &point, const Coord3D &toward);
 	// lane PHYS-1: RW getMoveAwayFromPath 0x6FB231 (AIPathfindMoveAway.cpp): a path for `obj` to the nearest cell whose box keeps clear of `other`, of `obj` itself and
 	// of the two paths to avoid; null when none
 	Path *getMoveAwayFromPath(const PathfindObject *obj, const PathfindLocomotorInfo &loco, const PathfindObject *other, const Path *pathToAvoid,

@@ -269,7 +269,8 @@ public:
 		unsigned long long orders = 0;           // members ordered to attack (RW 0x66C536)
 		unsigned long long outOfReach = 0;       // members whose pick was out of reach (RW 0x6FF7FA false): the horde is marked dirty
 		unsigned long long meleeMembers = 0;     // members holding a melee weapon (the branch RW 0x875320)
-		unsigned long long losAssumedClear = 0;  // RW 0x744AAA's line-of-sight filter (RW 0x6616AC) consulted: taken as clear (S-859)
+		unsigned long long losTests = 0;         // RW 0x744AAA's line-of-sight filter (RW 0x6616AC) asked (lane LOS-1)
+		unsigned long long losRefused = 0;       // ... and refused the member
 		unsigned long long otherContainer = 0;   // victims held by a container that is not a HordeContain (its slot 0x48 is not ported: the victim stays)
 		unsigned long long positionOrders = 0;   // members a position fire would order (RW 0x6961F1 aiAttackPosition is not executed, S-325)
 	};

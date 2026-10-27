@@ -107,4 +107,5 @@ public:
 private:
 	std::vector<ResourceClaimDecal> m_claimed;
 	ResourcePlacementFeedback m_placement;
+	std::vector<std::int8_t> m_claimMemo; ///< lane FOGFX-1: updatePlacement's per-cell answers of RW 0x75C02D (-1 not asked yet)
 };

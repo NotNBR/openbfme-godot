@@ -70,7 +70,9 @@
 #include "Common/Audio/GameAudio.h"
 #include "GodotDevice/GodotGameStart.h"
 #include "GodotDevice/GodotGameWorld.h"
+#include "GodotDevice/GodotMouse.h"
 #include "GodotDevice/GodotRetailFileSystem.h"
+#include "Common/RetailArchivePolicy.h"
 #include "Common/ArchiveFileSystem.h"
 #include "GameClient/CreateAHeroHeroList.h"
 #include "GameClient/GUI/AptScreens/AptCreateAHero.h"
@@ -778,6 +780,7 @@ struct AptMenuPlayer::Impl
 	WindowManager *external = nullptr;
 	AptNativeHook *nativeHook = nullptr;
 	bool inputForwarded = false;
+	std::shared_ptr<GodotMouse> godotMouse;
 	bool openbfmeAvailable = false; // lane OPTS-3: set_openbfme_available
 	std::unique_ptr<AptTextureStore> textures;
 	std::unique_ptr<AptTextureStore> originalTextures;
@@ -1073,7 +1076,11 @@ struct AptMenuPlayer::Impl
 		{
 			bytes.clear();
 			error.clear();
-			if (!originalSource->readFile("data/lotr.str", bytes, &error) || !strings.parse(bytes, &error))
+			// a non-English install has the compiled lotr.csf instead (GameTextTable::loadRetail)
+			// retail's order (RotWK 2.01 RW 0x6E7E3D -> RW 0x6E7D9E): data\lotr.str, else Lotr.csf
+			const bool csf = !originalSource->fileExists("data/lotr.str") && originalSource->fileExists("lotr.csf");
+			if (csf ? (!originalSource->readFile("lotr.csf", bytes, &error) || !strings.parseCSF(bytes.data(), bytes.size(), &error))
+					: (!originalSource->readFile("data/lotr.str", bytes, &error) || !strings.parse(bytes, &error)))
 			{
 				errorsOut.push_back(toGodot("original data/lotr.str: " + error));
 			}
@@ -1406,6 +1413,7 @@ void AptMenuPlayer::_bind_methods()
 	ClassDB::bind_method(D_METHOD("get_stats"), &AptMenuPlayer::get_stats);
 	ClassDB::bind_method(D_METHOD("reset_timing"), &AptMenuPlayer::reset_timing);
 	ClassDB::bind_method(D_METHOD("get_report"), &AptMenuPlayer::get_report);
+	ClassDB::bind_method(D_METHOD("get_cursor_image"), &AptMenuPlayer::get_cursor_image);
 	ClassDB::bind_method(D_METHOD("get_stage_size"), &AptMenuPlayer::get_stage_size);
 	ClassDB::bind_method(D_METHOD("describe_ops"), &AptMenuPlayer::describe_ops);
 	ClassDB::bind_method(D_METHOD("add_test_texture", "name", "image"), &AptMenuPlayer::add_test_texture);
@@ -1455,6 +1463,10 @@ void AptMenuPlayer::_process(double delta)
 		m->shell->environment.openbfmeOptionsMenu = m->openbfmeAvailable; // lane OPTS-5: the next Options screen opens as the OpenBFME menu
 	}
 	tick(delta);
+	if (m->shell && m->shell->shell && m->godotMouse && !m->inputForwarded)
+	{
+		m->godotMouse->updateCursor(delta, "Arrow");
+	}
 	// lane JOINVER-1: a build refusal's DETAILS copied its text: onto the system clipboard (the engine has none of its own)
 	if (m->shell && m->shell->shell)
 	{
@@ -1600,6 +1612,7 @@ Dictionary AptMenuPlayer::boot(const Ref<RetailFileSystem> &fs, const Dictionary
 	Dictionary result;
 	Array errors;
 	m_booted = false;
+	m->godotMouse.reset();
 	const std::uint64_t start = Time::get_singleton()->get_ticks_usec();
 	if (fs.is_null() || !fs->is_mounted())
 	{
@@ -1694,6 +1707,7 @@ Dictionary AptMenuPlayer::boot_shell(const Ref<RetailFileSystem> &fs, Object *wo
 	Dictionary result;
 	Array errors;
 	m_booted = false;
+	m->godotMouse.reset();
 	const std::uint64_t start = Time::get_singleton()->get_ticks_usec();
 	GameWorld *world = Object::cast_to<GameWorld>(worldObject);
 	Ref<RetailFileSystem> presentationFs = config.get("presentation_fs", Ref<RetailFileSystem>());
@@ -1744,6 +1758,13 @@ Dictionary AptMenuPlayer::boot_shell(const Ref<RetailFileSystem> &fs, Object *wo
 	m->drawnBackdrop.clear();
 	m->fs = fs;
 	m->presentationFs = presentationFs;
+	m->godotMouse = std::make_shared<GodotMouse>();
+	m->godotMouse->loadCursorTable(*fs->archive_fs(), fs->install_root());
+	m->godotMouse->updateCursor(0.0, "Arrow");
+	for (const std::string &e : m->godotMouse->cursorErrors())
+	{
+		errors.push_back(toGodot("boot_shell: " + e));
+	}
 	m->worldId = world->get_instance_id(); // lane CAMP-2: the BinkMovie component's movies
 	m->view3d.setOwner(this, presentationFs); // lane UI-2: shell decoration follows the presentation source; gameplay View3D stays on the world path
 	m->source = std::make_unique<AptArchiveFileSource>(*presentationFs->archive_fs());
@@ -2747,6 +2768,7 @@ Dictionary AptMenuPlayer::openbfme_page_state() const
 		d["list"] = stageRect(lr);
 	}
 	d["help"] = toGodot(u16ToUtf8(page->helpText()));
+	d["help_top"] = page->helpTop();
 	return d;
 }
 
@@ -3939,6 +3961,7 @@ void AptMenuPlayer::render(bool force)
 	if (window != m->lastWindow || m_fit != m->lastFit)
 	{
 		m->dirty = true;
+		m->drawnValid = false;
 		m->lastWindow = window;
 		m->lastFit = m_fit;
 	}
@@ -4312,8 +4335,7 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 		return r;
 	};
 	// lane FB7-1: the display's backdrop behind every Apt level (Shell::update RW 0x75E1D3 -> RW 0x65C42C slot 0): the mapped image ShellMapLowLOD
-	// (HandCreatedMappedImages.ini: InstallLoad.tga, 1024 x 768 of a 1024 x 1024 texture). INFERENCE (S-1912): it covers the stage as the movies do
-	// (the display's draw of the slot was not read)
+	// (HandCreatedMappedImages.ini: InstallLoad.tga, 1024 x 768 of a 1024 x 1024 texture).
 	m->drawnBackdrop.clear(); // lane CAMP-2
 	if (m->shell && m->shell->shell && !m->shell->shell->backdropImage().empty())
 	{
@@ -4363,9 +4385,10 @@ void AptMenuPlayer::drawCanvas(const AptCanvasList &list)
 			}
 			if (it != m->godotTextures.end())
 			{
+				const AptStageMapping backdrop = m->mapping.fitImage((float)img->imageSize.x, (float)img->imageSize.y);
 				float x0, y0, x1, y1;
-				m->mapping.stageToWindow(0.0f, 0.0f, x0, y0);
-				m->mapping.stageToWindow((float)img->imageSize.x, (float)img->imageSize.y, x1, y1);
+				backdrop.stageToWindow(0.0f, 0.0f, x0, y0);
+				backdrop.stageToWindow(backdrop.stageW, backdrop.stageH, x1, y1);
 				addTextureUV(rs, newItem(root), Rect2(Vector2(x0, y0), Vector2(x1 - x0, y1 - y0)), it->second, img->uvLo, img->uvHi, Color(1, 1, 1, 1));
 				m->drawnBackdrop = name; // lane CAMP-2
 			}
@@ -4627,7 +4650,8 @@ void AptMenuPlayer::drawSegment(const AptCanvasList &list, size_t segment, const
 						Dictionary info;
 						if (m->presentationFs.is_valid() && m->presentationFs->is_shell_source() && m->presentationVideos && !title.empty())
 						{
-							const VideoStreamInfo opened = m->presentationVideos->locate(title, toNative(m->presentationFs->install_root()), "", "English");
+							const VideoStreamInfo opened = m->presentationVideos->locate(title, toNative(m->presentationFs->install_root()), "",
+								DetectRetailLanguageOfInstall(toNative(m->presentationFs->install_root()))); // the install's lang\<Language>*.big ("English")
 							info["ok"] = opened.ok;
 							info["full_path"] = toGodot(opened.fullPath);
 							info["error"] = toGodot(opened.error);
@@ -4855,13 +4879,27 @@ void AptMenuPlayer::drawSegment(const AptCanvasList &list, size_t segment, const
 					}
 					if (tex.is_valid())
 					{
+						float imageScaleX = op.scaleX, imageScaleY = op.scaleY;
+						float imageOffsetX = op.offsetX, imageOffsetY = op.offsetY;
+						if (record && *record == "LogoWithShadow" && m->shell->shell)
+						{
+							const ::Image *backdropImage = m->shell->skins.images.findImageByName(m->shell->shell->backdropImage());
+							if (backdropImage)
+							{
+								const AptStageMapping artwork = m->mapping.fitImage((float)backdropImage->imageSize.x, (float)backdropImage->imageSize.y);
+								imageScaleX = artwork.scaleX();
+								imageScaleY = artwork.scaleY();
+								imageOffsetX = artwork.offsetX();
+								imageOffsetY = artwork.offsetY();
+							}
+						}
 						float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
 						const float xs[4] = { op.bounds[0], op.bounds[2], op.bounds[2], op.bounds[0] };
 						const float ys[4] = { op.bounds[1], op.bounds[1], op.bounds[3], op.bounds[3] };
 						for (int i = 0; i < 4; ++i)
 						{
-							const float sx = (op.matrix.a * xs[i] + op.matrix.c * ys[i] + op.matrix.tx) * op.scaleX + op.offsetX;
-							const float sy = (op.matrix.b * xs[i] + op.matrix.d * ys[i] + op.matrix.ty) * op.scaleY + op.offsetY;
+							const float sx = (op.matrix.a * xs[i] + op.matrix.c * ys[i] + op.matrix.tx) * imageScaleX + imageOffsetX;
+							const float sy = (op.matrix.b * xs[i] + op.matrix.d * ys[i] + op.matrix.ty) * imageScaleY + imageOffsetY;
 							minx = std::min(minx, sx);
 							maxx = std::max(maxx, sx);
 							miny = std::min(miny, sy);
@@ -5881,8 +5919,10 @@ Dictionary AptMenuPlayer::instance_info(int level, const String &path)
 	r["found"] = true;
 	r["type"] = (int)inst->type();
 	r["depth"] = inst->depth();
+	const AptMatrix stageTransform = inst->globalMatrix();
+	r["stage_transform"] = Transform2D(Vector2(stageTransform.a, stageTransform.b), Vector2(stageTransform.c, stageTransform.d), Vector2(stageTransform.tx, stageTransform.ty));
 	float x, y;
-	inst->globalMatrix().apply(0, 0, x, y);
+	stageTransform.apply(0, 0, x, y);
 	r["x"] = x;
 	r["y"] = y;
 	r["visible"] = inst->visible;
@@ -5890,6 +5930,7 @@ Dictionary AptMenuPlayer::instance_info(int level, const String &path)
 	float bx0, by0, bx1, by1;
 	if (inst->contentBounds(bx0, by0, bx1, by1))
 	{
+		r["local_bounds"] = Rect2(bx0, by0, bx1 - bx0, by1 - by0);
 		float ax, ay, cx, cy;
 		if (inst->parent())
 		{
@@ -6618,6 +6659,16 @@ void AptMenuPlayer::set_input_forwarded(bool forwarded)
 	m->inputForwarded = forwarded;
 }
 
+std::shared_ptr<GodotMouse> AptMenuPlayer::godot_mouse() const
+{
+	return m->godotMouse;
+}
+
+Dictionary AptMenuPlayer::get_cursor_image() const
+{
+	return m->godotMouse ? m->godotMouse->getCursorImage() : Dictionary();
+}
+
 Ref<Font> AptMenuPlayer::font_for(const std::string &name, float size, float *drawSize, bool bold)
 {
 	return m->fontFor(name, size, drawSize, bold);
@@ -6680,6 +6731,15 @@ Dictionary AptMenuPlayer::get_report() const
 	r["view3d_notes"] = toArray(m->view3d.notes());
 	r["view3d_presentation_style"] = m->view3d.sourceStyle();
 	r["movie_errors"] = toArray(m->movieErrors); // lane CAMP-2: BinkMovie components that could not play
+	Array cursorErrors;
+	if (m->godotMouse)
+	{
+		for (const std::string &e : m->godotMouse->cursorErrors())
+		{
+			cursorErrors.push_back(toGodot(e));
+		}
+	}
+	r["cursor_errors"] = cursorErrors;
 	r["presentation_style"] = m->presentationFs.is_valid() && m->presentationFs->is_shell_source() ? "bfme2-106" : "rotwk-201";
 	r["presentation_root"] = m->presentationFs.is_valid() ? m->presentationFs->install_root() : String();
 	PackedStringArray presentationArchives;
@@ -7315,6 +7375,7 @@ Dictionary AptMenuPlayer::get_create_a_hero_view() const
 	const char page = screen->currentPage();
 	out["page"] = page ? String(std::string(1, page).c_str()) : String();
 	out["revision"] = (int64_t)screen->displayRevision();
+	out["camera_revision"] = (int64_t)screen->cameraRevision();
 	out["last_message"] = String(screen->lastMessage().c_str()); // lane CAHPIC-1: the last box's labels (the --cah-picture run waits for it)
 	out["picture_frames"] = (int64_t)screen->pictureFrames();     // lane CAHPIC-1: the guard clip's draws since PrepareToTakePicture
 	PackedByteArray record;

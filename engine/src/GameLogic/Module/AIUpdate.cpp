@@ -46,7 +46,7 @@ namespace
 {
 const char *const kStopCommands =
 	"S-222 AIUpdateInterface executes the move / idle / follow-path / busy commands; every other AICommandType (attack, guard, hunt, enter, exit, dock, repair, wander, "
-	"face, waypoint paths, ...) is counted by AIUpdateInterface::unportedCommands() and does nothing (the combat and construction milestones port them)";
+	"waypoint paths, ...) is counted by AIUpdateInterface::unportedCommands() and does nothing (the combat and construction milestones port them)";
 const char *const kStopUpdate =
 	"S-222 AIUpdateInterface::update skips the turrets, the mood / auto-acquire scan, the dead-state machine and the surrender / demoralize timers (RW 0x6695EF blocks "
 	"that need weapons, bodies and emotions); the movement-complete refresh of the pathfinder goal is the B1 body (AIUpdate.cpp:2574-2594), RW forces m_doFinalPosition off";
@@ -467,6 +467,7 @@ std::unique_ptr<AIStateMachine> AIUpdateInterface::makeStateMachine()
 	m->defineState(AI_QUARREL, std::make_unique<AIQuarrelState>(*m), AI_IDLE, AI_IDLE);
 	m->defineState(AI_FACE_OBJECT_IDLE, std::make_unique<AIFaceObjectIdleState>(*m), AI_IDLE, AI_IDLE);
 	m->defineState(AI_FACE_POSITION, std::make_unique<AIFacePositionState>(*m), AI_IDLE, AI_IDLE); // lane SIEGE-1: RW 0x753755 state 0x25 (RW 0x7449D4 mode 0)
+	m->defineState(AI_FACE_OBJECT, std::make_unique<AIFaceState>(*m, true), AI_IDLE, AI_IDLE);
 	m->defineState(AI_HUNT, std::make_unique<AIHuntState>(*m), AI_IDLE, AI_IDLE); // lane SCRIPT-3: RW 0x741133 (AIHunt.cpp)
 	// lane PLAY-4 (RW 0x753755): AIGuardState 16 (RW 0x74109B) and AIGoingIdleState 0x4E (RW 0x7410C2), both ending in idle (AIGuard.cpp)
 	m->defineState(AI_GUARD, std::make_unique<AIGuardState>(*m), AI_IDLE, AI_IDLE);
@@ -825,11 +826,11 @@ void AIUpdateInterface::privateMoveToPosition(const Coord3D &pos, CommandSourceT
 	}
 }
 
-void AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float angle, CommandSourceType source)
+bool AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float angle, CommandSourceType source, Coord3D *takenGoal)
 {
 	if (!acceptCommand(source, kCommandUnidentifiedMove))
 	{
-		return; // lane MODULES-3: RW 0x667174
+		return false; // lane MODULES-3: RW 0x667174
 	}
 	{
 		RoutedCommand c; // lane FLY-1
@@ -839,17 +840,31 @@ void AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float a
 		c.source = source;
 		if (routeCommand(c))
 		{
-			return;
+			if (takenGoal)
+			{
+				*takenGoal = pos; // the subclass owns the command; the base goal and attack-move stay untouched, as in aiMoveToPosition
+			}
+			return true;
 		}
 	}
 	m_world->noteStop(kStopCommands);
 	Object *obj = getObject();
-	if (hasKind(*obj, kindBits().immobile))
+	// Object::isMobile (RW 0x690E97), as privateMoveToPosition (RW 0x66B3FD) and BFME2's privateAttackMoveToPositionAndOrientation (BFME2 RVA 0x26C04E, the
+	// attack formation's command) refuse an immobile, disabled (but type 8 alone) or stoned unit or a deployed siege tower: nothing of it changes
+	if (!GarrisonRules::isMobile(*obj))
 	{
-		return;
+		return false;
+	}
+	if (source != CMD_FROM_AI)
+	{
+		m_attackMoveActive = false; // an accepted player / script move order ends an attack-move, as aiMoveToPosition (COMBAT-1)
 	}
 	Coord3D goal;
 	goalPositionClipped(pos, source, goal);
+	if (takenGoal)
+	{
+		*takenGoal = goal;
+	}
 	m_machine->clear();
 	m_machine->setGoalPosition(goal);
 	m_machine->setGoalObject(INVALID_ID);
@@ -857,6 +872,7 @@ void AIUpdateInterface::aiMoveToPositionAndOrientate(const Coord3D &pos, float a
 	setLastCommandSource(source);
 	m_machine->setState(AI_MOVE_TO);
 	wakeUpNow();
+	return true;
 }
 
 void AIUpdateInterface::aiMoveToObject(Object *target, CommandSourceType source)
@@ -894,6 +910,31 @@ void AIUpdateInterface::aiIdle(CommandSourceType source)
 	m_machine->clear();
 	m_machine->setGoalObject(INVALID_ID);
 	m_machine->setState(AI_IDLE);
+	wakeUpNow();
+}
+
+void AIUpdateInterface::aiFaceObject(Object *target, CommandSourceType source)
+{
+	// TARGET RW 0x6643B6; Open-BFME-2 AIUpdateInterfacePrivateCommands.cpp
+	// privateFaceObject (RVA 0x2645B9) is the same body with different offsets.
+	if (!acceptCommand(source, 0x26))
+	{
+		return;
+	}
+	privateFaceObject(target, source);
+}
+
+void AIUpdateInterface::privateFaceObject(Object *target, CommandSourceType source)
+{
+	if (!GarrisonRules::isMobile(*getObject()))
+	{
+		return;
+	}
+	m_machine->clear();
+	m_machine->setGoalObject(target ? target->getID() : INVALID_ID);
+	m_mover->clearBlocked();
+	setLastCommandSource(source);
+	m_machine->setState(AI_FACE_OBJECT);
 	wakeUpNow();
 }
 

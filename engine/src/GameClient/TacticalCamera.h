@@ -91,7 +91,7 @@ public:
 	bool worldToScreen(const Coord3D &world, ICoord2D &screen) const override { return m_pinhole.worldToScreen(world, screen); }
 	bool screenToRay(const ICoord2D &pixel, Coord3D &origin, Coord3D &direction) const override { return m_pinhole.screenToRay(pixel, origin, direction); }
 	Coord3D position() const override { return m_pos; }
-	// RW View::lookAt / ZH W3DView::lookAt: the ground point goes to the centre of the view (z is not used)
+	// RW 0x48CEA3 / BFME2 W3DView::lookAt: centre on the ground point immediately, including the displayed pose (z is not used).
 	void lookAt(const Coord3D &world) override;
 
 	// ---- View state ----
@@ -164,6 +164,8 @@ public:
 	// committed and previous poses become the live one. Without it the render interpolation mixed the previous committed pose with a live pose that had moved
 	// meanwhile, and a camera moved every render frame stepped at 30 Hz (frame-to-frame screen motion alternating about 4 : 1 at 60 fps)
 	void snapInterpolation();
+	// Device presentation may already have run when an Apt button jumps the camera.
+	void setJumpHandler(std::function<void()> handler) { m_jumpHandler = std::move(handler); }
 	void commitFrame();
 	float nearPlane() const { return 10.0f; }
 	// retail's 1800 (RW 0x48B7B1); with the free camera or a zoom-out factor, plus twice fogShift() so the far map stays drawn when zoomed out beyond retail's limit
@@ -259,6 +261,7 @@ private:
 	// the lock
 	ObjectID m_lockObject = 0;
 	std::function<int(ObjectID, Coord3D &)> m_objectSource;
+	std::function<void()> m_jumpHandler;
 	int lockTarget(Coord3D &position) const; ///< the lock object's position (m_objectSource, else the live object): 1 found, 0 gone, -1 not published yet
 	LockType m_lockType = LOCK_FOLLOW;
 	float m_lockDistance = 0.0f;
@@ -286,4 +289,3 @@ public:
 	Coord3D position() const override { return cam->position(); }
 	void lookAt(const Coord3D &world) override { cam->lookAt(world); }
 };
-

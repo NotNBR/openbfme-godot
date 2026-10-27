@@ -57,6 +57,8 @@ public:
 	// W3D model emitter (e_fire_sm, e_smoke_sm, ...): { ok, error }
 	Dictionary play_w3d_emitter(const String &name, const Vector3 &position);
 	void clear();
+	// lane SDK-1b: forgets every decoded texture (asset packs were switched on or off: GameWorld::set_asset_packs_used)
+	void clearTextureCache();
 	// lane PERF-1 r2: decode the particle textures of every particle system template ahead of their first use (definition order), until `budget_ms`
 	// has passed (<= 0: all); returns how many are left. A texture's first use takes the decoded one (its miss reported then): what is drawn and
 	// reported does not change, only when the decoding happens (the load instead of the battle's first volley)
