@@ -7,6 +7,8 @@
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/StateHash.h"
+#include "Common/SpecialPower.h"
+#include "GameClient/ControlBarCommands.h"
 #include "Common/Thing/KindOfTokens.h"
 #include "GameLogic/AI/AICommandSink.h"
 #include "GameLogic/AI/AIGroup.h"
@@ -15,6 +17,7 @@
 #include "GameLogic/SkirmishAI/AIStatCollector.h"
 #include "GameLogic/Map/TerrainLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/SpecialPowerModules.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/Object/PartitionManager.h"
 #include "GameLogic/SimMath.h"
@@ -958,7 +961,11 @@ const char *const kTargetlessNames[] = { "FlagCaptureSquad", "FarmKillSquad", "A
 	"AIStartWoTRBattleTactic", "AIRoamingDefenseTactic", "AIWoTRForfeitTactic", "WallTactic", "FarmBuilder" };
 constexpr bool kTargetlessAlways[] = { false, false, false, false, false, true, false, false, true, false, false };
 constexpr int kTargetlessCount = 11;
+constexpr int TL_FLAG_CAPTURE = 0;
 constexpr int TL_FARM_KILL = 1;
+const char *const kFlagCaptureFile = "AIFlagCaptureSquad.cpp";
+const char *const kFlagCaptureRunning = "AIFlagCaptureSquad_IsRunning";
+const char *const kFlagCaptureNextFrame = "AIFlagCaptureSquad_FrameNextRun";
 const char *const kTargetlessFile = "AITacticsGenerator.cpp";  // RW 0xC7AD48
 const char *const kFarmKillFile = "AIFarmKillSquad.cpp";        // RW 0xC8A218
 // the FarmKillSquad counters (RW keys DAT_00DEBEF8 / DAT_00DEBEFC, AsciiStrings whose text is set by an initialiser that is not read: the port's names)
@@ -987,6 +994,26 @@ int enemyOfGroup(const AISkirmishPlayer &ai)
 bool targetlessApplies(GameLogic &logic, AISkirmishPlayer &ai, int index)
 {
 	AIBrainState &b = ai.brain;
+	if (index == TL_FLAG_CAPTURE)
+	{
+		// RW 0x9BC39F / 0x9BC303: one squad at a time, its cooldown due, and a
+		// non-allied flag still carrying CAPTUREFLAG. Registry/relationship
+		// reference: Open-BFME-2 AITargetHeuristicTechBuilding::findBestTarget.
+		if (namedCounter(b, kFlagCaptureRunning) != 0 || (unsigned)namedCounter(b, kFlagCaptureNextFrame) > logic.getFrame())
+		{
+			return false;
+		}
+		const Player *me = playerOf(logic, ai.playerIndex);
+		for (ObjectID id : logic.skirmishAI().captureFlags())
+		{
+			const Object *flag = logic.findObjectByID(id);
+			if (flag && me && flag->isKindOfName("CAPTUREFLAG") && me->getRelationship(flag->getTeam()) != ALLIES)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
 	if (index == TL_FARM_KILL)
 	{
 		// RW 0x9BB1C4
@@ -998,7 +1025,7 @@ bool targetlessApplies(GameLogic &logic, AISkirmishPlayer &ai, int index)
 		const unsigned next = (unsigned)namedCounter(b, kFarmKillNextFrame);
 		return running == 0 && next <= logic.getFrame() && enemyOfGroup(ai) >= 0;
 	}
-	// the other 10 prototypes' vslot 1 (FlagCaptureSquad RW 0x9BC39F, AIRingHeroTactic RW 0x9BAF6C, StructureCreep RW 0x9BA3C2, LumberMillBuild RW 0x9B9E06,
+	// the other 9 prototypes' vslot 1 (AIRingHeroTactic RW 0x9BAF6C, StructureCreep RW 0x9BA3C2, LumberMillBuild RW 0x9B9E06,
 	// ReturnTheRing RW 0x9B89CF, AIStartWoTRBattleTactic RW 0x9B8451, AIRoamingDefenseTactic RW 0x9B7F56, AIWoTRForfeitTactic RW 0x9B71B7, WallTactic RW 0x9B6F70,
 	// FarmBuilder RW 0x9B53C6) are not ported: taken as "does not apply" and counted (S-893)
 	++b.targetlessUnported;
@@ -1008,6 +1035,14 @@ bool targetlessApplies(GameLogic &logic, AISkirmishPlayer &ai, int index)
 // vslot 2 of the prototype, called by the end RW 0x8F2006 unless its third argument is set
 void targetlessCleanup(GameLogic &logic, AISkirmishPlayer &ai, const AITactic &tac)
 {
+	if (tac.kindIndex == kTargetlessBase + TL_FLAG_CAPTURE)
+	{
+		// RW 0x9BBFDC; startup RW 0xBC9D10 / 0xBC9D1E: 20..90 seconds, draw at
+		// source line 0xD5.
+		ai.brain.namedCounters[kFlagCaptureRunning] = 0;
+		const int delay = logic.random().getValue(kLogicFramesPerSecond * 20, kLogicFramesPerSecond * 90, kFlagCaptureFile, 0xD5);
+		ai.brain.namedCounters[kFlagCaptureNextFrame] = (int)(logic.getFrame() + (unsigned)delay);
+	}
 	if (tac.kindIndex == kTargetlessBase + TL_FARM_KILL)
 	{
 		// RW 0x9BB226: not running; the next start no earlier than frame + GetGameLogicRandomValue(FPS * 10, FPS * 60) (AIFarmKillSquad.cpp line 0x244)
@@ -1401,7 +1436,7 @@ int tacticTeamCount(const AITactic &tac)
 {
 	if (tac.targetless)
 	{
-		return tac.kindIndex == kTargetlessBase + TL_FARM_KILL ? 1 : 0;
+		return tac.kindIndex == kTargetlessBase + TL_FARM_KILL || tac.kindIndex == kTargetlessBase + TL_FLAG_CAPTURE ? 1 : 0;
 	}
 	return teamCountOf((OffensiveKind)tac.kindIndex);
 }
@@ -1502,7 +1537,7 @@ AITacticTeam *findMergeTeam(GameLogic &logic, AISkirmishPlayer &ai, AITactic &ta
 		}
 		AITacticTeam *team = nullptr;
 		AITactic *tac2 = tacticHolding(b, id, &team);
-		if (!tac2 || tac2->targetless) // slot 0x28: true for FarmKillSquad (the only targetless prototype that starts, S-893)
+		if (!tac2 || tac2->targetless) // slot 0x28: true for FarmKillSquad (also FlagCaptureSquad)
 		{
 			continue;
 		}
@@ -1620,7 +1655,85 @@ void teamAttackObject(GameLogic &logic, AITacticTeam &team, Object &target)
 	team.idleFrames = 0;
 }
 
-// FarmKillSquad's started update (vslot 0x1C, RW 0x9BBE48)
+// FlagCaptureSquad update RW 0x9BC3F4, nearest flag RW 0x9BC213, command RW 0x8F1933.
+void updateFlagCapture(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITactic &tac, AIBrainState &owner)
+{
+	AITacticTeam *team = teamByIndex(tac, 0);
+	const Player *me = playerOf(logic, ai.playerIndex);
+	if (!team || !me)
+	{
+		endAnyTactic(logic, ai, b, tac, owner, true);
+		return;
+	}
+	bool canCapture = false, canAttack = false, replacementPending = false;
+	for (ObjectID id : team->members)
+	{
+		const Object *unit = logic.findObjectByID(id);
+		if (!unit)
+		{
+			continue;
+		}
+		// RW 0x9BC0EE rejects status 0x66 (SUMMONING_REPLACEMENT).
+		replacementPending = replacementPending || unit->testStatus((unsigned)CombatNames::status("SUMMONING_REPLACEMENT"));
+		for (const auto &module : unit->modules())
+		{
+			const SpecialPowerModuleInterface *power = module->getSpecialPower();
+			canCapture = canCapture || (power && power->getSpecialPowerTemplate() && power->getSpecialPowerTemplate()->getSpecialPowerType() == 0x1D);
+		}
+		canAttack = canAttack || (alive(unit) && unit->isKindOfName("CAN_ATTACK"));
+	}
+	if (tac.squadTarget != INVALID_ID && !allTeamsDone(ai, tac))
+	{
+		const Object *target = logic.findObjectByID(tac.squadTarget);
+		if (target && me->getRelationship(target->getTeam()) != ALLIES && canCapture)
+		{
+			return;
+		}
+		tac.squadTarget = INVALID_ID;
+	}
+	else if (canCapture && canAttack && !replacementPending)
+	{
+		Coord3D centre{};
+		teamCentre(logic, *team, centre);
+		Object *best = nullptr;
+		float distance = 0.0f;
+		for (ObjectID id : logic.skirmishAI().captureFlags())
+		{
+			Object *flag = logic.findObjectByID(id);
+			if (!flag || !flag->isKindOfName("CAPTUREFLAG") || me->getRelationship(flag->getTeam()) == ALLIES)
+			{
+				continue;
+			}
+			const float dx = SimMath::subf32(flag->getPosition()->x, centre.x), dy = SimMath::subf32(flag->getPosition()->y, centre.y);
+			const float d = SimMath::addf32(SimMath::mulf32(dy, dy), SimMath::mulf32(dx, dx));
+			if (!best || d < distance)
+			{
+				best = flag;
+				distance = d;
+			}
+		}
+		if (best)
+		{
+			const CommandButton *button = TheCommandStore ? TheCommandStore->findCommandButton("Command_CaptureBuilding") : nullptr;
+			if (!button)
+			{
+				throw std::logic_error("FlagCaptureSquad: missing Command_CaptureBuilding");
+			}
+			for (ObjectID id : team->members)
+			{
+				if (Object *unit = logic.findObjectByID(id))
+				{
+					unit->doCommandButtonAtObject(button, best, CMD_FROM_PLAYER, false);
+				}
+			}
+			team->idleFrames = 0;
+			tac.squadTarget = best->getID();
+			return;
+		}
+	}
+	endAnyTactic(logic, ai, b, tac, owner, true);
+}
+
 void updateFarmKill(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITactic &tac, AIBrainState &owner)
 {
 	static const int canAttack = KindOfTokens::indexOf("CAN_ATTACK"), economy = KindOfTokens::indexOf("ECONOMY_STRUCTURE");
@@ -1999,8 +2112,11 @@ bool checkRetreat(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITac
 // RW 0x8F28DD (the tactic's update) + RW 0x8F11DA (ready / launch / the started update)
 void updateTactic(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITactic &tac, AIBrainState &owner)
 {
-	// RW 0x8F28DD: teams without a living member are dropped (RW 0x7A0956(0))
-	tac.teams.erase(std::remove_if(tac.teams.begin(), tac.teams.end(), [&](const AITacticTeam &team) { return !teamAlive(logic, team); }), tac.teams.end());
+	// RW 0x8F28DD prunes active teams (+0x14), not pending prototypes (+4, RW 0x8F232F).
+	// This port stores both together: a team waiting for recruitment must survive until handover (RW 0x6C779B).
+	tac.teams.erase(std::remove_if(tac.teams.begin(), tac.teams.end(), [&](const AITacticTeam &team) {
+		return team.handedOver && !teamAlive(logic, team);
+	}), tac.teams.end());
 	AITarget *t = !tac.targetless && tac.targetIndex >= 0 && tac.targetIndex < (int)owner.targets.size() ? &owner.targets[(size_t)tac.targetIndex] : nullptr;
 	if (!tac.started)
 	{
@@ -2044,7 +2160,8 @@ void updateTactic(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITac
 	{
 		if (tac.targetless)
 		{
-			updateFarmKill(logic, ai, b, tac, owner); // the only targetless prototype that starts (S-893)
+			if (tac.kindIndex == kTargetlessBase + TL_FLAG_CAPTURE) { updateFlagCapture(logic, ai, b, tac, owner); }
+			else { updateFarmKill(logic, ai, b, tac, owner); }
 			return;
 		}
 		updateOffensive(logic, ai, b, tac, owner, t); // vslot 0x1C (lane AI-2 r5: every offensive body)
@@ -2059,7 +2176,7 @@ void updateTactic(GameLogic &logic, AISkirmishPlayer &ai, AIBrainState &b, AITac
 	tac.started = true;
 	if (tac.targetless)
 	{
-		return; // FarmKillSquad's vslot 0x18 is RW 0x63F3BF (nothing)
+		return; // FarmKillSquad / FlagCaptureSquad vslot 0x18 is RW 0x63F3BF (nothing)
 	}
 	launchOffensive(logic, ai, b, tac, owner, t); // vslot 0x18
 }
@@ -2075,6 +2192,16 @@ void startTargetless(GameLogic &logic, AISkirmishPlayer &ai, AITactic &tac)
 		team.name = std::string("TARGETLESS_") + tac.kind + "_" + std::to_string(tac.id) + "_" + std::to_string(i);
 		team.type = kTargetlessType;
 		team.index = i;
+		if (tac.kindIndex == kTargetlessBase + TL_FLAG_CAPTURE)
+		{
+			// RW 0x9BC1A0: forbid HERO/MACHINE/DOZER, priority 30, one to three units
+			// (draw source line 0xEF).
+			team.forbiddenKinds = { kindBit("HERO"), kindBit("MACHINE"), kindBit("DOZER") };
+			team.priority = 30;
+			team.minimum = 1;
+			team.maximum = logic.random().getValue(1, 3, kFlagCaptureFile, 0xEF);
+			ai.brain.namedCounters[kFlagCaptureRunning] = 1;
+		}
 		if (tac.kindIndex == kTargetlessBase + TL_FARM_KILL)
 		{
 			// RW 0x9BB479: RW 0x8F121F (no draw for a TARGETLESS team); the forbidden KindOf mask (RW 0x9BB491 .. 0x9BB499: + 0x307 |= 4, + 0x30C |= 0x20,

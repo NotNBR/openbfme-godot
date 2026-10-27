@@ -44,6 +44,15 @@ int SkirmishAIManager::newGame(bool skirmishOrMultiplayer, bool loadingSave, con
 		return 0;
 	}
 	m_started = true;
+	// INFERENCE: map objects precede this port's hooks. Seed their registration order by ObjectID; later flags use event order.
+	// Donor: BFME2 AITargetHeuristicTechBuilding.cpp's historical list. RW 0x6A9D9C appends each CAPTUREFLAG once;
+	// ownership changes and destruction do not erase it (RW 0x6A99CB).
+	for (Object *o = m_logic.getFirstObject(); o; o = o->getNextObject())
+	{
+		if (o->isKindOfName("CAPTUREFLAG")) { m_captureFlags.push_back(o->getID()); }
+	}
+	std::sort(m_captureFlags.begin(), m_captureFlags.end());
+	m_captureFlags.erase(std::unique(m_captureFlags.begin(), m_captureFlags.end()), m_captureFlags.end());
 	// RW 0x8F11D2 clears the global RW 0xDE9F04 (its users are not ported: S-412)
 	int made = 0;
 	PlayerList &players = m_logic.players();
@@ -391,7 +400,11 @@ void SkirmishAIManager::objectLeftWorld(Object &obj)
 
 void SkirmishAIManager::objectAdded(Object &obj)
 {
-	// RW 0x6A9D9C: the AI first (RW 0x6C7779), then the player info record (RW 0x6A9999 -> RW 0x8E4591); the CAPTUREFLAG list (+ 0xA68) is not ported (S-417)
+	if (obj.isKindOfName("CAPTUREFLAG") && std::find(m_captureFlags.begin(), m_captureFlags.end(), obj.getID()) == m_captureFlags.end())
+	{
+		m_captureFlags.push_back(obj.getID());
+	}
+	// RW 0x6A9D9C: the AI first (RW 0x6C7779), then the player info record (RW 0x6A9999 -> RW 0x8E4591)
 	m_counters.objectAdds += m_started ? 1u : 0u;
 	if (m_eventTrace && m_started)
 	{
@@ -528,6 +541,7 @@ void SkirmishAIManager::reset()
 	}
 	m_groups.clear();
 	m_infoPlayers.clear();
+	m_captureFlags.clear();
 	m_records.clear();
 	m_farmSites.clear();
 	m_started = false;
@@ -590,6 +604,12 @@ void SkirmishAIManager::crc(StateHasher &h) const
 	{
 		kv.second->crc(h);
 	}
+	// Only AI groups can use the capture registry; keep no-AI and empty-registry hashes unchanged.
+	if (!m_groups.empty() && !m_captureFlags.empty())
+	{
+		h.addU32((std::uint32_t)m_captureFlags.size());
+		for (ObjectID id : m_captureFlags) { h.addU32(id); }
+	}
 	h.addU32((std::uint32_t)m_farmSites.size());
 	for (const auto &f : m_farmSites)
 	{
@@ -646,7 +666,7 @@ std::vector<std::string> SkirmishAIManager::stopLines()
 		"FeintAttack RW 0x9B398D / 0x9B3A5A / 0x9B3AE4) are ported; lane BACKLOG6: AIGroup's stealth delay draw RW 0x774CEB is ported for the groups the formation "
 		"manager does not take (S-895); not ported: the siege bodies, the end's merge into a nearby AI team with its draw RW 0x8F1F08 (the units are released), "
 		"the DEFENSIVE / EXPANSION heuristics and tactics (only the One Ring OPPORTUNITY heuristic is "
-		"ported; the capture flag rule needs the manager's historical flag list), the targetless tactics, RW 0x90CCCB, the AI team objects; "
+		"ported; the tech-building OPPORTUNITY heuristic remains unported), the targetless tactics other than FarmKillSquad and FlagCaptureSquad, RW 0x90CCCB, the AI team objects; "
 		"lane AI-3 ported the threat finder (S-1300), the targets' threat, the retreat (RW 0x8F2784 / 0x8F243A), the failed end's threat move (RW 0x6C644C), "
 		"each team's AIGroup step (RW 0x8F144C -> 0x774F2B, S-1301), a defeated AI's brain (RW 0x6C79A1), the end's merge (RW 0x8F1D88), RW 0x6C7344 and the "
 		"best target's threat gate (RW 0x90B2A0, S-1302)",
@@ -715,7 +735,7 @@ std::vector<std::string> SkirmishAIManager::stopLines()
 		"the horde's turn is kept from carrying the members (the port's contain would place them); G2 measured, not solved: GondorFighterHorde engages 20 % of "
 		"its members on average against MordorFighterHorde (test_move2_slot_distance's MOVE2 MELEE report)",
 		"[S-893] skirmish ai targetless tactics (lane AI-2 r3): the 11 prototypes, FarmKillSquad's constructor draw, the per-frame pick RW 0x90C5E2 and FarmKillSquad's "
-		"applicability, setup, cleanup and update flow are ported; the other 10 prototypes' applicability and bodies and FarmKillSquad's farm choice (RW 0x9BBA51 / "
+		"applicability, setup, cleanup and update flow are ported, as is FlagCaptureSquad (RW 0x9BC39F / 0x9BC1A0 / 0x9BBFDC / 0x9BC3F4); the other 9 prototypes' applicability and bodies and FarmKillSquad's farm choice (RW 0x9BBA51 / "
 		"0x9BB5E4 and their draws) are not (a nearest-farm stand-in)",
 		"[S-894] produced member of a destroyed horde (lane AI-2 r4): a member the queue exit hands to a horde that is already destroyed is destroyed with it "
 		"(HordeContain::acceptCreatedMember); RW's acceptance slot for a destroyed horde is not read",
