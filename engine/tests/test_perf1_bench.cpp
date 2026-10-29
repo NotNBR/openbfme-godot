@@ -7,7 +7,9 @@
 //   * "perf1 bench: big battle": MODULES-2's partition bench scenario (about 1080 objects: Gondor / Mordor hordes, heroes, attack trolls fighting on
 //     map mp fall back 4p), every frame's state hash and the logic time per frame (OPENBFME_BENCH_FRAMES, default 400);
 //   * "perf1 bench: 4-player skirmish": four medium computer players (Men, Mordor, Elves, Isengard, free for all) on map mp fall back 4p for
-//     OPENBFME_BENCH_FRAMES frames (default 6000 = 20 game minutes at 5 logic frames per second).
+//     OPENBFME_BENCH_FRAMES frames (default 6000 = 20 game minutes at 5 logic frames per second);
+//   * "perf1 bench: allied blob": the big battle's 24 Gondor hordes with no enemy, all sent to one point, for OPENBFME_BENCH_FRAMES frames (default
+//     300): the soldiers overlap, so the contact pairs grow with the square of the crowd; it also prints the pairs per frame.
 //
 // Each prints the logic time (thread CPU: mean / p95 / p99 / max), the user instructions per frame and the chain of every frame's state hash; equal
 // chains before and after a change prove the change kept every frame's state. OPENBFME_BENCH_HASHES=<prefix> writes the per-frame hashes to
@@ -30,7 +32,10 @@
 #include "GameClient/LiveGame.h"
 #include "GameEngineDevice/Win32Device/Common/Win32BIGFileSystem.h"
 #include "GameLogic/Module/AIUpdate.h"
+#include "GameLogic/Module/HordeAIUpdate.h"
+#include "GameLogic/Module/PhysicsBehavior.h"
 #include "GameLogic/NewGame/NewGame.h"
+#include "GameLogic/Object/Contain/HordeContainRuntime.h"
 #include "GameLogic/Object/Object.h"
 #include "GameLogic/SkirmishAI/SkirmishAIData.h"
 #include "GameLogic/SkirmishAI/SkirmishAIManager.h"
@@ -568,6 +573,108 @@ TEST_CASE("perf1: the allied blob (300 frames) hashes as the build before the co
 	else
 	{
 		CHECK_MESSAGE(perf1::firstDifference(run.hashes, blobRef) == -1, "allied blob: first different frame");
+	}
+}
+
+namespace
+{
+// what PhysicsBehavior::find and HordeMemberCollide answered before Object kept them: the first PhysicsBehavior of the module list, the AI cast to
+// HordeAIUpdate
+PhysicsBehavior *scannedPhysics(const Object &o)
+{
+	for (const std::unique_ptr<BehaviorModule> &m : o.modules())
+	{
+		if (PhysicsBehavior *p = dynamic_cast<PhysicsBehavior *>(m.get()))
+		{
+			return p;
+		}
+	}
+	return nullptr;
+}
+
+bool lookupsAsScanned(Object &o)
+{
+	return o.moduleLookupsCached() && o.physicsModule() == scannedPhysics(o) && PhysicsBehavior::find(o) == scannedPhysics(o) &&
+		o.hordeAi() == dynamic_cast<HordeAIUpdate *>(o.getAIUpdateInterface());
+}
+} // namespace
+
+TEST_CASE("perf1: every template with a PhysicsBehavior or an AI keeps the physics module and the horde AI the module scan and the cast find")
+{
+	if (!haveWorld("perf1 module lookups"))
+	{
+		return;
+	}
+	SharedWorld &s = shared();
+	auto scope = s.world->enterContext();
+	Rig rig(s);
+	GameLogic &logic = rig.logic();
+	size_t created = 0, withPhysics = 0, hordes = 0;
+	std::vector<std::string> problems;
+	for (const ThingTemplate *t : s.world->things().templates())
+	{
+		const ThingTemplate *tt = t->getFinalOverride();
+		bool wanted = false;
+		for (const ThingTemplate::Nugget &n : tt->behaviorModules().nuggets())
+		{
+			wanted = wanted || n.name == "PhysicsBehavior" || n.name.find("AIUpdate") != std::string::npos;
+		}
+		if (!wanted)
+		{
+			continue;
+		}
+		Object *o = logic.newObject(tt, rig.local->getDefaultTeam(), ObjectStatusMaskType{});
+		if (!o)
+		{
+			problems.push_back(tt->getName() + ": not created");
+			continue;
+		}
+		++created;
+		withPhysics += scannedPhysics(*o) ? 1 : 0;
+		hordes += o->hordeAi() ? 1 : 0;
+		if (!lookupsAsScanned(*o))
+		{
+			problems.push_back(tt->getName());
+		}
+	}
+	// RotWK 2.01's templates with a PhysicsBehavior or an AIUpdate class, their PhysicsBehaviors and their HordeAIUpdates (the hordes)
+	CHECK(created == 1547u);
+	CHECK(withPhysics == 1297u);
+	CHECK(hordes == 163u);
+	CHECK_MESSAGE(problems.empty(), (problems.empty() ? std::string() : problems.front()));
+}
+
+TEST_CASE("perf1: a formation swap (friend_replaceModule) keeps the horde object's physics module and horde AI as the scan and the cast find them")
+{
+	if (!haveWorld("perf1 module lookups (formation swap)"))
+	{
+		return;
+	}
+	SharedWorld &s = shared();
+	auto scope = s.world->enterContext();
+	Rig rig(s);
+	Object *h = rig.make("GondorTowerShieldGuardHorde", 600.0f, 600.0f);
+	rig.logic().runLogicFrame();
+	HordeContain *hc = dynamic_cast<HordeContain *>(h->getContain());
+	REQUIRE(hc != nullptr);
+	HordeAIUpdate *ai = h->hordeAi();
+	REQUIRE(ai != nullptr);
+	CHECK(lookupsAsScanned(*h));
+	REQUIRE(hc->canToggleFormation());
+	HordeContain *alt = hc->toggleFormation();
+	REQUIRE(alt != nullptr);
+	CHECK(h->getContain() == alt);
+	CHECK(lookupsAsScanned(*h));
+	CHECK(h->hordeAi() == ai); // the swap replaces the contain, not the AI
+	rig.logic().runLogicFrame();
+	HordeContain *back = alt->toggleFormation();
+	REQUIRE(back != nullptr);
+	CHECK(lookupsAsScanned(*h));
+	CHECK(h->hordeAi() == ai);
+	for (const Object *m : *back->getContainedItemsList())
+	{
+		CHECK(lookupsAsScanned(*const_cast<Object *>(m)));
+		CHECK(m->hordeAi() == nullptr);
 	}
 }
 
