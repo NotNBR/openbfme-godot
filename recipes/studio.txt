@@ -23,6 +23,7 @@ feat/custom-unit-animation   # fork only: custom unit rig API, batched poses (st
 fix/ai-neutral-building-capture   # PR #113
 perf/logic-speedups            # PR #164: the logic frame faster with every result unchanged (#167's collision caches folded in)
 perf/client-speedups           # PR #165: the client's render frame in large battles (retail horde pose sharing)
+fix/studio-client-speedups     # fork only: #165 with the studio's custom rigs and object shadows (rigs keep their own pose, casters culled with a margin)
 feat/uber-search-cap           # PR #166: Uber rule: each queue-served path search capped at the frame's budget
 fix/ramp-bridge-cells          # PR #159: RotWK's ramp cell rule on getRamp's Bridge
 fix/horde-contain-no-follow    # PR #160: horde members walk to their slots, made where the horde stands
