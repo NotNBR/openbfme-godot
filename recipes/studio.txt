@@ -2,7 +2,10 @@
 # native/openbfme-godot follow this branch).
 # feat/extra-archives and feat/hd-terrain-packs took upstream/main of 2026-10-27 (61719ed8: its asset-pack rework and
 # language mounts) by merge, so the combo follows upstream again.
-base upstream/main
+# Held at upstream 87579746 (the 2026-10-28 sync): the base the performance PRs #164-#166 and #159-#161 were measured on. Upstream
+# 12a76ec5 (2026-10-29: terrain, roads, glow, water PRs) conflicts with the studio's grass, terrain and shadow branches; follow it
+# again when those branches take it.
+base 87579746
 # Upstream now includes #64 (siege), #73 (horde centring), #74 (destination spiral), #115 (bokeh smoothing), #119 (packed
 # model textures) and #123 (flag recapture).
 
@@ -16,6 +19,12 @@ feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stack
 feat/object-shadows          # fork only: directional shadow maps for world objects (Studio: Experimental > Shadows)
 feat/custom-unit-animation   # fork only: custom unit rig API, batched poses (stacked on feat/object-shadows; Studio: Experimental)
 fix/ai-neutral-building-capture   # PR #113
+perf/logic-speedups            # PR #164: the logic frame faster with every result unchanged (#167's collision caches folded in)
+perf/client-speedups           # PR #165: the client's render frame in large battles (retail horde pose sharing)
+feat/uber-search-cap           # PR #166: Uber rule: each queue-served path search capped at the frame's budget
+fix/ramp-bridge-cells          # PR #159: RotWK's ramp cell rule on getRamp's Bridge
+fix/horde-contain-no-follow    # PR #160: horde members walk to their slots, made where the horde stands
+fix/hierarchical-block-zones   # PR #161: the hierarchical block search's block zones and raised branch
 
 # Available, not in this combo:
 # feat/client-weather               # PR #59
