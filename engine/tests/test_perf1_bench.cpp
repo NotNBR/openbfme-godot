@@ -88,11 +88,9 @@ namespace perf1
 {
 // the partition bench's battle (test_partition_bench.cpp): 24 Gondor and 24 Mordor hordes in rows facing each other around the middle of the map's
 // objects, Aragorn and Boromir, four attack trolls; two settling frames, then every unit attacks the enemy facing it
-void setUpBigBattle(Rig &rig)
+// the mean position of the map's objects
+void mapCentre(GameLogic &logic, float &cx, float &cy)
 {
-	GameLogic &logic = rig.logic();
-	Player *enemy = rig.game->players().findPlayerWithName("Player_2");
-	REQUIRE(enemy);
 	float sx = 0.0f, sy = 0.0f;
 	int n = 0;
 	for (Object *o = logic.getFirstObject(); o; o = o->getNextObject())
@@ -102,7 +100,17 @@ void setUpBigBattle(Rig &rig)
 		++n;
 	}
 	REQUIRE(n > 0);
-	const float cx = sx / (float)n, cy = sy / (float)n;
+	cx = sx / (float)n;
+	cy = sy / (float)n;
+}
+
+void setUpBigBattle(Rig &rig)
+{
+	GameLogic &logic = rig.logic();
+	Player *enemy = rig.game->players().findPlayerWithName("Player_2");
+	REQUIRE(enemy);
+	float cx = 0.0f, cy = 0.0f;
+	mapCentre(logic, cx, cy);
 	const char *ours[] = { "GondorFighterHorde", "GondorFighterHorde", "GondorTowerShieldGuardHorde", "GondorArcherHorde" };
 	const char *theirs[] = { "MordorFighterHorde", "MordorFighterHorde", "MordorFighterHorde", "MordorArcherHorde" };
 	std::vector<Object *> good, evil;
@@ -159,6 +167,63 @@ void report(const char *scenario, const std::vector<double> &ms, long long instr
 		scenario, ms.size(), objectsStart, objectsEnd, s.mean, s.p95, s.p99, s.max, s.worstFrame, instructions >= 0 ? (double)instructions / (double)ms.size() / 1.0e6 : -1.0,
 		hashes.empty() ? 0u : (unsigned)hashes.back(), (unsigned)perfbench::chain(hashes));
 	perfbench::writeHashes(scenario, hashes);
+}
+
+// the big battle's 24 Gondor hordes on their own (no enemy), two settling frames, then every horde ordered to the same point: the armies pile up there
+// and the allied soldiers overlap (S-781), so the contact pairs grow with the square of the crowd
+void setUpAlliedBlob(Rig &rig, std::vector<Object *> &hordes)
+{
+	GameLogic &logic = rig.logic();
+	float cx = 0.0f, cy = 0.0f;
+	mapCentre(logic, cx, cy);
+	const char *ours[] = { "GondorFighterHorde", "GondorFighterHorde", "GondorTowerShieldGuardHorde", "GondorArcherHorde" };
+	const int rows = 4, cols = 6;
+	for (int r = 0; r < rows; ++r)
+	{
+		for (int c = 0; c < cols; ++c)
+		{
+			const float y = cy + ((float)c - (cols - 1) * 0.5f) * 90.0f;
+			hordes.push_back(rig.make(ours[(r + c) % 4], cx - 260.0f - 90.0f * (float)r, y));
+		}
+	}
+	logic.runLogicFrame();
+	logic.runLogicFrame();
+	const Coord3D goal{ cx - 100.0f, cy, 0.0f };
+	for (Object *h : hordes)
+	{
+		REQUIRE(h->getAIUpdateInterface());
+		h->getAIUpdateInterface()->aiMoveToPosition(goal, CMD_FROM_PLAYER);
+	}
+}
+
+// the allied blob on world `sh` for `frames` logic frames; `pairs` (if set) gets each frame's contact pair count
+void runAlliedBlob(SharedWorld &sh, int frames, Run &out, std::vector<unsigned long long> *pairs = nullptr)
+{
+	auto scope = sh.world->enterContext();
+	Rig rig(sh);
+	GameLogic &logic = rig.logic();
+	std::vector<Object *> hordes;
+	setUpAlliedBlob(rig, hordes);
+	out.objectsStart = countObjects(logic);
+	out.ms.reserve((size_t)frames);
+	out.hashes.reserve((size_t)frames);
+	perfbench::InstructionCounter counter;
+	long long instructions = 0;
+	for (int f = 0; f < frames; ++f)
+	{
+		const long long i0 = counter.read();
+		const double t0 = perfbench::nowMs();
+		logic.runLogicFrame();
+		out.ms.push_back(perfbench::nowMs() - t0);
+		instructions += counter.read() - i0;
+		out.hashes.push_back(logic.computeStateHash());
+		if (pairs)
+		{
+			pairs->push_back(rig.game->ai().collisionPairsLastFrame());
+		}
+	}
+	out.instructions = counter.fd >= 0 ? instructions : -1;
+	out.objectsEnd = countObjects(logic);
 }
 
 int playerTemplateIndex(const PlayerTemplateStore &store, const std::string &name)
@@ -366,6 +431,27 @@ TEST_CASE("perf1 bench: big battle (the partition bench's armies) - logic time p
 	CHECK(run.objectsEnd < run.objectsStart); // the armies fought
 }
 
+TEST_CASE("perf1 bench: allied blob (24 hordes sent to one point) - logic time per frame, contact pairs and every frame's state hash" * doctest::skip())
+{
+	if (!haveWorld("perf1 bench: allied blob"))
+	{
+		return;
+	}
+	perf1::Run run;
+	std::vector<unsigned long long> pairs;
+	perf1::runAlliedBlob(shared(), perfbench::envInt("OPENBFME_BENCH_FRAMES", 300), run, &pairs);
+	perf1::report("allied blob", run.ms, run.instructions, run.hashes, run.objectsStart, run.objectsEnd);
+	unsigned long long peak = 0, total = 0;
+	for (unsigned long long p : pairs)
+	{
+		peak = std::max(peak, p);
+		total += p;
+	}
+	std::printf("  info: perf1 allied blob: contact pairs per frame mean %.0f, peak %llu, last %llu\n", pairs.empty() ? 0.0 : (double)total / (double)pairs.size(),
+		peak, pairs.empty() ? 0ull : pairs.back());
+	CHECK(pairs.back() > pairs.front()); // tolerance: a measurement, not a port check; the hordes piled up (the counts move with any simulation change)
+}
+
 TEST_CASE("perf1 bench: 4-player skirmish (medium computer players, 20 game minutes) - logic time per frame and every frame's state hash" * doctest::skip())
 {
 	OPENBFME_REQUIRE_START(s);
@@ -449,6 +535,39 @@ TEST_CASE("perf1: the big battle (400 frames) and a 4-player AI skirmish after a
 		{
 			CHECK_MESSAGE(perf1::firstDifference(run.hashes, skirmishRef) == -1, "4-player skirmish: first different frame");
 		}
+	}
+}
+
+// The allied blob (24 hordes sent to one point, 300 frames) on a world this test loads itself, against tests/data/perf1/allied_blob_300.hashes measured
+// with the build before the collision module caches (upstream main 87579746): the contact pairs' lookups must not change a frame. OPENBFME_PERF1_REGEN=1
+// rewrites the vector, as above.
+TEST_CASE("perf1: the allied blob (300 frames) hashes as the build before the collision module caches did in every frame")
+{
+	const std::vector<std::uint32_t> blobRef = perf1::readHashes("allied_blob_300.hashes");
+	const char *regenEnv = std::getenv("OPENBFME_PERF1_REGEN");
+	const bool regen = regenEnv && *regenEnv == '1';
+	if (!regen)
+	{
+		REQUIRE(blobRef.size() == 300u);
+	}
+	if (!retailtest::pureMount())
+	{
+		retailtest::printSkip("perf1 allied blob determinism (fresh world)");
+		return;
+	}
+	SharedWorld w;
+	GameLogicSettings settings;
+	std::string error;
+	REQUIRE_MESSAGE(perf1::loadFreshWorld(w, settings, error), error);
+	perf1::Run run;
+	perf1::runAlliedBlob(w, 300, run);
+	if (regen)
+	{
+		perf1::storeHashes("allied_blob_300.hashes", run.hashes);
+	}
+	else
+	{
+		CHECK_MESSAGE(perf1::firstDifference(run.hashes, blobRef) == -1, "allied blob: first different frame");
 	}
 }
 
