@@ -244,18 +244,9 @@ public:
 		const PhysicsBehavior *p = physics();
 		return p != nullptr && p->isStunned();
 	}
-	// lane EXIT-1: obj+0x264, the PhysicsBehavior RW caches at creation (RW 0x69A420); the port finds the module (lane UBER-2B: once, as physicsMotionDisabled
-	// did: the search's dynamic_cast over every module ran per locomotorMaintainCurrentPosition, 2% of a 10k battle)
+	// lane EXIT-1: obj+0x264, the PhysicsBehavior RW caches at creation (RW 0x69A420); the port's Object keeps it with its collide list (PhysicsBehavior::find)
 	bool hasPhysicsModule() const override { return physics() != nullptr; }
-	PhysicsBehavior *physics() const
-	{
-		if (!m_physicsLooked)
-		{
-			m_physics = PhysicsBehavior::find(obj()); // the modules never change after the object is made
-			m_physicsLooked = true;
-		}
-		return m_physics;
-	}
+	PhysicsBehavior *physics() const { return PhysicsBehavior::find(obj()); }
 	bool zMotionSuppressed() const override { return false; }
 	unsigned logicFrame() const override { return obj().logic().getFrame(); }
 	bool containerAllowsBackingUp() const override { return false; }
@@ -367,8 +358,6 @@ private:
 	bool stationary() const { return m_ai.adapter().isStationary(); }
 
 	AIUpdateInterface &m_ai;
-	mutable PhysicsBehavior *m_physics = nullptr;
-	mutable bool m_physicsLooked = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------------------

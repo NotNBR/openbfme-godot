@@ -1384,7 +1384,7 @@ void AIWorld::processCollisions()
 	// lane UBER-2B (Uber only): the facts every pair's handlers test first, once per unit and pass. A pair whose handlers would all return at those tests is
 	// counted and skipped: AIMover::onCollide returns for a contained unit or a contained other (both ways), the collide modules as ObjectCollide::pairIsInert
 	// says. lane UBER-3W: the facts of every unit with a pair are taken before the first pair meets, on the logic job pool (each job writes only its own
-	// units' facts and their objects' lazily found physics module; the one shared lazy cache, GameLogic::crushInfo, was filled above on this thread). They
+	// units' facts; the physics module is kept by Object since buildModules; the one shared lazy cache, GameLogic::crushInfo, was filled above on this thread). They
 	// were taken on this thread at the unit's first pair, 5% of a one-thread 30,000-troop clash frame. Uber rule change (snapshot semantics): a unit's facts
 	// are those from before the pass's first pair (UBER-2B: before its own first pair), so a pair after a crush or a stun in the same pass reads them from before it
 	const bool filter = m_logic.uber();
