@@ -142,6 +142,10 @@ const char *PhysicsBehavior::stopLine()
 
 PhysicsBehavior *PhysicsBehavior::find(Object &obj)
 {
+	if (obj.moduleLookupsCached())
+	{
+		return obj.physicsModule(); // the first module, kept by Object::rebuildCollideModules
+	}
 	for (const std::unique_ptr<BehaviorModule> &m : obj.modules())
 	{
 		if (PhysicsBehavior *p = dynamic_cast<PhysicsBehavior *>(m.get()))

@@ -383,6 +383,12 @@ public:
 	// lane UBER-3W: findModule("AttributeModifierPoolUpdate") (RW 0x68C4A6), kept with the collide list once the modules are built (the attribute queries of
 	// crush levels, vision and armour searched the module list by name on every call: 2.6% of a 30,000-troop clash frame); the same module either way
 	BehaviorModule *attributeModifierPoolModule() const { return m_moduleCachesBuilt ? m_attributePool : findModule("AttributeModifierPoolUpdate"); }
+	// PhysicsBehavior::find's first PhysicsBehavior and HordeMemberCollide's cast of a horde's AI, kept with the collide list too: every contact pair asks
+	// both objects (a dynamic_cast per module, or per call; 24 hordes sent to one point make over 4,000 pairs a frame); the same answers either way. Valid
+	// while moduleLookupsCached(): from buildModules until ~Object deletes the modules.
+	bool moduleLookupsCached() const { return m_moduleLookupsCached; }
+	class PhysicsBehavior *physicsModule() const { return m_physics; }
+	class HordeAIUpdate *hordeAi() const { return m_hordeAi; }
 	// RW 0x68BB14: the first module with an exit interface (array order); lane PROD-1
 	ExitInterface *getObjectExitInterface() const;
 	// lane LUMBER1: RW 0x68C383, the first behavior module's dock interface (null for none)
@@ -562,6 +568,9 @@ private:
 	bool m_collideModulesKnown = true;
 	BehaviorModule *m_attributePool = nullptr; ///< lane UBER-3W: findModule("AttributeModifierPoolUpdate"), valid once m_moduleCachesBuilt
 	bool m_moduleCachesBuilt = false;
+	class PhysicsBehavior *m_physics = nullptr; ///< the first PhysicsBehavior module, valid while m_moduleLookupsCached
+	class HordeAIUpdate *m_hordeAi = nullptr;   ///< m_ai as a HordeAIUpdate (null for any other AI), valid while m_moduleLookupsCached
+	bool m_moduleLookupsCached = false;
 	void rebuildCollideModules();
 	size_t m_helperCount = 0;
 	BodyModuleInterface *m_body = nullptr;

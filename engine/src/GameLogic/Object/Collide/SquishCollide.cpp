@@ -622,7 +622,11 @@ namespace
 {
 HordeAIUpdate *hordeAiOf(Object *horde)
 {
-	return horde ? dynamic_cast<HordeAIUpdate *>(horde->getAIUpdateInterface()) : nullptr;
+	if (!horde)
+	{
+		return nullptr;
+	}
+	return horde->moduleLookupsCached() ? horde->hordeAi() : dynamic_cast<HordeAIUpdate *>(horde->getAIUpdateInterface());
 }
 } // namespace
 

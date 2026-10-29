@@ -16,6 +16,7 @@
 #include "GameLogic/Object/ObjectGeometry.h"
 #include "GameLogic/Module/CollideModule.h"
 #include "GameLogic/Module/PhysicsBehavior.h"
+#include "GameLogic/Module/HordeAIUpdate.h"
 #include "GameLogic/ScriptEngine/ScriptEngine.h"
 #include "GameLogic/ScriptEngine/ScriptConditions.h"
 #include "GameClient/MapChunks.h"
@@ -182,6 +183,7 @@ Object::~Object()
 		m_team->friend_removeMember(this);
 		m_team = nullptr;
 	}
+	m_moduleLookupsCached = false; // a lookup while the modules go scans what is left, as before the caches
 	for (std::unique_ptr<BehaviorModule> &m : m_modules)
 	{
 		m.reset();
@@ -297,6 +299,16 @@ void Object::rebuildCollideModules()
 	}
 	m_attributePool = findModule("AttributeModifierPoolUpdate"); // lane UBER-3W: attributeModifierPoolModule's answer from here on
 	m_moduleCachesBuilt = true;
+	m_physics = nullptr; // PhysicsBehavior::find's answer from here on (the first module, as its scan)
+	for (const std::unique_ptr<BehaviorModule> &m : m_modules)
+	{
+		if ((m_physics = dynamic_cast<PhysicsBehavior *>(m.get())) != nullptr)
+		{
+			break;
+		}
+	}
+	m_hordeAi = dynamic_cast<HordeAIUpdate *>(m_ai);
+	m_moduleLookupsCached = true;
 }
 
 void Object::buildModules()
