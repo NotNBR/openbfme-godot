@@ -15,7 +15,7 @@ feat/object-path        # fork only: GameWorld.get_object_path
 fix/map-profile         # fork only: honor the selected simulation profile when loading maps
 feat/natural-grass      # fork only: camera-local grass and natural ground
 feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
-feat/object-shadows          # fork only: directional shadow maps for world objects (Studio: Layers > Shadows; PR #136, rebased)
+# feat/object-shadows: upstream/main has the object shadows already (a sync brought them; PR #136 is still open), so the branch is not merged
 # feat/custom-unit-animation   # fork only: custom unit rig API, batched poses: left out for now (2026-10-31); it carries an older copy of
 #                              # feat/object-shadows and conflicts with upstream/main until it is rebased onto the rebased #136
 fix/studio-client-speedups     # fork only: #165 with the studio's custom rigs and object shadows (rigs keep their own pose, casters culled with a margin)
