@@ -18,7 +18,8 @@ feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stack
 # feat/object-shadows: upstream/main has the object shadows already (a sync brought them; PR #136 is still open), so the branch is not merged
 # feat/custom-unit-animation   # fork only: custom unit rig API, batched poses: left out for now (2026-10-31); it carries an older copy of
 #                              # feat/object-shadows and conflicts with upstream/main until it is rebased onto the rebased #136
-fix/studio-client-speedups     # fork only: #165 with the studio's custom rigs and object shadows (rigs keep their own pose, casters culled with a margin)
+# fix/studio-client-speedups   # fork only: #165 with the custom rigs and the object shadows: left out with feat/custom-unit-animation (it carries
+#                              # their older copies); its shadow-caster margin is to be redone against upstream's object shadows
 fix/horde-contain-no-follow    # PR #160: horde members walk to their slots, made where the horde stands
 fix/hierarchical-block-zones   # PR #161: the hierarchical block search's block zones and raised branch
 perf/exact-logic-speedups      # the logic frame faster with every result unchanged (noteStop, unit index, amoeba, emotions, dual weapon, Eva)
