@@ -15,10 +15,9 @@ feat/object-path        # fork only: GameWorld.get_object_path
 fix/map-profile         # fork only: honor the selected simulation profile when loading maps
 feat/natural-grass      # fork only: camera-local grass and natural ground
 feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stacked on feat/natural-grass)
-# feat/object-shadows comes with feat/custom-unit-animation, which is stacked on its earlier commits: the rebased branch (a4493490, PR #136)
-# conflicts with that copy until feat/custom-unit-animation is rebased onto it.
-# feat/object-shadows          # fork only: directional shadow maps for world objects (Studio: Experimental > Shadows)
-feat/custom-unit-animation   # fork only: custom unit rig API, batched poses (stacked on feat/object-shadows; Studio: Experimental)
+feat/object-shadows          # fork only: directional shadow maps for world objects (Studio: Layers > Shadows; PR #136, rebased)
+# feat/custom-unit-animation   # fork only: custom unit rig API, batched poses: left out for now (2026-10-31); it carries an older copy of
+#                              # feat/object-shadows and conflicts with upstream/main until it is rebased onto the rebased #136
 fix/studio-client-speedups     # fork only: #165 with the studio's custom rigs and object shadows (rigs keep their own pose, casters culled with a margin)
 fix/horde-contain-no-follow    # PR #160: horde members walk to their slots, made where the horde stands
 fix/hierarchical-block-zones   # PR #161: the hierarchical block search's block zones and raised branch
