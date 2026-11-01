@@ -176,7 +176,10 @@ const std::vector<std::string> &Locomotor::allStops()
 		"and the HORDE mover's formation path nodes (types 2, 3, 7, 8; RW 0x5E6E20-0x5E7148).",
 		"S-1750: maintainCurrentPosition (RW 0x5E7CC7) is ported without its tail: the held position's z behaviour (RW 0x5E76AC on +0x08) with its "
 		"constant-calling result, the transform write (RW 0x70BA76) are not run for non-WINGS appearances; an idle unit's height and sleep follow "
-		"the movers' last frame."
+		"the movers' last frame.",
+		"S-1833: the path follower took the later leg of a path that doubles back along one line (Path::updateClosestSegment): RW 0x765598 keeps the "
+		"earlier leg on a tie, whose point ahead runs down to the tip and back (a HORDE reformed 180 degrees every frame); the port takes the later leg "
+		"the unit stands exactly on (a deliberate departure from RotWK, a livelock fix)."
 	};
 	return stops;
 }
@@ -386,6 +389,10 @@ void Locomotor::moveForward(LocomotorHost &host, const Coord3D &goal, float onPa
 		const LocomotorPathPoint p1 = path->computePointAhead(m_speed); // RW 0x766173(L) -> 0x765F31
 		newPos = p1.position;
 		path->updateClosestSegment(newPos);                              // RW 0x765598(&pos, 1)
+		if (path->consumeDoubledBackLeg())
+		{
+			noteStopOf(3); // S-1833
+		}
 		const LocomotorPathPoint p2 = path->computePointAhead(m_speed);
 		host.setPendingPosition(p2.position);                            // RW 0x5E5A87-0x5E5A99
 	}

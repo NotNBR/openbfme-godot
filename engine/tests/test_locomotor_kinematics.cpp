@@ -56,6 +56,7 @@ struct MockPath : LocomotorPath
 	bool explicitZ = false;
 	int specialNode = 0;
 	float remaining = 0.0f;
+	bool doubledBack = false; // what consumeDoubledBackLeg answers (S-1833)
 
 	LocomotorPathPoint computePointAhead(float distance) override
 	{
@@ -107,6 +108,7 @@ struct MockPath : LocomotorPath
 	bool hasExplicitZ() const override { return explicitZ; }
 	float remainingDistanceFrom(const LocomotorPathPoint &) const override { return remaining; }
 	int currentSpecialNodeType() const override { return specialNode; }
+	bool consumeDoubledBackLeg() override { return doubledBack; }
 };
 
 struct MockHost : LocomotorHost
@@ -695,6 +697,26 @@ TEST_CASE("moveForward on a path: the position is the point ahead; the pending p
 	CHECK(h.applied.size() == 1);
 }
 
+TEST_CASE("moveForward on a path: a follower that took the later leg of a doubled-back line reports S-1833; a plain path does not")
+{
+	for (const bool doubled : { false, true })
+	{
+		CAPTURE(doubled);
+		LocoFixture f(kHuman);
+		Locomotor loco(f.tmpl());
+		MockHost h;
+		h.place(0, 0, 0);
+		MockPath path;
+		path.points = { Coord3D{ 0, 0, 0 }, Coord3D{ 1000, 0, 0 } };
+		path.remaining = 1000.0f;
+		path.doubledBack = doubled;
+		h.path = &path;
+		loco.locomotorMoveTowardsPosition(h, Coord3D{ 1000, 0, 0 }, 1000.0f, 11.0f);
+		const bool reported = std::find(loco.unverified().begin(), loco.unverified().end(), Locomotor::allStops()[3]) != loco.unverified().end();
+		CHECK(reported == doubled);
+	}
+}
+
 TEST_CASE("dispatcher: a stationary-cap frame, status refusals, appearance table and the unported cases")
 {
 	LocoFixture f(kHuman);
@@ -845,7 +867,7 @@ TEST_CASE("turn model conditions: TURN_LEFT / TURN_RIGHT and the high speed pair
 TEST_CASE("Locomotor stops S-081 and S-084 are reported and pinned")
 {
 	const std::vector<std::string> stops = Locomotor::allStops();
-	REQUIRE(stops.size() == 3);
+	REQUIRE(stops.size() == 4);
 	CHECK(stops[0].rfind("S-081:", 0) == 0);
 	CHECK(stops[0].find("x87 and SSE") != std::string::npos);
 	CHECK(stops[1].rfind("S-084:", 0) == 0);
@@ -855,6 +877,8 @@ TEST_CASE("Locomotor stops S-081 and S-084 are reported and pinned")
 	CHECK(stops[1].find("ScalesWalls") != std::string::npos);
 	CHECK(stops[2].rfind("S-1750:", 0) == 0);
 	CHECK(stops[2].find("RW 0x5E7CC7") != std::string::npos);
+	CHECK(stops[3].rfind("S-1833:", 0) == 0);
+	CHECK(stops[3].find("a deliberate departure from RotWK, a livelock fix") != std::string::npos);
 	LocoFixture f(kHuman);
 	Locomotor loco(f.tmpl());
 	MockHost h;
