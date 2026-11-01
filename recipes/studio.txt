@@ -20,8 +20,11 @@ feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stack
 #                              # feat/object-shadows and conflicts with upstream/main until it is rebased onto the rebased #136
 # fix/studio-client-speedups   # fork only: #165 with the custom rigs and the object shadows: left out with feat/custom-unit-animation (it carries
 #                              # their older copies); its shadow-caster margin is to be redone against upstream's object shadows
-fix/horde-contain-no-follow    # PR #160: horde members walk to their slots, made where the horde stands
-fix/hierarchical-block-zones   # PR #161: the hierarchical block search's block zones and raised branch
-perf/exact-logic-speedups      # the logic frame faster with every result unchanged (noteStop, unit index, amoeba, emotions, dual weapon, Eva)
-uber/horde-terrain-paths       # Uber rule: hordes plan their paths on terrain, contact goals on the near side, the castle retry only for reachable goals
+# Upstream now also includes #160 (horde members walk to their slots), #161 (hierarchical block zones) and #180 (views refreshed
+# on the client job pool), so those branches left the recipe (2026-11-01, 902419de).
+perf/exact-logic-speedups        # PR #178: the logic frame faster with every result unchanged (noteStop, unit index, amoeba, emotions, dual weapon, Eva)
+perf/collision-pass-job-pool     # PR #179: more of the collision pass and the partition update on the logic job pool
+perf/view-refresh-parity-test    # PR #181: the parallel and the serial view refresh compared (a test, the views_local / client_threads timings)
+fix/path-search-target-exemption # PR #182: attackers path into their own target (RW 0x6EBAA0) and the follower's doubled-back leg (S-1833)
+# uber/horde-terrain-paths: left out (2026-11-01); #182 fixes the searches it worked around, the retail way
 
