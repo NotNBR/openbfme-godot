@@ -363,16 +363,19 @@ TEST_CASE("save4b retail T4: a real 4-player skirmish's snapshot is written (SAV
 	// Merge queue q34 (measured once on the merged tree and at each merge point; SPELLFIX-1 and #160 keep the census): #161's block search moves the AIs'
 	// play: a CommandButtonHuntUpdate and a SiegeDeployHordeSpecialPower object; no HordeNotifyTargetsOfImminentProbableCrushingUpdate or HorseHordeContain
 	// object (111)
+	// The path search's target rule (RW checkForMovement 0x6EBAA0: an attacker's goal object or victim, and its members, no longer refuse its cells;
+	// measured on Windows MSVC) moves the AIs' play: a HorseHordeContain and a HordeNotifyTargetsOfImminentProbableCrushingUpdate object stand at frame 3000,
+	// no AutoHealBehavior object (112)
 	CHECK(classes == std::set<std::string>{
 		"AISpecialPowerUpdate", "ActiveBody", "ArmorUpgrade", "ArrowStormUpdate", "AttributeModifierAuraUpdate", "AttributeModifierPoolUpdate",
-		"AttributeModifierUpgrade", "AudioLoopUpgrade", "AutoAbilityBehavior", "AutoDepositUpdate", "AutoHealBehavior", "AutoPickUpUpdate", "BannerCarrierUpdate",
+		"AttributeModifierUpgrade", "AudioLoopUpgrade", "AutoAbilityBehavior", "AutoDepositUpdate", "AutoPickUpUpdate", "BannerCarrierUpdate",
 		"BezierProjectileBehavior", "BloodthirstyUpdate", "BoredUpdate", "BuildableHeroListUpgrade", "BuildingBehavior", "CastleBehavior", "CastleMemberBehavior",
 		"CastleUpgrade", "CitadelSlaughterHordeContain", "ClickReactionBehavior", "CloudBreakSpecialPower", "CommandButtonHuntUpdate", "CommandPointsUpgrade", "CommandSetUpgrade",
 		"CostModifierUpgrade", "CreateObjectDie", "CritterEmitterUpdate", "DamageFilteredCreateObjectDie", "DarknessSpecialPower", "DefectionHelper",
 		"DelayedDeathBody", "DestroyDie", "DevastateSpecialPower", "DoCommandUpgrade", "DualWeaponBehavior", "ElvenWoodSpecialPower", "EmotionTrackerUpdate",
 		"FXListDie", "FiringTrackerHelper", "FoundationAIUpdate", "FreezingRainSpecialPower", "GeometryUpgrade", "GettingBuiltBehavior", "GiveUpgradeUpdate",
 		"GrabPassengerSpecialPower", "GrantUpgradeCreate", "GuardingHelper", "HighlanderBody", "HitReactionBehavior", "HordeContain", "HordeDispatchSpecialPower",
-		"HordeMemberCollide", "ImmortalBody", "InactiveBody", "InvisibilityUpdate",
+		"HordeMemberCollide", "HordeNotifyTargetsOfImminentProbableCrushingUpdate", "HorseHordeContain", "ImmortalBody", "InactiveBody", "InvisibilityUpdate",
 		"KeepObjectDie", "LargeGroupAudioUpdate", "LargeGroupBonusUpdate", "LevelUpUpgrade", "LifetimeUpdate", "ModelConditionUpgrade", "MonitorConditionUpdate",
 		"OCLSpecialPower", "ObjectCreationUpgrade", "PassiveAreaEffectBehavior", "PhysicsBehavior", "PickupStuffUpdate", "PlayerHealSpecialPower",
 		"PlayerUpgradeSpecialPower", "PorcupineFormationBodyModule", "ProductionSpeedBonus", "ProductionUpdate", "QueueProductionExitUpdate",

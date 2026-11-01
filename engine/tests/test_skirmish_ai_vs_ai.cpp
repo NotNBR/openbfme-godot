@@ -905,7 +905,10 @@ TEST_CASE("skirmish ai vs ai: Evendim, 30 game-minutes: every pairing ends - Mor
 	// Merge queue q34 (SPELLFIX-1, #160, #161; measured once on the merged tree and at each merge point): at SPELLFIX-1's and #160's merge points seed 2 ends
 	// with the Men's defeat (start position 1) at 7162 and seed 7 with the Men's defeat (start position 0) at 8109; #161's block search opens both again: all
 	// three games stay open at 9000, seed 2 with a new table. Engine pins, not retail values.
-	for (const Game &g : { Game{ "FactionMordor", "FactionMen", 2u, -1, -1 }, Game{ "FactionMen", "FactionMordor", 7u, -1, -1 }, Game{ "FactionMordor", "FactionMen", 1234u, -1, -1 } })
+	// The path search's target rule (RW checkForMovement 0x6EBAA0: an attacker's goal object or victim, and its members, no longer refuse its cells),
+	// measured on Windows MSVC: seed 2 ends with the Men's defeat (start position 1) at 6672 with a new table, seed 7 stays open at 9000 (its armies quiet
+	// from frame 6000 on, as before this change), seed 1234 ends with Mordor's defeat (start position 0) at 7457. Engine pins, not retail values.
+	for (const Game &g : { Game{ "FactionMordor", "FactionMen", 2u, 1, 6672 }, Game{ "FactionMen", "FactionMordor", 7u, -1, -1 }, Game{ "FactionMordor", "FactionMen", 1234u, 0, 7457 } })
 	{
 		INFO(g.a << " vs " << g.b << " seed " << g.seed);
 		VersusRun run;
@@ -945,17 +948,15 @@ TEST_CASE("skirmish ai vs ai: Evendim, 30 game-minutes: every pairing ends - Mor
 			// merge queue q33 (measured once on the merged tree and at each merge point): MODCOMPAT-MOD1 moves seed 2's table (still open at 9000 at its merge
 			// point); #133's straight production exits end it with the Men's defeat at 6748
 			// merge queue q34 (measured once on the merged tree and at each merge point): SPELLFIX-1 and #160 end it at 7162; #161's block search keeps it open
-			// at 9000 with this table
+			// at 9000
+			// the path search's target rule (RW checkForMovement 0x6EBAA0, measured on Windows MSVC): the Men's defeat at 6672 with this table
 			CHECK(run.progress ==
-		"frame 1000: [0 attacks 0 built 70u/8s destroyed 15u/1s] [1 attacks 0 built 87u/7s destroyed 22u/3s]\n"
-		"frame 2000: [0 attacks 2 built 267u/11s destroyed 144u/3s] [1 attacks 1 built 201u/10s destroyed 156u/4s]\n"
-		"frame 3000: [0 attacks 3 built 417u/12s destroyed 247u/6s] [1 attacks 1 built 311u/12s destroyed 304u/4s]\n"
-		"frame 4000: [0 attacks 4 built 564u/16s destroyed 353u/7s] [1 attacks 2 built 384u/15s destroyed 444u/4s]\n"
-		"frame 5000: [0 attacks 4 built 692u/19s destroyed 428u/7s] [1 attacks 3 built 492u/15s destroyed 556u/6s]\n"
-		"frame 6000: [0 attacks 4 built 749u/23s destroyed 544u/7s] [1 attacks 5 built 595u/17s destroyed 672u/7s]\n"
-		"frame 7000: [0 attacks 4 built 783u/27s destroyed 649u/7s] [1 attacks 6 built 747u/18s destroyed 690u/7s]\n"
-		"frame 8000: [0 attacks 4 built 844u/29s destroyed 733u/7s] [1 attacks 6 built 834u/19s destroyed 755u/7s]\n"
-		"frame 9000: [0 attacks 4 built 867u/31s destroyed 855u/7s] [1 attacks 6 built 934u/22s destroyed 757u/8s]\n");
+		"frame 1000: [0 attacks 0 built 85u/8s destroyed 9u/0s] [1 attacks 1 built 91u/8s destroyed 21u/2s]\n"
+		"frame 2000: [0 attacks 2 built 231u/10s destroyed 133u/2s] [1 attacks 1 built 198u/10s destroyed 94u/4s]\n"
+		"frame 3000: [0 attacks 3 built 367u/12s destroyed 300u/6s] [1 attacks 1 built 329u/13s destroyed 254u/4s]\n"
+		"frame 4000: [0 attacks 3 built 465u/17s destroyed 318u/12s] [1 attacks 1 built 346u/16s destroyed 328u/4s]\n"
+		"frame 5000: [0 attacks 3 built 545u/20s destroyed 343u/14s] [1 attacks 1 built 346u/16s destroyed 394u/4s]\n"
+		"frame 6000: [0 attacks 3 built 550u/25s destroyed 343u/14s] [1 attacks 1 built 348u/18s destroyed 428u/4s]\n");
 		}
 	}
 }

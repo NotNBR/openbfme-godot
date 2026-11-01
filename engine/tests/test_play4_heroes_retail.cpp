@@ -446,9 +446,11 @@ TEST_CASE("play4 heroes retail: every faction's heroes, recruited from the fortr
 			// fights the horde, 13 of 20 killed (975 health)
 			// Merge queue q34 (measured at each merge point): Haldir still fights the horde: 2 of 20 killed (150 health) with #160 (the members walk to their
 			// slots, RW 0x871536), 7 of 20 (525 health) with #161 (the block search's block zones move the scene's creeps and computer opponent)
+			// The path search's target rule (RW checkForMovement 0x6EBAA0: the horde he attacks and its members no longer refuse his cells; measured on Windows
+			// MSVC): Haldir still fights the horde, 9 of 20 killed (725 health)
 			if (hero == "ElvenHaldir")
 			{
-				CHECK(own.lost == 525.0f);
+				CHECK(own.lost == 725.0f);
 			}
 			else
 			{
@@ -602,8 +604,10 @@ TEST_CASE("attack1 heroes retail: the mounted Witch-king and Mouth of Sauron, or
 	// run, nothing in a crush run), 18 killed, nearest 14.5005, with CRUSHER_LEVEL -1 4 swings taking 1350 from 14.5279; the Mouth of Sauron 5 shots, 5 killed
 	// (150 in the crush run), 3 swings (75 / 225), nearest 0.825811, with CRUSHER_LEVEL -1 4 swings taking 300 from 60.3109. The duels and the blocking are
 	// unchanged. Engine pins, not retail values.
+	// The path search's target rule (RW checkForMovement 0x6EBAA0: the horde he attacks and its members no longer refuse his cells; measured on Windows
+	// MSVC): the Mouth of Sauron's nearest 0.825811 -> 0.824839; everything else unchanged.
 	for (const Case &c : { Case{ "FactionAngmar", "AngmarWitchking", 4u, 18u, 0.0f, { 800.0f, 112.0f }, 4u, 525.0f, 1350.0f, { { 1500.0f, 800.0f }, { 700.0f, 700.0f } }, 0, -1, 4u, 1350.0f, 14.5279f, 14.5005f },
-			 Case{ "FactionMordor", "MordorMouthOfSauron", 5u, 5u, 150.0f, { 640.0f, 320.0f }, 3u, 75.0f, 225.0f, { { 1500.0f, 640.0f }, { 860.0f, 640.0f }, { 220.0f, 220.0f } }, 0, -1, 4u, 300.0f, 60.3109f, 0.825811f } })
+			 Case{ "FactionMordor", "MordorMouthOfSauron", 5u, 5u, 150.0f, { 640.0f, 320.0f }, 3u, 75.0f, 225.0f, { { 1500.0f, 640.0f }, { 860.0f, 640.0f }, { 220.0f, 220.0f } }, 0, -1, 4u, 300.0f, 60.3109f, 0.824839f } })
 	{
 		INFO(std::string(c.hero));
 		const ThingTemplate *tt = s->world->things().findTemplate(c.hero);

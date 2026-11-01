@@ -557,6 +557,9 @@ TEST_CASE("perf1 bench: 4-player skirmish (medium computer players, 20 game minu
 // ShroudClearingRange clears the VisionRange, RW 0x73FB7A / 0x69990F; the economy's PRODUCTION product) moves the battle, the skirmish and the allied blob;
 // #160 (members made where their horde stands, RW 0x8718ED, and left where they are by a move, RW 0x871536) moves the battle and the allied blob, not the
 // skirmish; #161 (the block search's block zones RW 0x9389A6 and raised branch RW 0x9389CE) moves all three.
+// The path search's target rule re-measured the battle and the skirmish (OPENBFME_PERF1_REGEN=1, Windows MSVC): an enemy that is the searcher's goal object or
+// current victim, a member of one or the target's container no longer refuses a cell (RW checkForMovement 0x6EBAA0, the enemy branch), so attackers path into their targets; it
+// moves the battle from frame 0 and the skirmish from frame 817, and leaves the allied blob.
 TEST_CASE("perf1: the big battle (400 frames) and a 4-player AI skirmish after another AI game (6000 frames) hash as the build before PERF-1 did in every frame")
 {
 	// Ambient movement: target idle wandering adds RNG draws and origin state,
