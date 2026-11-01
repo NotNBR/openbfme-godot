@@ -26,5 +26,8 @@ perf/exact-logic-speedups        # PR #178: the logic frame faster with every re
 perf/collision-pass-job-pool     # PR #179: more of the collision pass and the partition update on the logic job pool
 perf/view-refresh-parity-test    # PR #181: the parallel and the serial view refresh compared (a test, the views_local / client_threads timings)
 fix/path-search-target-exemption # PR #182: attackers path into their own target (RW 0x6EBAA0) and the follower's doubled-back leg (S-1833)
+perf/client-pool-adapt           # local (2026-11-01, to be proposed): the client job pool gives up most of its threads while the logic worker is behind
+perf/snapshot-build-pool         # local (2026-11-01, to be proposed): the snapshot's records built on the logic job pool
+perf/weapon-status-pool          # local (2026-11-01, to be proposed): the final list's weapon status conditions computed on the logic job pool
 # uber/horde-terrain-paths: left out (2026-11-01); #182 fixes the searches it worked around, the retail way
 
