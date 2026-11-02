@@ -379,6 +379,9 @@ public:
 	// reports through RW 0x5E2D74; 0 when there is none). Types 2, 3, 7 and 8 start the formation machinery and
 	// are not ported (S-084); every other type, 4 included, takes the plain branch (RW 0x5E6E42 / 0x5E6FFF).
 	virtual int currentSpecialNodeType() const = 0;
+	// S-1833: an updateClosestSegment took the later leg of a path that doubles back along one line (the port's livelock rule, Path::updateClosestSegment)
+	// since the last call; the call clears it. The locomotor's move reports it (Locomotor::allStops()[3]), the AI mover's own calls included
+	virtual bool consumeDoubledBackLeg() { return false; }
 };
 
 // Everything the movers touch on the object. Names follow ZH where the call exists there; RW addresses give

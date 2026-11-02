@@ -566,6 +566,11 @@ TEST_CASE("perf1 bench: 4-player skirmish (medium computer players, 20 game minu
 // PR #184 re-measured the skirmish (OPENBFME_PERF1_REGEN=1, macOS arm64): the dozer's completion-time body visual refresh (RW 0x88DF6B;
 // clean BFME2 1.06 0x88AC76) clears the stale REALLYDAMAGED model condition left by 1-hit-point placement once the building is healthy.
 // The skirmish moves from frame 167; the big battle is unchanged.
+// The path search's target rule re-measured the battle and the skirmish (OPENBFME_PERF1_REGEN=1, Windows MSVC): an enemy that is the searcher's goal object or
+// current victim, a member of one or the target's container no longer refuses a cell (RW checkForMovement 0x6EBAA0, the enemy branch), so attackers path into their targets; it
+// moves the battle from frame 0 and the skirmish from frame 817, and leaves the allied blob.
+// The Studio combo re-measured the skirmish once on its merged tree (OPENBFME_PERF1_REGEN=1, Windows MSVC): #184's refresh and #182's target rule
+// together (the pin above is that tree's; upstream's own merge of #182 re-measures it again).
 TEST_CASE("perf1: the big battle (400 frames) and a 4-player AI skirmish after another AI game (6000 frames) hash as the build before PERF-1 did in every frame")
 {
 	// Ambient movement: target idle wandering adds RNG draws and origin state,

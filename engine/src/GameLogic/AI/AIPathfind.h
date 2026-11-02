@@ -174,6 +174,12 @@ public:
 	// ---- LocomotorPath (the consumer in GameLogic/Locomotor.h) ----
 	LocomotorPathPoint computePointAhead(float distance) override;
 	void updateClosestSegment(const Coord3D &pos) override;
+	bool consumeDoubledBackLeg() override
+	{
+		const bool taken = m_doubledBackLeg;
+		m_doubledBackLeg = false;
+		return taken;
+	}
 	bool isNearPathEnd() const override;
 	bool hasExplicitZ() const override;
 	float remainingDistanceFrom(const LocomotorPathPoint &point) const override;
@@ -212,6 +218,7 @@ private:
 	Coord3D m_lastAhead;           // RW Path +0x18: the point the last computePointAhead returned
 	const PathNode *m_lastAheadNode = nullptr; // the node of that point (RW PathPoint.node)
 	const PathfindWaypointSource *m_waypoints = nullptr; // lane WALL-2
+	bool m_doubledBackLeg = false; // an updateClosestSegment took the later leg of a doubled-back line since the last consumeDoubledBackLeg (S-1833)
 };
 
 // ---------------------------------------------------------------------------------------------------------
