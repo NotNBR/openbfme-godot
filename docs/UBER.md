@@ -309,6 +309,17 @@ runs at its own rate (here the 10k soldiers' CPU work bounds it) while the
 logic frames take 200-370 ms. Making the logic finish inside its tick is
 Uber's other half.
 
+**PERF-SNAP: the snapshot's records on the logic job pool.** The worker
+builds the client's snapshot between frames (`LiveGame::publish`,
+`LogicSnapshot::build`), a record per object; at 30,000 troops that was
+31-34 ms per logic frame of serial reads, in no tick's count. The records
+(and the lastMovedFrame pass) are filled on the logic job pool, 256 objects a
+job, after the caches a first read fills are warmed on the worker (every
+template's info; the bounding radii of the radar's wall and command centre
+shapes): 9.9-10.2 ms per logic frame with 16 logic threads. Nothing in the
+snapshot is hashed; `test_perf2_snapshot.cpp` pins every field of every
+record against the single-threaded build.
+
 **PERF-CLIENT: the client pool while the logic is behind.** Both job pools
 default to every hardware thread, so a late worker's single-threaded passes
 compete with the client's slices for the cores. After 3 worker frames in a
