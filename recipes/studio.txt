@@ -25,8 +25,8 @@ feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stack
 # Upstream now includes #178 (exact logic speed-ups), #179 (collision pass on the job pool) and #181 (view refresh parity test), so those
 # branches left the recipe (2026-11-02, 4de0b3b0).
 fix/path-search-target-exemption # PR #182: attackers path into their own target (RW 0x6EBAA0) and the follower's doubled-back leg (S-1833)
-perf/client-pool-adapt           # local (rebased and reviewed 2026-11-02, to be proposed): the client job pool gives up most of its threads while the logic worker is behind
-perf/snapshot-build-pool         # local (rebased and reviewed 2026-11-02, to be proposed): the snapshot's records built on the logic job pool
-perf/weapon-status-pool          # local (rebased and reviewed 2026-11-02, to be proposed): the final list's weapon status conditions computed on the logic job pool
+perf/client-pool-adapt           # PR #194: the client job pool gives up most of its threads while the logic worker is behind
+perf/snapshot-build-pool         # PR #193: the snapshot's records built on the logic job pool
+perf/weapon-status-pool          # PR #192: the final list's weapon status conditions computed on the logic job pool
 # uber/horde-terrain-paths: left out (2026-11-01); #182 fixes the searches it worked around, the retail way
 
