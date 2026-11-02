@@ -6,6 +6,10 @@ list(APPEND OPENBFME_SIM_SOURCES
     src/GameLogic/AI/AIPathfindWalls.cpp
     src/GameClient/DrawableWallMeshes.cpp
 )
+# client / host-only sources (excluded from the simulation audit in tools/sim/sim_policy.json): the battle log of openbfme_peer --battle-log
+set(OPENBFME_WALL1_CLIENT_SOURCES
+    src/GameClient/BattleLog.cpp
+)
 set(OPENBFME_WALL1_TESTS
     tests/test_wall1_walls.cpp
     tests/test_wall1_battle.cpp
