@@ -28,5 +28,6 @@ fix/path-search-target-exemption # PR #182: attackers path into their own target
 perf/client-pool-adapt           # PR #194: the client job pool gives up most of its threads while the logic worker is behind
 perf/snapshot-build-pool         # PR #193: the snapshot's records built on the logic job pool
 perf/weapon-status-pool          # PR #192: the final list's weapon status conditions computed on the logic job pool
+fix/enemy-wall-walk-on           # PR #195: a right click on an enemy walkable wall moves onto it unless a selected weapon damages it; the move hint on the wall top
 # uber/horde-terrain-paths: left out (2026-11-01); #182 fixes the searches it worked around, the retail way
 
