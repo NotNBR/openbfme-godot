@@ -1,0 +1,5 @@
+{
+  "include": ["grass", "meadow", "pasture", "turf"],
+  "exclude": ["cliff", "rock", "stone", "snow", "ice", "sand", "road", "pav", "lava", "mordor"],
+  "overrides": {}
+}

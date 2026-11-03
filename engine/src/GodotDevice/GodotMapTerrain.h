@@ -36,6 +36,7 @@ public:
 	//   cliff_uv: "hypothesis" (default) | "atlas"       vertex_color: "accent" (default) | "all"
 	//   markers: bool (default true)   water: bool   rivers: bool   roads: bool   terrain: bool
 	//   resolve_objects: bool (default false)
+	//   ground_cover: bool (default project setting openbfme/rendering/ground_cover): instanced grass sprites
 	//   user_map: bool (default false; lane MOD-5) the map is in the user maps folder (RetailFileSystem::get_user_map_folder), not the archives
 	Node3D *build_map(const Ref<RetailFileSystem> &fs, const String &map_name, const Dictionary &options);
 
