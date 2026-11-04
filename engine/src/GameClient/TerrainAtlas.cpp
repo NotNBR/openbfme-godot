@@ -71,23 +71,23 @@ void blitClass(std::vector<std::uint8_t> &atlas, int atlasW, const WorldHeightMa
 }
 
 // ZH TerrainTextureClass::update, "draw the 4 pixel border around each tile class".
-void drawGutters(std::vector<std::uint8_t> &atlas, int atlasW, int ox, int oy, int width)
+void drawGutters(std::vector<std::uint8_t> &atlas, int atlasW, int ox, int oy, int width, int gutter = 4)
 {
 	const size_t bpp = 4;
 	auto px = [&](int x, int y) { return &atlas[((size_t)y * atlasW + (size_t)x) * bpp]; };
 	for (int j = 0; j < width; ++j)
 	{
 		std::uint8_t *row = px(ox, oy + j);
-		std::memcpy(row - 4 * bpp, row + (size_t)(width - 4) * bpp, 4 * bpp); // before: from the right edge
-		std::memcpy(row + (size_t)width * bpp, row, 4 * bpp);                 // after: from the left edge
+		std::memcpy(row - gutter * bpp, row + (size_t)(width - gutter) * bpp, gutter * bpp);
+		std::memcpy(row + (size_t)width * bpp, row, gutter * bpp);
 	}
-	for (int j = 0; j < 4; ++j)
+	for (int j = 0; j < gutter; ++j)
 	{
 		// rows before the class repeat the bottom rows; rows after repeat the top rows (width + 8 pixels wide)
-		std::uint8_t *before = px(ox - 4, oy - j - 1);
-		std::memcpy(before, before + (size_t)width * atlasW * bpp, (size_t)(width + 8) * bpp);
-		std::uint8_t *after = px(ox - 4, oy + j);
-		std::memcpy(after + (size_t)width * atlasW * bpp, after, (size_t)(width + 8) * bpp);
+		std::uint8_t *before = px(ox - gutter, oy - j - 1);
+		std::memcpy(before, before + (size_t)width * atlasW * bpp, (size_t)(width + 2*gutter) * bpp);
+		std::uint8_t *after = px(ox - gutter, oy + j);
+		std::memcpy(after + (size_t)width * atlasW * bpp, after, (size_t)(width + 2*gutter) * bpp);
 	}
 }
 
@@ -120,6 +120,96 @@ int TerrainAtlas::countTiles(int imageWidth, int imageHeight)
 		}
 	}
 	return 0;
+}
+
+bool TerrainAtlas::applyTexturePack(const WorldHeightMap &map, const TerrainTypeIndex &types,
+    const std::function<bool(const std::string &, TGAImage &, std::string *)> &read,
+    TerrainAtlasImages &images, std::vector<std::string> &replaced, std::string *error, float normalStrength)
+{
+    struct Replacement { const TXTextureClass *cls; TGAImage image; bool normal; std::string name; int sourceScale = 1; };
+    std::vector<Replacement> pending;
+    int scales[2] = {1, 1};
+    for (const TXTextureClass &c : map.m_textureClasses)
+    {
+        const std::string *texture = types.findTexture(c.name);
+        if (!texture || c.positionInTexture.x <= 0) continue;
+        const int extent = derivedWidth(c.numTiles) * TILE_PIXEL_EXTENT;
+        if (extent <= 0) continue;
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            Replacement r{&c, {}, channel == 1, channel ? TerrainTypeIndex::normalMapName(*texture) : *texture};
+            std::string reason;
+            if (!read(r.name, r.image, &reason))
+            {
+                if (reason.empty()) continue;
+                if (error) *error = r.name + ": " + reason;
+                return false;
+            }
+            auto original = images.sourceDimensions.find(r.name);
+            if (original == images.sourceDimensions.end()) original = images.sourceDimensions.find(*texture);
+            const int sourceWidth = original == images.sourceDimensions.end() ? extent : original->second.first;
+            const int sourceHeight = original == images.sourceDimensions.end() ? extent : original->second.second;
+            const int scale = r.image.width / sourceWidth;
+            if (r.image.width != sourceWidth * scale || r.image.height != sourceHeight * scale ||
+                (scale != 1 && scale != 2 && scale != 4) ||
+                r.image.width < extent * scale || r.image.height < extent * scale ||
+                r.image.rgba.size() != (size_t)r.image.width * r.image.height * 4)
+            {
+                if (error) *error = r.name + ": terrain replacement must match the full source at 1x, 2x or 4x its " + std::to_string(sourceWidth) + "px resolution";
+                return false;
+            }
+            scales[channel] = std::max(scales[channel], scale);
+            r.sourceScale = scale;
+            pending.push_back(std::move(r));
+        }
+    }
+    // Bound GPU memory and texture dimensions without changing the logical tile layout.
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        while (scales[channel] > 1 && (images.width * scales[channel] > 8192 || images.height * scales[channel] > 8192)) scales[channel] /= 2;
+        const int scale = scales[channel];
+        std::vector<std::uint8_t> &pixels = channel ? images.normal : images.base;
+        if (scale > 1)
+        {
+            std::vector<std::uint8_t> expanded((size_t)images.width * images.height * scale * scale * 4);
+            const int physicalWidth = images.width * scale;
+            for (int y = 0; y < images.height * scale; ++y)
+                for (int x = 0; x < physicalWidth; ++x)
+                    std::memcpy(&expanded[((size_t)y * physicalWidth + x) * 4],
+                        &pixels[((size_t)(y / scale) * images.width + x / scale) * 4], 4);
+            pixels.swap(expanded);
+        }
+    }
+    images.baseScale = scales[0];
+    images.normalScale = scales[1];
+    for (const Replacement &r : pending)
+    {
+        const int scale = scales[r.normal ? 1 : 0];
+        const int extent = derivedWidth(r.cls->numTiles) * TILE_PIXEL_EXTENT * scale;
+        const int ox = r.cls->positionInTexture.x * scale;
+        const int oy = r.cls->positionInTexture.y * scale;
+        const int atlasWidth = images.width * scale;
+        std::vector<std::uint8_t> &pixels = r.normal ? images.normal : images.base;
+        for (int y = 0; y < extent; ++y)
+        {
+            // Retail stores each tile in inverted row order and places tile rows north-to-south:
+            // together these are one inversion of the complete texture class.
+            const int sy = (extent - 1 - y) * r.sourceScale / scale;
+            for (int x = 0; x < extent; ++x)
+            {
+                const int sx = x * r.sourceScale / scale;
+                std::uint8_t *destination = &pixels[((size_t)(oy + y) * atlasWidth + ox + x) * 4];
+                std::memcpy(destination,
+                    &r.image.rgba[((size_t)sy * r.image.width + sx) * 4], 4);
+                if (r.normal)
+                    for (int channel = 0; channel < 2; ++channel)
+                        destination[channel] = (std::uint8_t)(128.0f + (destination[channel] - 128.0f) * std::max(0.0f, std::min(1.0f, normalStrength)));
+            }
+        }
+        drawGutters(pixels, atlasWidth, ox, oy, extent, 4 * scale);
+        replaced.push_back(r.name);
+    }
+    return true;
 }
 
 // ZH WorldHeightMap::updateTileTexturePositions (WorldHeightMap.cpp:1469-1560), including its quirky
@@ -258,6 +348,7 @@ bool TerrainAtlas::build(WorldHeightMap &map, ArchiveFileSystem &fs, const Terra
 			report.badTexture.push_back(c.name + ": " + e);
 			continue;
 		}
+		images.sourceDimensions[*tex] = {lc.image.width, lc.image.height};
 		if (lc.image.topDownFlag)
 		{
 			report.topDownTextures.push_back(*tex);
@@ -301,6 +392,7 @@ bool TerrainAtlas::build(WorldHeightMap &map, ArchiveFileSystem &fs, const Terra
 		else
 		{
 			lc.hasNormal = true;
+			images.sourceDimensions[TerrainTypeIndex::normalMapName(*tex)] = {lc.normal.width, lc.normal.height};
 		}
 	}
 
