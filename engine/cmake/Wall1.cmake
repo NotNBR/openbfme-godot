@@ -13,4 +13,5 @@ set(OPENBFME_WALL1_CLIENT_SOURCES
 set(OPENBFME_WALL1_TESTS
     tests/test_wall1_walls.cpp
     tests/test_wall1_battle.cpp
+    tests/test_wallfoot1_footprints.cpp # lane WALLFOOT-1: footprints stamp only ground-layer cells; the gate's keeping removal
 )
