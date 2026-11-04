@@ -39,6 +39,8 @@ void vertex() {
 	v_wfx_pos = vec3(world.x, -world.z, world.y); // lane WEATHERFX-1 (terrain_common.gdshaderinc)
 	v_wfx_nrm = vec3(NORMAL.x, -NORMAL.z, NORMAL.y);
 	v_wfx_eye = vec3(CAMERA_POSITION_WORLD.x, -CAMERA_POSITION_WORLD.z, CAMERA_POSITION_WORLD.y);
+	v_ground_xy = v_sage_xy;
+	v_grass_depth = -(VIEW_MATRIX * vec4(world, 1.0)).z;
 }
 
 void fragment() {
