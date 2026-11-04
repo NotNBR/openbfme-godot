@@ -29,9 +29,10 @@ feat/hd-terrain-packs   # fork only: HD terrain textures from asset packs (stack
 # Upstream now includes #187 (Path::rebuild) and #198 (wall layer following, with the maintainers' gatehouse walkway follow-up), so those branches
 # left the recipe (2026-11-03, b1c607e5).
 fix/wall-edge-pass               # PR #207: ClassifyWall's edge pass, a wall top's impassable rim (accepted; the maintainers merge it with WALLJOINT-1)
-fix/wall-footprint-layers        # PR #211: footprints stamp only ground-layer cells; an open gate keeps CanPathThroughGates
-fix/selection-marker-walls       # PR #199: a unit's selection marker on the wall top it stands on (accepted)
-fix/hero-selection-ring          # PR #208: a hero's ring drawn by the terrain and wall shaders (stacked on #199)
-fix/placement-decals             # not opened yet (stacked on #208): the claim, placement claim and ghost decals in the shaders' grid
+fix/wall-footprint-layers        # PR #211: footprints stamp only ground-layer cells; an open gate keeps CanPathThroughGates (accepted)
+fix/wall-search-goal-layer       # PR #220: a wall-top or ramp goal searches on its own layer; the corridor cost covers ramps and wall tops
+# Upstream now includes #199 (selection markers on walls) and #208 (the hero ring), so those branches left the recipe (2026-11-04).
+fix/selection-decal-shadow-split # PR #219: #208's follow-up: the ring over the object shadow, a missing merge texture no longer hides it
+fix/placement-decals             # PR #221 (stacked on #219): the claim, placement claim and ghost decals in the shaders' grid
 # uber/horde-terrain-paths: left out (2026-11-01); #182 fixes the searches it worked around, the retail way
 
